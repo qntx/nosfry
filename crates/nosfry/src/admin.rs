@@ -114,15 +114,65 @@ pub fn import(
     let mut line_no = 0u64;
     loop {
         buf.clear();
-        if input.read_until(b'\n', &mut buf)? == 0 {
+        read_bounded_line(&mut input, &mut buf, max_line)?;
+        if buf.is_empty() {
             break;
         }
         line_no += 1;
         importer.line(&buf, line_no)?;
+        if buf.len() > max_line && !buf.ends_with(b"\n") {
+            // The line overflowed `max_line` and the read stopped
+            // early: drop its remainder without buffering it.
+            skip_line_remainder(&mut input)?;
+        }
     }
     importer.flush()?;
     tracing::info!(stats = ?importer.stats, signatures_verified = !no_verify, "import done");
     Ok(importer.stats)
+}
+
+/// Read one line into `buf`, at most `max_line + 1` bytes: a longer
+/// line is truncated there and the caller's size check rejects it.
+fn read_bounded_line(
+    input: &mut impl BufRead,
+    buf: &mut Vec<u8>,
+    max_line: usize,
+) -> Result<(), AdminError> {
+    loop {
+        let avail = input.fill_buf()?;
+        if avail.is_empty() {
+            return Ok(());
+        }
+        let room = (max_line + 1).saturating_sub(buf.len());
+        let take = room.min(avail.len());
+        let chunk = avail.get(..take).unwrap_or(avail);
+        let cut = chunk
+            .iter()
+            .position(|b| *b == b'\n')
+            .map_or(take, |pos| pos + 1);
+        buf.extend_from_slice(chunk.get(..cut).unwrap_or(chunk));
+        input.consume(cut);
+        if buf.ends_with(b"\n") || buf.len() > max_line {
+            return Ok(());
+        }
+    }
+}
+
+/// Discard input up to and including the next `\n` (or EOF) without
+/// buffering it — the remainder of a line that overflowed `max_line`.
+fn skip_line_remainder(input: &mut impl BufRead) -> Result<(), AdminError> {
+    loop {
+        let avail = input.fill_buf()?;
+        if let Some(pos) = avail.iter().position(|b| *b == b'\n') {
+            input.consume(pos + 1);
+            return Ok(());
+        }
+        if avail.is_empty() {
+            return Ok(());
+        }
+        let len = avail.len();
+        input.consume(len);
+    }
 }
 
 /// Line-oriented importer: verifies, tallies, and batches writes.
