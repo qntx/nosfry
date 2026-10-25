@@ -35,6 +35,8 @@ RTT_TIMEOUT_S = 15.0
 RESTART_POLL_S = 0.05
 RESTART_DEADLINE_S = 120.0
 LMDB_MAP = 137438953472
+# Corpus lines each w5 ingest rep skips: reps send disjoint slices.
+W5_SKIP_STRIDE = 200_000
 
 
 def sh(cmd, **kw):
@@ -301,6 +303,9 @@ def units_w5(prm, pilot):
     corpus = str(d2 / "holdout.jsonl")
     port = str(prm.p("net", "port"))
     rate = w["ingest_rate"]
+    if rate * isecs >= W5_SKIP_STRIDE:
+        sys.exit(f"run.py: w5 sends {rate * isecs:g} events per rep, "
+                 f"W5_SKIP_STRIDE {W5_SKIP_STRIDE} too small")
     out = []
     # Read-only units first, on the shared imported db: cold and warm
     # queries plus a timed restart, per rep.
@@ -321,12 +326,14 @@ def units_w5(prm, pilot):
     # a few percent per rep — that is documented, not hidden).
     for rep in range(1, reps + 1):
         for label in rotated(w["relays"], rep):
+            skip = (rep - 1) * W5_SKIP_STRIDE
             out.append(unit("w5", "ingest", label, rep, "w5ingest", [
                 harness_cmd(prm, "ingest-open", "--url", ws_url(port),
                             "--corpus", corpus, "--conns", str(w["open_conns"]),
                             "--rate", f"{rate:g}", "--duration", str(isecs),
-                            "--warmup", "0", "--label", f"w5-ingest-r{rep}")],
-                note={"ingest_rate": round(rate, 2)}))
+                            "--warmup", "0", "--skip", str(skip),
+                            "--label", f"w5-ingest-r{rep}")],
+                note={"ingest_rate": round(rate, 2), "skip": skip}))
     return out
 
 
@@ -720,6 +727,36 @@ def count_events(prm, entry, db):
         return None
 
 
+def prep_records(prm):
+    """Latest `corpus == "d2"` prep-imports record per label."""
+    out = {}
+    log = prm.path_of("results") / "prep-imports.jsonl"
+    if log.exists():
+        for line in log.read_text().splitlines():
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            if r.get("corpus") == "d2":
+                out[r.get("label")] = r
+    return out
+
+
+def require_main_dbs(prm, units):
+    """Every db="main" unit shares the prep-imported d2 db; refuse to
+    run when it is missing or holds less than prep stored."""
+    records = prep_records(prm)
+    for b in sorted({bin_of(u["label"]) for u in units
+                     if u["db"] == "main" and u["kind"] != "relaybench"}):
+        rec = records.get(b)
+        expected = rec["stored"] if rec else None
+        db = prm.path_of("work") / "db" / b
+        actual = count_events(prm, relay_entry(b, prm), db)
+        if expected is None or actual is None or actual < expected:
+            sys.exit(f"run.py: shared db for {b} holds {actual} events, "
+                     f"prep record expects {expected} — run `run.py prep`")
+
+
 def timed_import(prm, entry, db, stdin_path, log):
     """Import `stdin_path` into `db` under /usr/bin/time -v."""
     argv = ["/usr/bin/time", "-v", *import_argv(prm, entry, db)]
@@ -930,14 +967,19 @@ def cmd_prep(prm):
                    if not bin_of(l).startswith("nostr-rs")})
     import_log = prm.path_of("results") / "prep-imports.jsonl"
     import_log.parent.mkdir(parents=True, exist_ok=True)
+    records = prep_records(prm)
     with open(import_log, "a") as jf:
         for bin_name in bins:
             entry = relay_entry(bin_name, prm)
             db = work / "db" / bin_name
             stored = count_events(prm, entry, db)
-            if stored:
+            rec = records.get(bin_name)
+            if rec and stored is not None and stored >= rec["stored"]:
                 stats = {"skipped": f"db already imported ({stored} events)",
                          "db_bytes": du_bytes(db)}
+            elif db.exists() and stored:
+                sys.exit(f"run.py: {db} holds {stored} events that do not "
+                         f"match a prep record — remove it manually")
             else:
                 if db.exists():
                     shutil.rmtree(db)
@@ -976,6 +1018,7 @@ def cmd_status(prm):
 def run_schedule(prm, units, dry_run):
     if not dry_run:
         write_run_meta(prm)
+        require_main_dbs(prm, units)
     results = prm.path_of("results")
     for u in units:
         unit_dir = results / u["workload"] / u["scenario"] / u["label"]

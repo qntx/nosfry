@@ -262,7 +262,7 @@ pub(crate) async fn ack_ingest(
 ) -> Result<(), String> {
     let prior = prior_acked(&out)?;
     let resumed = prior.len();
-    let full = load_corpus(&corpus_path, usize::MAX)?;
+    let full = load_corpus(&corpus_path, usize::MAX, 0)?;
     let corpus = Arc::new(
         full.iter()
             .filter(|ev| !prior.contains(&ev.id))
