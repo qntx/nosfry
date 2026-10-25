@@ -1379,6 +1379,52 @@ fn neg_refusal_closes_prior_sync() {
     assert!(!s.is_current_neg(sub));
 }
 
+/// A `NEG-OPEN` over `max_tags_per_filter` answers
+/// `invalid: filter has too many tag conditions` and drops a sync
+/// already open under the id.
+#[test]
+fn neg_open_over_tag_limit_drops_prior_sync() {
+    let mut s = session();
+    let out = feed(&mut s, 1, "[\"NEG-OPEN\",\"n\",{},\"aabb\"]");
+    let Command::NegOpen { sub, .. } = &out[0] else {
+        unreachable!()
+    };
+    assert!(s.is_current_neg(sub));
+    let many_tags = "{\"#a\":[\"x\"],\"#b\":[\"x\"],\"#c\":[\"x\"],\"#d\":[\"x\"]}";
+    let out = feed(
+        &mut s,
+        1,
+        &format!("[\"NEG-OPEN\",\"n\",{many_tags},\"aabb\"]"),
+    );
+    let frames = sends(&out);
+    assert!(
+        matches!(
+            out.as_slice(),
+            [Command::NegClose { .. }, Command::Send { .. }]
+        ) && frames[0] == "[\"NEG-ERR\",\"n\",\"invalid: filter has too many tag conditions\"]",
+        "{out:?}"
+    );
+    assert!(!s.is_current_neg(sub));
+}
+
+/// A fully restricted `NEG-OPEN` with AUTH disabled answers
+/// `restricted:` like a REQ.
+#[test]
+fn neg_fully_restricted_auth_disabled() {
+    let mut s = session_auth("", &[4], true);
+    let out = feed(&mut s, 1, "[\"NEG-OPEN\",\"n\",{\"kinds\":[4]},\"aabb\"]");
+    let frames = sends(&out);
+    assert_eq!(
+        frames.as_slice(),
+        ["[\"NEG-ERR\",\"n\",\"restricted: requested kinds are not served\"]"],
+        "{out:?}"
+    );
+    assert!(
+        !out.iter().any(|c| matches!(c, Command::NegOpen { .. })),
+        "{out:?}"
+    );
+}
+
 /// A fully restricted unauthenticated `NEG-OPEN` answers
 /// `auth-required:` (challenge issued) like a REQ.
 #[test]
@@ -1386,6 +1432,7 @@ fn neg_fully_restricted_unauthenticated() {
     let mut s = session_auth("ws://r", &[4], true);
     let out = feed(&mut s, 1, "[\"NEG-OPEN\",\"n\",{\"kinds\":[4]},\"aabb\"]");
     let frames = sends(&out);
+    assert_eq!(frames[0], "[\"AUTH\",\"challenge\"]", "{out:?}");
     assert!(frames[1].contains("auth-required:"), "{out:?}");
     // No sync is open: a follow-up NEG-MSG answers `closed:`.
     let out = feed(&mut s, 1, "[\"NEG-MSG\",\"n\",\"ccdd\"]");

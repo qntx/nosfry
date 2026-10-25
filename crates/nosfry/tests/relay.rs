@@ -4044,3 +4044,43 @@ async fn ingest_logs_rejected_ok() {
     }
     relay.stop().await;
 }
+
+/// A store write failure (`map_size` exhausted) answers
+/// `error: internal error` and the relay keeps serving reads.
+#[tokio::test]
+async fn store_write_failure_answers_internal_error_and_keeps_serving() {
+    let mut config = common::config();
+    config.db.map_size = 1 << 20; // 1 MiB fills fast
+    let relay = Relay::start_with(config).await;
+    let mut ws = relay.connect().await;
+    let author = key(1);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut failed = false;
+    let mut i = 0u64;
+    while Instant::now() < deadline {
+        let ev = common::event(
+            &author,
+            1,
+            now() + i, // distinct ids without invalid duplicates
+            &json!([]),
+            &format!("fill {i}"),
+        );
+        let ok = publish(&mut ws, &ev).await;
+        if ok[2] == false {
+            assert_eq!(
+                ok[3].as_str(),
+                Some("error: internal error"),
+                "unexpected failure reason {ok}"
+            );
+            failed = true;
+            break;
+        }
+        i += 1;
+    }
+    assert!(failed, "map never filled within the deadline");
+
+    // The relay still serves: a REQ completes with EOSE.
+    req_ids(&mut ws, "s", "{}").await;
+    relay.stop().await;
+}

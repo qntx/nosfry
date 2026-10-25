@@ -123,7 +123,8 @@ Trust boundaries:
 - **Acknowledged events.** An event answered `["OK", id, true, …]` must
   survive a crash, unless the answer carried the `duplicate:` prefix.
 - **Read confidentiality of restricted kinds.** NIP-42 `restricted_read_kinds`
-  (DMs by default, kind 4) and `restrict_read_to_involved` must be served only
+  (DMs and NIP-59 gift wraps by default, kinds 4 and 1059) and
+  `restrict_read_to_involved` must be served only
   to authorized readers, by both stored scans and live delivery.
 - **Deletion and vanish guarantees.**
   - A NIP-09 deletion by the author removes the targets and blocks their
@@ -536,6 +537,15 @@ Ranked by risk:
   filter keys beyond NIP-01 are rejected rather than ignored.
 - **Filter validation off.** `[relay.filter_validation]` defaults to disabled,
   matching strfry.
+- **Ephemeral events escape a vanish.** Ephemeral events skip storage, so a
+  vanished author's ephemeral events with `created_at <= T` are still
+  broadcast live. The window is narrow: vanish points satisfy
+  `T <= now + 900 s` while ephemeral events are generally `now - 60 s` or
+  newer.
+- **CI reusable workflows float.** The workflows reference the moving
+  `qntx/workflows@v2` tag rather than a commit SHA. The repository is
+  organization-owned and the referenced workflows are ours; third-party
+  actions are SHA-pinned.
 
 ## Prior internal review
 
