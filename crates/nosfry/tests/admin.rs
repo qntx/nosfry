@@ -763,3 +763,37 @@ fn cli_import_no_verify() {
         String::from_utf8_lossy(&verified.stderr)
     );
 }
+
+/// A line over `max_line` is rejected without buffering: the line
+/// after it is still parsed at the right boundary.
+#[test]
+fn import_overlong_line_is_rejected_and_skipped() {
+    let (_dir, store) = store();
+    let first = line(&event(&key(1), 1, 100, &json!([]), "first"));
+    let giant = "x".repeat(1 << 20);
+    let second = line(&event(&key(1), 1, 200, &json!([]), "second"));
+    let corpus = format!("{first}\n{giant}\n{second}\n");
+    let stats = import(
+        &store,
+        &EventLimits::default(),
+        None,
+        64 * 1024,
+        Cursor::new(corpus),
+        false,
+        false,
+    )
+    .unwrap();
+    assert_eq!(stats.processed, 3);
+    assert_eq!(stats.added, 2);
+    assert_eq!(stats.rejected, 1);
+    // The event after the long line imported intact.
+    let mut ids = Vec::new();
+    store
+        .export(0, u64::MAX, false, &mut |json| {
+            ids.push(json.to_owned());
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(ids.len(), 2);
+    assert!(ids.iter().any(|j| j.contains("\"second\"")), "{ids:?}");
+}

@@ -30,6 +30,10 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Fixed
 
+- `import` no longer buffers a whole input line before the `max_line`
+  check: it reads at most `max_line + 1` bytes, rejects a longer line
+  once, and consumes the rest without allocating it.
+
 - A scan crossing one `created_at` shared by many events no longer
   buffers the whole tie group: it keeps only `limit - taken`
   smallest ids, bounded per filter.
