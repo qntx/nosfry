@@ -765,15 +765,14 @@ fn count_candidate(
     };
     if let Some((tag_pos, cursor)) = cover
         && let Some((name, values)) = filter.tags().get(tag_pos)
-        && values
-            .get(..cursor)
-            .unwrap_or_default()
-            .iter()
-            .any(|value| {
-                packed
-                    .tags()
-                    .any(|(n, t)| n == *name && t == value.as_bytes())
+        && {
+            // `values` is sorted by bytes; search instead of scanning
+            // every value against every tag — O(tags × log values).
+            let earlier = values.get(..cursor).unwrap_or_default();
+            packed.tags().any(|(n, t)| {
+                n == *name && earlier.binary_search_by(|v| v.as_bytes().cmp(t)).is_ok()
             })
+        }
     {
         return;
     }
