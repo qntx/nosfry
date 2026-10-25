@@ -274,7 +274,7 @@ pub(crate) fn run(
             Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
-        reap_negs(&mut work.negs, tuning);
+        reap_negs(&mut work.negs);
         let entry = if prefer_new {
             work.new_scans
                 .pop_front()
@@ -608,14 +608,7 @@ fn push_neg_err(conn: ConnId, sub: &SubKey, out: &Outbound, err: NegError) {
 /// A `NEG-MSG` round: reconcile against the stored session, or
 /// `closed: unknown subscription` when none matches (including a
 /// session still scanning, which is cancelled).
-fn neg_msg(
-    conn: ConnId,
-    sub: &SubKey,
-    msg: &[u8],
-    out: &Outbound,
-    work: &mut Work,
-    _tuning: &Tuning,
-) {
+fn neg_msg(conn: ConnId, sub: &SubKey, msg: &[u8], out: &Outbound, work: &mut Work) {
     let key = (conn, sub.id.clone());
     let reply = match work.negs.get_mut(&key) {
         Some(session) if session.generation == sub.generation => {
@@ -656,7 +649,7 @@ fn neg_msg(
 /// Idle-sync reaper: sessions without a `NEG-MSG` for `NEG_IDLE` are
 /// dropped and their reservation released; the connection answers
 /// `closed: idle timeout`.
-fn reap_negs(negs: &mut Negs, _tuning: &Tuning) {
+fn reap_negs(negs: &mut Negs) {
     if negs.is_empty() {
         return;
     }
@@ -752,7 +745,7 @@ fn apply(msg: ReaderMsg, work: &mut Work, tuning: &Tuning) {
         ReaderMsg::CancelConn { conn } => {
             work.new_scans.retain(|e| e.conn != conn);
             work.resumed.retain(|e| e.conn != conn);
-            drop_conn_negs(&mut work.negs, conn, tuning);
+            drop_conn_negs(&mut work.negs, conn);
         }
         ReaderMsg::NegMsg(neg) => {
             let crate::channels::NegMsg {
@@ -761,7 +754,7 @@ fn apply(msg: ReaderMsg, work: &mut Work, tuning: &Tuning) {
                 msg: payload,
                 out,
             } = *neg;
-            neg_msg(conn, &sub, &payload, &out, work, tuning);
+            neg_msg(conn, &sub, &payload, &out, work);
         }
         ReaderMsg::NegClose { conn, sub_id } => {
             // Drop the session (any generation) and any queued sync
@@ -780,7 +773,7 @@ fn apply(msg: ReaderMsg, work: &mut Work, tuning: &Tuning) {
 
 /// Drop every sync session belonging to `conn`; their reservations
 /// release on drop.
-fn drop_conn_negs(negs: &mut Negs, conn: ConnId, _tuning: &Tuning) {
+fn drop_conn_negs(negs: &mut Negs, conn: ConnId) {
     negs.retain(|(owner, _), _| *owner != conn);
 }
 
@@ -1189,7 +1182,7 @@ mod tests {
             negs.insert(key, session);
         }
 
-        reap_negs(&mut negs, &tuning);
+        reap_negs(&mut negs);
 
         assert_eq!(negs.len(), 1, "{negs:?}");
         assert!(negs.contains_key(&(1, SubId::parse("t").unwrap())));
