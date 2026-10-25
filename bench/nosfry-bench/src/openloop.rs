@@ -109,6 +109,8 @@ pub(crate) fn load_corpus(path: &Path, limit: usize) -> Result<Vec<Ready>, Strin
 #[derive(Default)]
 struct ConnOut {
     accepted: usize,
+    /// Rejected `OK`s that are really duplicates or superseded
+    /// replaceable versions: nosfry `duplicate:`, strfry `replaced:`.
     accepted_duplicate: usize,
     rejected_rate_limited: usize,
     rejected_other: usize,
@@ -153,7 +155,7 @@ fn count_ok(out: &mut ConnOut, accepted: bool, reason: &str, latency_us: u64) {
         out.accepted += 1;
     } else {
         match reason.split(':').next().unwrap_or("") {
-            "duplicate" => out.accepted_duplicate += 1,
+            "duplicate" | "replaced" => out.accepted_duplicate += 1,
             "rate-limited" => out.rejected_rate_limited += 1,
             _ => out.rejected_other += 1,
         }
@@ -623,7 +625,6 @@ pub(crate) async fn ingest_closed(
     println!("{result}");
     Ok(())
 }
-// marker-1792749036
 
 #[cfg(test)]
 mod tests {
@@ -644,6 +645,21 @@ mod tests {
         assert_eq!(reason, "duplicate: already have this event");
 
         assert!(classify_ok(r#"["EVENT","s",{}]"#).is_none());
+    }
+
+    #[test]
+    fn count_ok_buckets_duplicates_and_superseded() {
+        let mut out = ConnOut::default();
+        count_ok(&mut out, true, "", 0);
+        count_ok(&mut out, false, "duplicate: have a newer version", 0);
+        // strfry's answer to an older replaceable event.
+        count_ok(&mut out, false, "replaced: have newer event", 0);
+        count_ok(&mut out, false, "rate-limited: slow down", 0);
+        count_ok(&mut out, false, "invalid: bad sig", 0);
+        assert_eq!(out.accepted, 1);
+        assert_eq!(out.accepted_duplicate, 2);
+        assert_eq!(out.rejected_rate_limited, 1);
+        assert_eq!(out.rejected_other, 1);
     }
 
     #[test]
