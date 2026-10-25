@@ -15,9 +15,18 @@ The format is based on [Keep a Changelog]; this project follows
 - Only the newest kind-62 request to vanish per author is stored
   (NIP-62 bookkeeping); an older or equal-dated incoming request is
   answered `duplicate: have a newer version` instead of accumulating.
+- COUNT's tag-cover check binary-searches the sorted earlier values
+  instead of scanning them against every packed tag.
 
 ### Fixed
 
+- A scan crossing one `created_at` shared by many events no longer
+  buffers the whole tie group: it keeps only `limit - taken`
+  smallest ids, bounded per filter.
+- An in-progress `NEG-OPEN` scan now charges `max_sync_memory_bytes`
+  while it collects records and is refused with `blocked: sync
+  capacity exhausted` instead of running unbudgeted until the
+  session seals.
 - NIP-86 bans and allow/disallow lists now hide matching stored
   events at read time: a REQ, COUNT, or NEG-OPEN taken after a
   `banpubkey`, `disallowkind`, or allow-list change no longer serves

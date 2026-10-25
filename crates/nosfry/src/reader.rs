@@ -57,6 +57,60 @@ enum Job {
     Neg(Box<NegScan>),
 }
 
+/// Bytes reserved on `Tuning::sync_memory` for one sync: grown in
+/// steps while a `NEG-OPEN` scan collects, moved into the sealed
+/// `NegSession`, and released on drop whichever stage it dies at.
+#[derive(Debug)]
+struct SyncReservation {
+    /// Bytes currently charged.
+    bytes: usize,
+    /// The shared counter behind `nosfry_sync_memory_bytes`.
+    counter: Arc<AtomicUsize>,
+}
+
+impl SyncReservation {
+    /// An empty reservation over `counter`.
+    const fn new(counter: Arc<AtomicUsize>) -> Self {
+        Self { bytes: 0, counter }
+    }
+
+    /// Charge `add` more bytes; `false` (nothing charged) when the
+    /// total would exceed `budget` (`0` = unlimited). CAS loop like
+    /// `shard::try_charge`: refuse, never overshoot.
+    fn grow(&mut self, add: usize, budget: usize) -> bool {
+        loop {
+            let current = self.counter.load(Ordering::Relaxed);
+            if budget != 0 && current.saturating_add(add) > budget {
+                return false;
+            }
+            if self
+                .counter
+                .compare_exchange_weak(
+                    current,
+                    current.saturating_add(add),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_ok()
+            {
+                self.bytes += add;
+                return true;
+            }
+        }
+    }
+}
+
+impl Drop for SyncReservation {
+    fn drop(&mut self) {
+        self.counter.fetch_sub(self.bytes, Ordering::Relaxed);
+    }
+}
+
+/// Records one charge step covers; the CAS stays off the per-record
+/// path and the reservation sits at most one step over the exact
+/// `records.len() * SYNC_RECORD_BYTES` size.
+const SYNC_CHARGE_STEP: usize = 1024;
+
 /// A `NEG-OPEN` scan plus the records it collects.
 #[derive(Debug)]
 struct NegScan {
@@ -67,6 +121,11 @@ struct NegScan {
     records: Vec<(u64, EventId)>,
     /// The client's initial reconcile message.
     msg: Box<[u8]>,
+    /// Records already charged to `reservation` (a `SYNC_CHARGE_STEP`
+    /// multiple).
+    charged: usize,
+    /// Memory reserved for `records`, released on drop.
+    reservation: SyncReservation,
 }
 
 /// A sealed sync kept for later `NEG-MSG`s: the storage, its memory
@@ -78,7 +137,7 @@ struct NegSession {
     /// Sealed record storage.
     storage: NegentropyStorageVector,
     /// Bytes reserved on `Tuning::sync_memory`, released on drop.
-    reserved: usize,
+    _reserved: SyncReservation,
     /// Last `NEG-OPEN`/`NEG-MSG` time; [`NEG_IDLE`] reaps idle ones.
     last_active: Instant,
     /// Where the idle-timeout `NEG-ERR` goes.
@@ -215,7 +274,7 @@ pub(crate) fn run(
             Err(std::sync::mpsc::TryRecvError::Disconnected) => return,
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
-        reap_negs(&mut work.negs, tuning);
+        reap_negs(&mut work.negs);
         let entry = if prefer_new {
             work.new_scans
                 .pop_front()
@@ -304,6 +363,14 @@ fn step(
             let result = neg.scan.step_records(store, budget, &mut |created_at, id| {
                 neg.records.push((created_at, id));
             });
+            if !charge_neg_scan(&mut neg, tuning) {
+                out.push(Out::Neg {
+                    sub: sub.clone(),
+                    text: neg_err_frame(&sub.id, "blocked: sync capacity exhausted"),
+                    closes: true,
+                });
+                return;
+            }
             match result {
                 Ok(Progress::Pending) => work.resumed.push_back(ScanEntry {
                     conn,
@@ -434,6 +501,25 @@ enum NegError {
     Unknown,
 }
 
+/// Charge a `NEG-OPEN` scan's new records one `SYNC_CHARGE_STEP` at a
+/// time so the CAS stays off the per-record path; `false` refuses —
+/// the caller stops the sync and the dropped scan releases its
+/// reservation.
+fn charge_neg_scan(neg: &mut NegScan, tuning: &Tuning) -> bool {
+    let target = neg.records.len().next_multiple_of(SYNC_CHARGE_STEP);
+    if target <= neg.charged {
+        return true;
+    }
+    if !neg.reservation.grow(
+        (target - neg.charged) * sync::SYNC_RECORD_BYTES,
+        tuning.max_sync_memory_bytes,
+    ) {
+        return false;
+    }
+    neg.charged = target;
+    true
+}
+
 /// A finished `NEG-OPEN` scan: over-limit and over-budget answers
 /// never build a storage; otherwise seal the records, reconcile the
 /// initial message, and keep the session for `NEG-MSG`s.
@@ -445,7 +531,12 @@ fn finish_neg(
     negs: &mut Negs,
     tuning: &Tuning,
 ) {
-    let NegScan { records, msg, .. } = neg;
+    let NegScan {
+        records,
+        msg,
+        reservation,
+        ..
+    } = neg;
     if u64::try_from(records.len()).unwrap_or(u64::MAX) > tuning.max_sync_events {
         out.push(Out::Neg {
             sub: sub.clone(),
@@ -454,15 +545,6 @@ fn finish_neg(
                 "blocked: too many query results",
                 tuning.max_sync_events,
             ),
-            closes: true,
-        });
-        return;
-    }
-    let reserved = records.len() * sync::SYNC_RECORD_BYTES;
-    if !reserve_sync(tuning, reserved) {
-        out.push(Out::Neg {
-            sub: sub.clone(),
-            text: neg_err_frame(&sub.id, "blocked: sync capacity exhausted"),
             closes: true,
         });
         return;
@@ -494,16 +576,14 @@ fn finish_neg(
                 NegSession {
                     generation: sub.generation,
                     storage,
-                    reserved,
+                    _reserved: reservation,
                     last_active: Instant::now(),
                     out: out.clone(),
                 },
             );
         }
-        Err(err) => {
-            tuning.sync_memory.fetch_sub(reserved, Ordering::Relaxed);
-            push_neg_err(conn, sub, out, err);
-        }
+        // A failed seal drops `reservation` with the error reply.
+        Err(err) => push_neg_err(conn, sub, out, err),
     }
 }
 
@@ -525,28 +605,10 @@ fn push_neg_err(conn: ConnId, sub: &SubKey, out: &Outbound, err: NegError) {
     });
 }
 
-/// Reserve `bytes` on the shared sync-memory budget; `false` rolls
-/// the reservation back.
-fn reserve_sync(tuning: &Tuning, bytes: usize) -> bool {
-    let prev = tuning.sync_memory.fetch_add(bytes, Ordering::Relaxed);
-    if tuning.max_sync_memory_bytes != 0 && prev + bytes > tuning.max_sync_memory_bytes {
-        tuning.sync_memory.fetch_sub(bytes, Ordering::Relaxed);
-        return false;
-    }
-    true
-}
-
 /// A `NEG-MSG` round: reconcile against the stored session, or
 /// `closed: unknown subscription` when none matches (including a
 /// session still scanning, which is cancelled).
-fn neg_msg(
-    conn: ConnId,
-    sub: &SubKey,
-    msg: &[u8],
-    out: &Outbound,
-    work: &mut Work,
-    tuning: &Tuning,
-) {
+fn neg_msg(conn: ConnId, sub: &SubKey, msg: &[u8], out: &Outbound, work: &mut Work) {
     let key = (conn, sub.id.clone());
     let reply = match work.negs.get_mut(&key) {
         Some(session) if session.generation == sub.generation => {
@@ -577,11 +639,8 @@ fn neg_msg(
             push_neg_err(conn, sub, out, NegError::Unknown);
         }
         Err(err) => {
-            if let Some(session) = work.negs.remove(&key) {
-                tuning
-                    .sync_memory
-                    .fetch_sub(session.reserved, Ordering::Relaxed);
-            }
+            // The removed session's reservation releases on drop.
+            work.negs.remove(&key);
             push_neg_err(conn, sub, out, err);
         }
     }
@@ -590,7 +649,7 @@ fn neg_msg(
 /// Idle-sync reaper: sessions without a `NEG-MSG` for `NEG_IDLE` are
 /// dropped and their reservation released; the connection answers
 /// `closed: idle timeout`.
-fn reap_negs(negs: &mut Negs, tuning: &Tuning) {
+fn reap_negs(negs: &mut Negs) {
     if negs.is_empty() {
         return;
     }
@@ -606,13 +665,11 @@ fn reap_negs(negs: &mut Negs, tuning: &Tuning) {
                 generation: session.generation,
             },
             session.out.clone(),
-            session.reserved,
         ));
         let _ = conn;
         false
     });
-    for (sub, out, reserved) in dead {
-        tuning.sync_memory.fetch_sub(reserved, Ordering::Relaxed);
+    for (sub, out) in dead {
         out.push(Out::Neg {
             sub: sub.clone(),
             text: neg_err_frame(&sub.id, "closed: idle timeout"),
@@ -661,6 +718,8 @@ fn apply(msg: ReaderMsg, work: &mut Work, tuning: &Tuning) {
                     ),
                     records: Vec::new(),
                     msg: open,
+                    charged: 0,
+                    reservation: SyncReservation::new(Arc::clone(&tuning.sync_memory)),
                 })),
             };
             work.new_scans.push_back(ScanEntry {
@@ -686,7 +745,7 @@ fn apply(msg: ReaderMsg, work: &mut Work, tuning: &Tuning) {
         ReaderMsg::CancelConn { conn } => {
             work.new_scans.retain(|e| e.conn != conn);
             work.resumed.retain(|e| e.conn != conn);
-            drop_conn_negs(&mut work.negs, conn, tuning);
+            drop_conn_negs(&mut work.negs, conn);
         }
         ReaderMsg::NegMsg(neg) => {
             let crate::channels::NegMsg {
@@ -695,7 +754,7 @@ fn apply(msg: ReaderMsg, work: &mut Work, tuning: &Tuning) {
                 msg: payload,
                 out,
             } = *neg;
-            neg_msg(conn, &sub, &payload, &out, work, tuning);
+            neg_msg(conn, &sub, &payload, &out, work);
         }
         ReaderMsg::NegClose { conn, sub_id } => {
             // Drop the session (any generation) and any queued sync
@@ -706,26 +765,16 @@ fn apply(msg: ReaderMsg, work: &mut Work, tuning: &Tuning) {
             };
             work.new_scans.retain(keep);
             work.resumed.retain(keep);
-            if let Some(session) = work.negs.remove(&(conn, sub_id)) {
-                tuning
-                    .sync_memory
-                    .fetch_sub(session.reserved, Ordering::Relaxed);
-            }
+            // The removed session's reservation releases on drop.
+            work.negs.remove(&(conn, sub_id));
         }
     }
 }
 
-/// Release every sync session belonging to `conn`.
-fn drop_conn_negs(negs: &mut Negs, conn: ConnId, tuning: &Tuning) {
-    let mut released = 0usize;
-    negs.retain(|(owner, _), session| {
-        if *owner == conn {
-            released += session.reserved;
-            return false;
-        }
-        true
-    });
-    tuning.sync_memory.fetch_sub(released, Ordering::Relaxed);
+/// Drop every sync session belonging to `conn`; their reservations
+/// release on drop.
+fn drop_conn_negs(negs: &mut Negs, conn: ConnId) {
+    negs.retain(|(owner, _), _| *owner != conn);
 }
 
 #[allow(
@@ -1110,7 +1159,10 @@ mod tests {
                 NegSession {
                     generation,
                     storage,
-                    reserved: 40,
+                    _reserved: SyncReservation {
+                        bytes: 40,
+                        counter: Arc::clone(&tuning.sync_memory),
+                    },
                     last_active,
                     out: conn_out.clone(),
                 },
@@ -1130,7 +1182,7 @@ mod tests {
             negs.insert(key, session);
         }
 
-        reap_negs(&mut negs, &tuning);
+        reap_negs(&mut negs);
 
         assert_eq!(negs.len(), 1, "{negs:?}");
         assert!(negs.contains_key(&(1, SubId::parse("t").unwrap())));
@@ -1142,5 +1194,152 @@ mod tests {
         assert_eq!(sub.generation, 7);
         assert_eq!(text, "[\"NEG-ERR\",\"s\",\"closed: idle timeout\"]");
         assert!(closes);
+    }
+
+    /// Run a reader against `store` on a thread; returns the sender
+    /// half and the join handle (`drop` the sender to stop it).
+    fn spawn_reader(
+        store: Store,
+        budget: Duration,
+        max_sync_memory_bytes: usize,
+    ) -> (
+        std::sync::mpsc::Sender<ReaderMsg>,
+        Arc<AtomicUsize>,
+        std::thread::JoinHandle<()>,
+    ) {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (shard_tx, _shard_rx) = mpsc::channel(8);
+        let sync_memory = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&sync_memory);
+        let reader = std::thread::spawn(move || {
+            run(
+                &store,
+                &rx,
+                &[shard_tx],
+                &Tuning {
+                    budget,
+                    high_water: usize::MAX,
+                    total_budget: 0,
+                    max_filter_limit: 500,
+                    max_filter_limit_count: 1_000_000,
+                    max_sync_events: 1_000_000,
+                    max_sync_memory_bytes,
+                    sync_memory: counter,
+                },
+                &Metrics::new(),
+                &watch::channel(false).1,
+            );
+        });
+        (tx, sync_memory, reader)
+    }
+
+    /// A `NEG-OPEN` start message for `conn`/`id` over `filters`.
+    fn neg_start(conn: u64, id: &str, filters: Arc<[Filter]>, out: Outbound) -> ReaderMsg {
+        ReaderMsg::Start(Box::new(ScanStart {
+            conn,
+            sub: SubKey {
+                id: SubId::parse(id).unwrap(),
+                generation: 1,
+            },
+            kind: ScanKind::Neg {
+                msg: vec![0x61].into(),
+            },
+            filters,
+            gate: ReadGate::default(),
+            snapshot: u64::MAX,
+            out,
+        }))
+    }
+
+    /// Wait until `pred` holds for the counter or panic after 5 s.
+    fn until(counter: &AtomicUsize, pred: impl Fn(usize) -> bool, what: &str) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !pred(counter.load(Ordering::Relaxed)) {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// A sync whose records exceed `max_sync_memory_bytes` is refused
+    /// mid-scan with `blocked: sync capacity exhausted`; the gauge
+    /// returns to 0.
+    #[test]
+    fn sync_scan_over_budget_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let events: Vec<Arc<nosfry_core::event::Event>> = (0..100).map(event).collect();
+        store.write(&events, None).unwrap();
+        // One charge step (1024 records x 40 B) already exceeds it.
+        let (tx, counter, reader) = spawn_reader(store, Duration::from_secs(10), 1_000);
+        let (out, mut out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
+        tx.send(neg_start(1, "n", filters, out)).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let frame = out_rx.blocking_recv().unwrap();
+            if let Out::Neg { text, .. } = frame {
+                assert!(text.contains("blocked: sync capacity exhausted"), "{text}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "no NEG-ERR within 5 s");
+        }
+        until(&counter, |n| n == 0, "sync memory released");
+        drop(tx);
+        reader.join().unwrap();
+    }
+
+    /// Cancelling a connection mid-scan drops the in-progress sync
+    /// and releases its stepped reservation.
+    #[test]
+    fn sync_scan_cancel_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        // A zero-time step budget yields ~1 record per step, so the
+        // scan is still in flight when the cancel lands.
+        let events: Vec<Arc<nosfry_core::event::Event>> = (0..5_000).map(event).collect();
+        store.write(&events, None).unwrap();
+        let (tx, counter, reader) = spawn_reader(store, Duration::ZERO, 0);
+        let (out, _out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
+        tx.send(neg_start(1, "n", filters, out)).unwrap();
+        until(&counter, |n| n > 0, "the first charge");
+        tx.send(ReaderMsg::CancelConn { conn: 1 }).unwrap();
+        until(&counter, |n| n == 0, "reservation released on cancel");
+        drop(tx);
+        reader.join().unwrap();
+    }
+
+    /// A finished sync holds its reservation in the sealed session;
+    /// `NEG-CLOSE` releases it.
+    #[test]
+    fn sync_close_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let events: Vec<Arc<nosfry_core::event::Event>> = (0..100).map(event).collect();
+        store.write(&events, None).unwrap();
+        let (tx, counter, reader) = spawn_reader(store, Duration::from_secs(10), 0);
+        let (outbound, mut out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
+        tx.send(neg_start(1, "n", filters, outbound)).unwrap();
+        // The session seals once the NEG-MSG reply arrives; its
+        // reservation covers one 1024-record step.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let frame = out_rx.blocking_recv().unwrap();
+            if let Out::Neg { text, .. } = frame {
+                assert!(text.contains("\"NEG-MSG\""), "{text}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "no NEG-MSG within 5 s");
+        }
+        until(&counter, |n| n == 40 * 1_024, "the session reservation");
+        tx.send(ReaderMsg::NegClose {
+            conn: 1,
+            sub_id: SubId::parse("n").unwrap(),
+        })
+        .unwrap();
+        until(&counter, |n| n == 0, "reservation released on close");
+        drop(tx);
+        reader.join().unwrap();
     }
 }

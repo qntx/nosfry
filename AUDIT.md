@@ -372,7 +372,10 @@ identifiers are authoritative.
     - Process-wide `max_pending_outbound_bytes_total` (1 GiB, scans pause).
   - **Process-wide memory.** `max_sync_memory_bytes` (1 GiB),
     `max_subscription_bytes_total` (1 GiB; REQ refused
-    `blocked: subscription capacity exhausted`).
+    `blocked: subscription capacity exhausted`). Sync memory is
+    charged in 1,024-record steps while a `NEG-OPEN` collects
+    records, not only once the session seals; a refused charge stops
+    the scan with `blocked: sync capacity exhausted`.
   - **Inter-thread queues and buffers.**
     - Writer and shard queues (`WRITER_QUEUE`, `SHARD_QUEUE`, 4,096,
       backpressure rather than drop).
