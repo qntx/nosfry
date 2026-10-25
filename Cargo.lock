@@ -164,6 +164,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "base64"
+version = "0.23.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
+
+[[package]]
 name = "bit-set"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1268,7 +1274,7 @@ name = "nosfry"
 version = "0.3.0"
 dependencies = [
  "axum",
- "base64",
+ "base64 0.23.1",
  "clap",
  "faster-hex",
  "flate2",
@@ -1302,7 +1308,7 @@ dependencies = [
 name = "nosfry-conformance"
 version = "0.3.0"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "faster-hex",
  "futures-util",
  "getrandom 0.4.3",
@@ -1319,7 +1325,7 @@ dependencies = [
 name = "nosfry-core"
 version = "0.3.0"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "criterion",
  "faster-hex",
  "foldhash",
@@ -1374,7 +1380,7 @@ dependencies = [
 name = "nosfry-worker"
 version = "0.3.0"
 dependencies = [
- "base64",
+ "base64 0.23.1",
  "console_error_panic_hook",
  "faster-hex",
  "futures-util",
@@ -2700,7 +2706,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d7b69940f68e6cbe7d7f85350b81e51fafe62786d812b92c263727addc13a272"
 dependencies = [
  "axum-core",
- "base64",
+ "base64 0.22.1",
  "bytes",
  "crossbeam-queue",
  "flate2",
