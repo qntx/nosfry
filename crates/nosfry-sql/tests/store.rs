@@ -682,3 +682,36 @@ fn created_at_tie_group_is_bounded() {
     ];
     assert_eq!(serve(&pair), want);
 }
+
+/// A tag filter with hundreds of values counts an event carrying
+/// several covered values exactly once — the cover check searches
+/// earlier values, it must not double-count.
+#[test]
+fn count_many_tag_values_dedups() {
+    let store = store();
+    let k = key(1);
+    let values: Vec<String> = (0..300).map(|i| format!("v{i:03}")).collect();
+    let list = values
+        .iter()
+        .map(|v| format!("\"{v}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let filters = [filter(&format!("{{\"#t\":[{list}]}}"))];
+    let two = event(
+        &k,
+        1,
+        100,
+        &json!([["t", "v005"], ["t", "v200"]]),
+        "two hits",
+    );
+    let one = event(&k, 1, 110, &json!([["t", "v042"]]), "one hit");
+    let miss = event(&k, 1, 120, &json!([]), "miss");
+    store
+        .write(&[Arc::clone(&two), Arc::clone(&one), miss], None)
+        .unwrap();
+    let result = store
+        .count(&filters, &ReadGate::default(), 0, usize::MAX, None)
+        .unwrap();
+    assert!(!result.approximate);
+    assert_eq!(result.count, 2);
+}

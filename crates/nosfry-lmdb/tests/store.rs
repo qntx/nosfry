@@ -1776,3 +1776,49 @@ fn created_at_tie_group_is_bounded() {
         .collect();
     assert_eq!(deduped, want);
 }
+
+/// A tag filter with hundreds of values counts an event carrying
+/// several covered values exactly once — the cover check searches
+/// earlier values, it must not double-count.
+#[test]
+fn count_many_tag_values_dedups() {
+    let (_dir, store) = store();
+    let k = key(1);
+    let values: Vec<String> = (0..300).map(|i| format!("v{i:03}")).collect();
+    let list = values
+        .iter()
+        .map(|v| format!("\"{v}\""))
+        .collect::<Vec<_>>()
+        .join(",");
+    let filters: Arc<[Filter]> =
+        Arc::from([Filter::parse(&format!("{{\"#t\":[{list}]}}")).unwrap()]);
+    let two = event(
+        &k,
+        1,
+        100,
+        &json!([["t", "v005"], ["t", "v200"]]),
+        "two hits",
+    );
+    let one = event(&k, 1, 110, &json!([["t", "v042"]]), "one hit");
+    let miss = event(&k, 1, 120, &json!([["t", "nomatch"]]), "miss");
+    store
+        .write(&[Arc::clone(&two), Arc::clone(&one), miss], None)
+        .unwrap();
+    let mut scan = nosfry_lmdb::CountScan::new(
+        filters,
+        nosfry_core::auth::ReadGate::default(),
+        store.snapshot().unwrap(),
+        0,
+        0,
+        None,
+    );
+    let mut guard = 0usize;
+    loop {
+        guard += 1;
+        assert!(guard < 10_000, "count did not terminate");
+        if scan.step(&store, Duration::ZERO).unwrap() == Progress::Done {
+            break;
+        }
+    }
+    assert_eq!(scan.result().count, 2);
+}
