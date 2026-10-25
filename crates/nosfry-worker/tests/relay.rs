@@ -2073,3 +2073,52 @@ fn filter_validation_config_rejects_bad_bounds() {
         );
     }
 }
+
+/// `AddressKey` groups IPv6 by /64 (native parity): two addresses in
+/// one /64 share the per-IP cap and the `ip_*` rate buckets.
+#[test]
+fn admits_groups_ipv6_by_64() {
+    let mut r = relay("[relay]\nmax_connections_per_ip = 1\n");
+    let socket = FakeSocket::default();
+    r.accept(socket, 1, Some("2001:db8::1".parse().unwrap()), "c".into())
+        .unwrap();
+    assert!(!r.admits(Some("2001:db8::ffff:abcd".parse().unwrap())));
+    assert!(r.admits(Some("2001:db8:0:1::1".parse().unwrap())));
+    assert!(r.admits(Some("10.0.0.7".parse().unwrap())));
+}
+
+#[test]
+fn ip_buckets_are_shared_within_64() {
+    let mut r =
+        relay("[relay]\n[relay.rate_limits]\nip_events_per_second = 1\nip_events_burst = 1\n");
+    let a = FakeSocket::default();
+    let b = FakeSocket::default();
+    r.accept(a, 1, Some("2001:db8::1".parse().unwrap()), "c".into())
+        .unwrap();
+    r.accept(
+        b.clone(),
+        2,
+        Some("2001:db8::99".parse().unwrap()),
+        "c".into(),
+    )
+    .unwrap();
+    // The first event drains the shared bucket; the other address in
+    // the same /64 is refused on the same bucket.
+    msg(
+        &mut r,
+        1,
+        &event_frame(&event(&key(1), 1, NOW, &json!([]), "one")),
+    );
+    msg(
+        &mut r,
+        2,
+        &event_frame(&event(&key(1), 1, NOW + 1, &json!([]), "two")),
+    );
+    assert!(
+        b.sent()
+            .iter()
+            .any(|f| f.contains("rate-limited: slow down")),
+        "{:?}",
+        b.sent()
+    );
+}

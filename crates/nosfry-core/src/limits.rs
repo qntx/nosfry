@@ -1,6 +1,7 @@
 //! Relay resource limits (strfry-compatible defaults).
 
 use std::collections::BTreeSet;
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::Deserialize;
@@ -230,6 +231,33 @@ impl Default for RateLimits {
     }
 }
 
+/// Per-address grouping key for connection caps and rate buckets.
+///
+/// IPv4 as-is, IPv4-mapped IPv6 folded to its IPv4, other IPv6
+/// grouped by /64 — one subscriber typically owns a whole /64, so
+/// per-address caps there are trivially bypassed. The NIP-86 IP
+/// block list keeps exact addresses; this key is only for caps and
+/// buckets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AddressKey {
+    /// IPv4 address bits.
+    V4(u32),
+    /// First 64 bits of the IPv6 address.
+    V6(u64),
+}
+
+impl From<IpAddr> for AddressKey {
+    fn from(ip: IpAddr) -> Self {
+        match ip {
+            IpAddr::V4(v4) => Self::V4(u32::from(v4)),
+            IpAddr::V6(v6) => v6.to_ipv4_mapped().map_or_else(
+                || Self::V6((u128::from(v6) >> 64) as u64),
+                |v4| Self::V4(u32::from(v4)),
+            ),
+        }
+    }
+}
+
 /// Token buckets shared by every connection of one client address
 /// (built from the `ip_*` rate limits). A `None` bucket is disabled;
 /// `Default` gives a fully disabled pair.
@@ -396,6 +424,23 @@ mod tests {
         // 150 ms -> 1.5 tokens: one take succeeds, one fails.
         assert!(bucket.take(150));
         assert!(!bucket.take(150));
+    }
+
+    #[test]
+    fn address_key_groups_addresses() {
+        let v4: IpAddr = "203.0.113.7".parse().unwrap();
+        let mapped: IpAddr = "::ffff:203.0.113.7".parse().unwrap();
+        assert_eq!(AddressKey::from(v4), AddressKey::V4(0xcb00_7107));
+        assert_eq!(
+            AddressKey::from(mapped),
+            AddressKey::from(v4),
+            "v4-mapped v6 folds to v4"
+        );
+        let a: IpAddr = "2001:db8::1".parse().unwrap();
+        let b: IpAddr = "2001:db8::ffff:abcd".parse().unwrap();
+        let c: IpAddr = "2001:db8:0:1::1".parse().unwrap();
+        assert_eq!(AddressKey::from(a), AddressKey::from(b), "same /64");
+        assert_ne!(AddressKey::from(a), AddressKey::from(c), "different /64");
     }
 
     #[test]
