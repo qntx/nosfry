@@ -245,6 +245,30 @@ diffs; w7 the 24 h soak profile per relay (negentropy and vanish
 skipped where unsupported); w8 crash durability: ack-ingest,
 kill the relay at a seeded-random 2-20 s, restart, ack-check.
 
+Analysis runs next to the results, inside the container, because it
+reads each unit's `relay.log`:
+
+```bash
+python3 r7/analyze.py /bench/results/r7 --json summary.json > report.md
+uv run --python 3.12 --with scipy --with statsmodels python r7/test_stats.py
+```
+
+`analyze.py` takes the last manifest line per unit, so a rerun
+replaces the earlier attempt. It prints the eight pre-registered
+primary comparisons (exact two-sided Mann–Whitney U, Holm over all
+eight, a claim only when the adjusted p < 0.05 and the median intervals
+are disjoint), one table per workload and metric with the median and a
+distribution-free interval per relay, the W7 soak rows and the W8
+durability totals. Every rep is listed; a rep with a flag (timeouts,
+rejected events, send lag ≥ 5 ms, an empty result set, missing or
+duplicate deliveries, a negentropy set mismatch, a database below its
+import count) stays out of the medians and tests and is named under
+its workload. strfry answers an older replaceable version with
+`replaced:`, which older harness builds counted as a rejection; the
+analysis accepts those reps only when the unit's `relay.log` shows no
+other kind of rejection. `test_stats.py` checks `stats.py` against
+SciPy and statsmodels.
+
 The durability comparison adds a measurement-only build, never shipped,
 that opens LMDB with `EnvFlags::NO_META_SYNC` in `Store::open`. This
 reproduces the `MDB_NOMETASYNC` strfry effectively runs with: rasgueadb
