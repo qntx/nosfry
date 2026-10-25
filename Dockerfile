@@ -9,18 +9,17 @@
 #
 # Multi-arch: the base images are multi-arch out of the box.
 
-# RUST_VERSION must track rust-toolchain.toml: that file is excluded via
+# The Rust tag must track rust-toolchain.toml: that file is excluded via
 # .dockerignore, so the image's Rust base pins the compiler instead of
-# rustup downloading a toolchain during the build.
-ARG RUST_VERSION=1.99
-
-FROM rust:${RUST_VERSION}-slim-bookworm AS chef
+# rustup downloading a toolchain during the build. Dependabot's docker
+# ecosystem bumps the tag and digest together.
+FROM rust:1.99-slim-bookworm@sha256:86234e857a413004348b471d11a4ebe1aa92d2eae2b6b143cac68fd1ac3c48be AS chef
 ENV CARGO_TERM_COLOR=always
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       pkg-config build-essential ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-RUN cargo install cargo-chef --locked --version ^0.1
+RUN cargo install cargo-chef --locked --version 0.1.78
 WORKDIR /src
 
 FROM chef AS planner
@@ -36,7 +35,7 @@ COPY . .
 RUN mkdir /data \
  && cargo build --release --locked -p nosfry
 
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime
 LABEL org.opencontainers.image.title="nosfry" \
       org.opencontainers.image.description="High-performance Nostr relay" \
       org.opencontainers.image.source="https://github.com/qntx/nosfry" \
