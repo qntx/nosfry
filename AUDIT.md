@@ -305,6 +305,8 @@ identifiers are authoritative.
     blocks the author's events with `created_at <= T`, and drains history in
     bounded, resumable steps (`vanish_pending`, `vanish_step`, `VANISH_CAP`)
     that survive restarts.
+  - Only the newest kind 62 per author is stored (NIP-62 bookkeeping);
+    an older incoming one is `duplicate: have a newer version`.
   - Files: `crates/nosfry-core/src/event.rs`, `crates/nosfry-lmdb/src/lib.rs`,
     `crates/nosfry/src/writer.rs`, `crates/nosfry-sql/src/store.rs`.
 - **P11 — NIP-86 management authorization.**

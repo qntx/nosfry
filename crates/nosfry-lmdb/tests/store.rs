@@ -1404,11 +1404,8 @@ fn vanish_raised_t_covers_rows_past_the_resume() {
     store.write(&[Arc::clone(&vanish2)], None).unwrap();
     while store.vanish_step(10_000).unwrap().more {}
     // The event between T1 and T2 vanished with everything else
-    // covered; only the two requests remain, newest first.
-    assert_eq!(
-        served_ids(&store, &author),
-        vec![vanish2.id().to_string(), vanish.id().to_string()],
-    );
+    // covered; the newer request superseded the older one on store.
+    assert_eq!(served_ids(&store, &author), vec![vanish2.id().to_string()],);
 }
 
 #[test]
@@ -1662,4 +1659,87 @@ fn blocked_reason_enforces_bans_and_allow_lists() {
         "kind 7 is not on the allow list"
     );
     assert_eq!(m.blocked_reason(&note_a), None);
+}
+
+/// NIP-62 bookkeeping: only the author's newest request to vanish is
+/// stored; a stored newer one makes the incoming write `Superseded`.
+#[test]
+fn vanish_request_keeps_only_the_newest() {
+    let (_dir, store) = store();
+    let url = relay_url();
+    let author = key(1);
+    let tag = json!([["relay", "wss://relay.example.com"]]);
+    let v1 = event(&author, 62, 100, &tag, "v1");
+    let v2 = event(&author, 62, 200, &tag, "v2");
+    let v3 = event(&author, 62, 150, &tag, "v3");
+    let w1 = store.write(&[Arc::clone(&v1)], Some(&url)).unwrap();
+    assert_eq!(w1.outcomes, vec![WriteOutcome::Stored { seq: 1 }]);
+    let w2 = store.write(&[Arc::clone(&v2)], Some(&url)).unwrap();
+    assert_eq!(w2.outcomes, vec![WriteOutcome::Stored { seq: 2 }]);
+    let sup = store.write(&[v3], Some(&url)).unwrap();
+    assert_eq!(sup.outcomes, vec![WriteOutcome::Superseded]);
+    assert_eq!(served_ids(&store, &author), vec![v2.id().to_string()]);
+    // The vanish point is still the stored request's T=200: an author
+    // event at 150 is blocked.
+    let covered = event(&author, 1, 150, &json!([]), "x");
+    let van = store.write(&[covered], Some(&url)).unwrap();
+    assert_eq!(van.outcomes, vec![WriteOutcome::Vanished]);
+    // Equal created_at: the lower id wins.
+    let (v4, v5) = (
+        event(&author, 62, 300, &tag, "v4"),
+        event(&author, 62, 300, &tag, "v5"),
+    );
+    let (first, second) = if v4.id() < v5.id() {
+        (v4, v5)
+    } else {
+        (v5, v4)
+    };
+    let w3 = store.write(&[Arc::clone(&first)], Some(&url)).unwrap();
+    assert!(matches!(w3.outcomes[0], WriteOutcome::Stored { .. }));
+    let tie = store.write(&[second], Some(&url)).unwrap();
+    assert_eq!(tie.outcomes, vec![WriteOutcome::Superseded]);
+    assert_eq!(served_ids(&store, &author), vec![first.id().to_string()]);
+}
+
+/// A superseded kind 62 that names this relay is still honored
+/// (NIP-62 MUST): the newer stored request naming another relay is
+/// bookkeeping only, while the vanish point still rises.
+#[test]
+fn vanish_honored_when_superseded_by_foreign_request() {
+    let (_dir, store) = store();
+    let url = relay_url();
+    let author = key(1);
+    let note = event(&author, 1, 50, &json!([]), "note");
+    store.write(&[note], None).unwrap();
+    // Newer request naming another relay: stored, not honored.
+    let foreign = event(
+        &author,
+        62,
+        200,
+        &json!([["relay", "wss://other.example"]]),
+        "",
+    );
+    let foreign_id = foreign.id().to_string();
+    let kept = store.write(&[foreign], Some(&url)).unwrap();
+    assert!(matches!(kept.outcomes[0], WriteOutcome::Stored { .. }));
+    assert!(!store.vanish_pending().unwrap());
+    // Older request naming this relay: superseded at storage yet
+    // still honored.
+    let honored = event(
+        &author,
+        62,
+        100,
+        &json!([["relay", "wss://relay.example.com"]]),
+        "",
+    );
+    let sup = store.write(&[honored], Some(&url)).unwrap();
+    assert_eq!(sup.outcomes, vec![WriteOutcome::Superseded]);
+    assert!(sup.vanish_pending);
+    while store.vanish_step(10_000).unwrap().more {}
+    // Only the foreign request remains stored; the covered note is
+    // swept and new writes at or before T=100 are refused.
+    assert_eq!(served_ids(&store, &author), vec![foreign_id]);
+    let blocked = event(&author, 1, 80, &json!([]), "blocked");
+    let van = store.write(&[blocked], Some(&url)).unwrap();
+    assert_eq!(van.outcomes, vec![WriteOutcome::Vanished]);
 }

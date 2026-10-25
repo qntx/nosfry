@@ -421,10 +421,15 @@ impl Store {
             let outcome = self.apply(&mut txn, event, &mut next_seq, &mut written.deleted)?;
             // A request to vanish that was stored (or already stored)
             // extends the author's vanish point and queues the sweep.
+            // A kind 62 has no address, so `Superseded` here means the
+            // newest-only bookkeeping rule — honoring the request is
+            // independent of keeping it (NIP-62 MUST).
             if event.requests_vanish(service_url)
                 && matches!(
                     outcome,
-                    WriteOutcome::Stored { .. } | WriteOutcome::Duplicate
+                    WriteOutcome::Stored { .. }
+                        | WriteOutcome::Duplicate
+                        | WriteOutcome::Superseded
                 )
             {
                 written.vanish_pending |= self.record_vanish(&mut txn, event)?;
@@ -459,6 +464,11 @@ impl Store {
         }
         if self.ix_id.get(txn, &event.id().0)?.is_some() {
             return Ok(WriteOutcome::Duplicate);
+        }
+        // NIP-62: relays may keep the signed request to vanish for
+        // bookkeeping — store only the author's newest.
+        if event.kind().0 == 62 && self.vanish_request_superseded(txn, event, deleted)? {
+            return Ok(WriteOutcome::Superseded);
         }
         // NIP-09: an id covered by a stored same-author kind 5 stays
         // deleted; a kind 5 itself is never blocked, and a kind 62
@@ -498,6 +508,61 @@ impl Store {
             self.apply_deletions(txn, event, deleted)?;
         }
         Ok(WriteOutcome::Stored { seq })
+    }
+
+    /// Whether a stored kind-62 of `event`'s author supersedes the
+    /// incoming request — `true` means the caller answers `Superseded`.
+    /// Otherwise every stored one is deleted (seqs into `deleted`) and
+    /// `event` may insert, so a legacy db holding several requests
+    /// collapses to the newest.
+    fn vanish_request_superseded(
+        &self,
+        txn: &mut RwTxn<'_>,
+        event: &Event,
+        deleted: &mut Vec<u64>,
+    ) -> Result<bool, StoreError> {
+        // `ix_pubkey_kind` prefix `pubkey ‖ 62u16 BE` spans all of the
+        // author's stored requests; the suffix bounds are
+        // `created_at ‖ seq` maxima.
+        let mut from = Vec::with_capacity(50);
+        from.extend_from_slice(&event.pubkey().0);
+        from.extend_from_slice(&62u16.to_be_bytes());
+        let mut to = from.clone();
+        to.extend_from_slice(&u64::MAX.to_be_bytes());
+        to.extend_from_slice(&u64::MAX.to_be_bytes());
+        let bounds = (Bound::Included(&*from), Bound::Included(&*to));
+        // Collect before deleting — never mutate while iterating.
+        let mut stored = Vec::new();
+        for entry in self.ix_pubkey_kind.range(txn, &bounds)? {
+            let (key, _) = entry?;
+            let seq = decode_seq(
+                key.last_chunk::<8>()
+                    .ok_or(StoreError::Corrupt("bad ix_pubkey_kind key"))?,
+            )?;
+            let packed = self
+                .events
+                .get(txn, &seq.to_be_bytes())?
+                .ok_or(StoreError::Corrupt(
+                    "ix_pubkey_kind points at a missing event",
+                ))?
+                .to_vec();
+            stored.push((seq, packed));
+        }
+        for (_, bytes) in &stored {
+            let old = PackedRef::new(bytes).ok_or(StoreError::Corrupt("bad packed record"))?;
+            if supersedes(
+                (old.created_at(), &old.id()),
+                (event.created_at(), &event.id()),
+            ) {
+                return Ok(true);
+            }
+        }
+        for (seq, _) in stored {
+            if self.delete_seq(txn, seq)? {
+                deleted.push(seq);
+            }
+        }
+        Ok(false)
     }
 
     /// Apply every target of a stored kind-5 `event` (NIP-09). Targets
