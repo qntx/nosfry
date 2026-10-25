@@ -421,10 +421,15 @@ impl Store {
             let outcome = self.apply(&mut txn, event, &mut next_seq, &mut written.deleted)?;
             // A request to vanish that was stored (or already stored)
             // extends the author's vanish point and queues the sweep.
+            // A kind 62 has no address, so `Superseded` here means the
+            // newest-only bookkeeping rule — honoring the request is
+            // independent of keeping it (NIP-62 MUST).
             if event.requests_vanish(service_url)
                 && matches!(
                     outcome,
-                    WriteOutcome::Stored { .. } | WriteOutcome::Duplicate
+                    WriteOutcome::Stored { .. }
+                        | WriteOutcome::Duplicate
+                        | WriteOutcome::Superseded
                 )
             {
                 written.vanish_pending |= self.record_vanish(&mut txn, event)?;

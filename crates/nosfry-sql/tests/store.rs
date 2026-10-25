@@ -581,3 +581,59 @@ fn vanish_request_keeps_only_the_newest() {
         .unwrap();
     assert_eq!(kept, vec![first.json()]);
 }
+
+/// A superseded kind 62 that names this relay is still honored
+/// (NIP-62 MUST): the newer stored request naming another relay is
+/// bookkeeping only, while the vanish point still rises.
+#[test]
+fn vanish_honored_when_superseded_by_foreign_request() {
+    let store = store();
+    let url = nosfry_core::url::RelayUrl::parse("wss://relay.example.com").unwrap();
+    let author = key(1);
+    let note = event(&author, 1, 50, &json!([]), "note");
+    store.write(&[note], None).unwrap();
+    // Newer request naming another relay: stored, not honored.
+    let foreign = event(
+        &author,
+        62,
+        200,
+        &json!([["relay", "wss://other.example"]]),
+        "",
+    );
+    let stored = store.write(&[Arc::clone(&foreign)], Some(&url)).unwrap();
+    assert!(matches!(stored.outcomes[0], WriteOutcome::Stored { .. }));
+    assert!(!store.vanish_pending().unwrap());
+    // Older request naming this relay: superseded at storage yet
+    // still honored.
+    let honored = event(
+        &author,
+        62,
+        100,
+        &json!([["relay", "wss://relay.example.com"]]),
+        "",
+    );
+    let sup = store.write(&[honored], Some(&url)).unwrap();
+    assert_eq!(sup.outcomes, vec![WriteOutcome::Superseded]);
+    assert!(sup.vanish_pending);
+    while store.vanish_step(10_000).unwrap().more {}
+    // Only the foreign request remains stored; the covered note is
+    // swept and new writes at or before T=100 are refused.
+    let mut kept = Vec::new();
+    store
+        .query(
+            &[filter(&format!(
+                "{{\"authors\":[\"{}\"]}}",
+                author.x_only_public_key().0
+            ))],
+            &ReadGate::default(),
+            0,
+            u64::MAX,
+            usize::MAX,
+            &mut |hit| kept.push(hit.json.to_string()),
+        )
+        .unwrap();
+    assert_eq!(kept, vec![foreign.json()]);
+    let blocked = event(&author, 1, 80, &json!([]), "blocked");
+    let van = store.write(&[blocked], Some(&url)).unwrap();
+    assert_eq!(van.outcomes, vec![WriteOutcome::Vanished]);
+}

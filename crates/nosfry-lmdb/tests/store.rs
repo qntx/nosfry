@@ -1700,3 +1700,46 @@ fn vanish_request_keeps_only_the_newest() {
     assert_eq!(tie.outcomes, vec![WriteOutcome::Superseded]);
     assert_eq!(served_ids(&store, &author), vec![first.id().to_string()]);
 }
+
+/// A superseded kind 62 that names this relay is still honored
+/// (NIP-62 MUST): the newer stored request naming another relay is
+/// bookkeeping only, while the vanish point still rises.
+#[test]
+fn vanish_honored_when_superseded_by_foreign_request() {
+    let (_dir, store) = store();
+    let url = relay_url();
+    let author = key(1);
+    let note = event(&author, 1, 50, &json!([]), "note");
+    store.write(&[note], None).unwrap();
+    // Newer request naming another relay: stored, not honored.
+    let foreign = event(
+        &author,
+        62,
+        200,
+        &json!([["relay", "wss://other.example"]]),
+        "",
+    );
+    let foreign_id = foreign.id().to_string();
+    let kept = store.write(&[foreign], Some(&url)).unwrap();
+    assert!(matches!(kept.outcomes[0], WriteOutcome::Stored { .. }));
+    assert!(!store.vanish_pending().unwrap());
+    // Older request naming this relay: superseded at storage yet
+    // still honored.
+    let honored = event(
+        &author,
+        62,
+        100,
+        &json!([["relay", "wss://relay.example.com"]]),
+        "",
+    );
+    let sup = store.write(&[honored], Some(&url)).unwrap();
+    assert_eq!(sup.outcomes, vec![WriteOutcome::Superseded]);
+    assert!(sup.vanish_pending);
+    while store.vanish_step(10_000).unwrap().more {}
+    // Only the foreign request remains stored; the covered note is
+    // swept and new writes at or before T=100 are refused.
+    assert_eq!(served_ids(&store, &author), vec![foreign_id]);
+    let blocked = event(&author, 1, 80, &json!([]), "blocked");
+    let van = store.write(&[blocked], Some(&url)).unwrap();
+    assert_eq!(van.outcomes, vec![WriteOutcome::Vanished]);
+}

@@ -4063,3 +4063,41 @@ async fn nip62_older_vanish_request_is_duplicate() {
     );
     relay.stop().await;
 }
+
+/// A superseded request to vanish is still honored: the newer stored
+/// request naming another relay is bookkeeping only (NIP-62 MUST).
+#[tokio::test]
+async fn nip62_superseded_vanish_request_is_still_honored() {
+    let relay = Relay::start_with(vanish_config()).await;
+    let mut ws = relay.connect().await;
+    let author = key(60);
+    let note = common::event(&author, 1, now(), &json!([]), "note");
+    publish(&mut ws, &note).await;
+    // A newer request naming another relay stores fine (bookkeeping).
+    let foreign = common::event(
+        &author,
+        62,
+        now() + 100,
+        &json!([["relay", "wss://other.example"]]),
+        "",
+    );
+    let foreign_id = foreign.id().to_string();
+    assert_eq!(publish(&mut ws, &foreign).await[2], true);
+    // The older request naming this relay is superseded but honored.
+    let honored = common::event(
+        &author,
+        62,
+        now(),
+        &json!([["relay", "wss://relay.example.com"]]),
+        "",
+    );
+    let ok = publish(&mut ws, &honored).await;
+    assert_eq!(
+        (ok[2].as_bool(), ok[3].as_str()),
+        (Some(false), Some("duplicate: have a newer version"))
+    );
+    // The covered note is swept despite the superseded write.
+    let mut want = vec![foreign_id];
+    settled_ids(&mut ws, "s", &mut want).await;
+    relay.stop().await;
+}

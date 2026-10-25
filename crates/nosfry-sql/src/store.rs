@@ -499,10 +499,13 @@ impl<E: Executor> SqlStore<E> {
     ) -> Result<bool, StoreError> {
         let outcome = self.apply(event)?;
         outcomes.push(outcome);
+        // A kind 62 has no address, so `Superseded` here means the
+        // newest-only bookkeeping rule — honoring the request is
+        // independent of keeping it (NIP-62 MUST).
         if event.requests_vanish(service_url)
             && matches!(
                 outcome,
-                WriteOutcome::Stored { .. } | WriteOutcome::Duplicate
+                WriteOutcome::Stored { .. } | WriteOutcome::Duplicate | WriteOutcome::Superseded
             )
         {
             return self.record_vanish(event);
