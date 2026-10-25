@@ -405,6 +405,10 @@ identifiers are authoritative.
     unparsable value falls back to the peer (`http::client_ip`).
   - The same address drives the per-IP cap, the per-address buckets, the
     NIP-86 IP block list, and the policy's `sourceInfo`.
+  - For caps and buckets both editions group IPv6 by /64 and fold
+    IPv4-mapped addresses to IPv4 (`AddressKey` in `limits.rs`) — one
+    subscriber typically owns a /64. The NIP-86 IP block list keeps
+    exact-address matching in both editions.
   - Workers uses `CF-Connecting-IP`.
   - The NIP-86 IP block applies to new requests only.
 - **P16 — Safe HTTP surface.**

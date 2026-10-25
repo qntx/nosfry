@@ -10,7 +10,7 @@ use nosfry_core::auth::{AUTH_KIND, ReadGate};
 use nosfry_core::event::{Event, PublicKey};
 use nosfry_core::filter::Filter;
 use nosfry_core::hll::Hll;
-use nosfry_core::limits::{AddressBuckets, Limits};
+use nosfry_core::limits::{AddressBuckets, AddressKey, Limits};
 use nosfry_core::management::{self, Action, Request};
 use nosfry_core::message::{
     SubId, closed_frame, count_frame, eose_frame, event_frame, neg_err_frame,
@@ -179,8 +179,9 @@ pub struct Relay<E: Executor, S: Socket> {
     moderation: Arc<Moderation>,
     conns: HashMap<u64, Conn<S>>,
     /// `AddressBuckets` shared by every connection of one client
-    /// address; the entry dies with the last.
-    buckets: HashMap<IpAddr, Arc<AddressBuckets>>,
+    /// address (`AddressKey` groups IPv6 by /64 like native); the
+    /// entry dies with the last.
+    buckets: HashMap<AddressKey, Arc<AddressBuckets>>,
     monitors: Monitors<u64>,
     /// Whether a write policy runs (the `POLICY` binding exists).
     policy: bool,
@@ -318,7 +319,14 @@ impl<E: Executor, S: Socket> Relay<E, S> {
         }
         let per_ip = self.config.relay.max_connections_per_ip;
         ip.is_none_or(|ip| {
-            per_ip == 0 || self.conns.values().filter(|c| c.ip == Some(ip)).count() < per_ip
+            let key = AddressKey::from(ip);
+            per_ip == 0
+                || self
+                    .conns
+                    .values()
+                    .filter(|c| c.ip.map(AddressKey::from) == Some(key))
+                    .count()
+                    < per_ip
         })
     }
 
@@ -430,13 +438,15 @@ impl<E: Executor, S: Socket> Relay<E, S> {
         };
         // `c` still holds its session's bucket share: two references
         // left (the map's and the session's) means this was the last.
-        if let Some(ip) = c.ip
-            && self
+        if let Some(ip) = c.ip {
+            let key = AddressKey::from(ip);
+            if self
                 .buckets
-                .get(&ip)
+                .get(&key)
                 .is_some_and(|b| Arc::strong_count(b) == 2)
-        {
-            self.buckets.remove(&ip);
+            {
+                self.buckets.remove(&key);
+            }
         }
     }
 
@@ -594,7 +604,7 @@ impl<E: Executor, S: Socket> Relay<E, S> {
         match ip {
             Some(ip) => Arc::clone(
                 self.buckets
-                    .entry(ip)
+                    .entry(AddressKey::from(ip))
                     .or_insert_with(|| Arc::new(AddressBuckets::new(&self.limits.rate))),
             ),
             None => Arc::new(AddressBuckets::default()),

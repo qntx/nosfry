@@ -30,10 +30,14 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Fixed
 
+- The Workers edition now groups IPv6 clients by /64 and folds
+  IPv4-mapped addresses for the per-IP connection cap and the shared
+  per-address rate buckets (`AddressKey` in `nosfry-core::limits`),
+  matching native; the NIP-86 IP block list still matches exact
+  addresses.
 - `import` no longer buffers a whole input line before the `max_line`
   check: it reads at most `max_line + 1` bytes, rejects a longer line
   once, and consumes the rest without allocating it.
-
 - A scan crossing one `created_at` shared by many events no longer
   buffers the whole tie group: it keeps only `limit - taken`
   smallest ids, bounded per filter.
