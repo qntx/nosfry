@@ -109,6 +109,10 @@ pub struct Received {
     pub rate_limited: bool,
 }
 
+/// NIP-42: `created_at` on an AUTH event must be within this many
+/// seconds of the relay's time, either way.
+const AUTH_WINDOW_SECONDS: u64 = 600;
+
 /// Per-connection protocol state.
 #[derive(Debug)]
 pub struct Session {
@@ -529,13 +533,16 @@ impl Session {
                 &Reason::Invalid.message("AUTH event must be kind 22242"),
             );
         }
-        if let Some(reason) = self.check_time(
-            unverified.created_at(),
-            unverified.kind(),
-            unverified.expiration(),
-            now,
-        ) {
-            return fail(out, &id, &Reason::Invalid.message(reason));
+        // NIP-42: `created_at` within ~10 minutes of the relay's
+        // time — a dedicated symmetric window, not the event-age
+        // rules (kind 22242 would otherwise get the 60 s ephemeral
+        // bound).
+        if unverified.created_at().abs_diff(now) > AUTH_WINDOW_SECONDS {
+            return fail(
+                out,
+                &id,
+                &Reason::Invalid.message("created_at is not within 10 minutes of the relay's time"),
+            );
         }
         if !unverified
             .tag_values("challenge")

@@ -256,7 +256,9 @@ identifiers are authoritative.
     from `getrandom` natively) and passes it to `Session::new`; the core
     never generates randomness.
   - It requires a `relay` tag matching `service_url` (`RelayUrl::matches`,
-    normalized like strfry) and a valid signature.
+    normalized like strfry), a `created_at` within ±600 s of the
+    relay's time (NIP-42's ~10 minutes, a dedicated symmetric window
+    not the ephemeral-age rule), and a valid signature.
   - AUTH events are never stored or broadcast. A kind 22242 sent as EVENT is
     rejected.
   - Files: `crates/nosfry-core/src/session.rs` (`on_auth`), `url.rs`.

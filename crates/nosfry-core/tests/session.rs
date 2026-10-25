@@ -756,6 +756,24 @@ fn auth_then_same_req_subscribes() {
     );
 }
 
+/// NIP-42 allows ~10 minutes of clock skew either way; the old
+/// ephemeral-age rule (60 s) no longer applies to AUTH.
+#[test]
+fn auth_window_is_symmetric_10_minutes() {
+    let mut s = session_auth("wss://relay.example.com", &[4], true);
+    let t = 1_700_000_000;
+    for (secret, created_at) in [([7u8; 32], t - 300), ([8u8; 32], t + 300)] {
+        let out = feed(&mut s, t, &auth_frame(secret, created_at));
+        let frames = sends(&out);
+        assert_eq!(frames.len(), 1, "{out:?}");
+        assert!(
+            frames[0].starts_with("[\"OK\",\"") && frames[0].ends_with(",true,\"\"]"),
+            "{out:?}"
+        );
+    }
+    assert_eq!(s.authenticated().len(), 2);
+}
+
 #[test]
 fn auth_failures_report_exact_reasons() {
     let mut s = session_auth("wss://relay.example.com", &[4], true);
@@ -781,10 +799,15 @@ fn auth_failures_report_exact_reasons() {
         &feed(&mut s, t, &format!("[\"AUTH\",{event}]")),
         "invalid: AUTH event must be kind 22242",
     );
-    // Stale (22242 is ephemeral: the 60 s window applies).
+    // Stale or future: AUTH has its own symmetric 10-minute window,
+    // not the ephemeral-age rules.
     fail(
-        &feed(&mut s, t, &auth_frame([9; 32], t - 120)),
-        "invalid: ephemeral event created_at is too far in the past",
+        &feed(&mut s, t, &auth_frame([9; 32], t - 601)),
+        "invalid: created_at is not within 10 minutes of the relay's time",
+    );
+    fail(
+        &feed(&mut s, t, &auth_frame([9; 32], t + 601)),
+        "invalid: created_at is not within 10 minutes of the relay's time",
     );
     // Wrong challenge.
     let tags = r#"[["challenge","nope"],["relay","wss://relay.example.com"]]"#;
