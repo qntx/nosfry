@@ -14,8 +14,9 @@
 //!
 //! Requests are served strictly in order from a bounded channel —
 //! plugins may rely on ordering (strfry is serial too). Queue-full
-//! callers wait: backpressure applies to their connection only, never
-//! to other connections' events.
+//! callers wait on their own connection, but all connections share
+//! the one serial queue: a slow plugin delays every publisher by up
+//! to the queued work, not just its own.
 
 use std::future::Future;
 use std::io;
@@ -141,14 +142,14 @@ async fn try_serve(
 ) -> Result<Decision, PolicyError> {
     // Path commands reload whenever the script's mtime changes.
     if path_cmd && running.is_some() {
-        let mtime = std::fs::metadata(plugin)?.modified()?;
+        let mtime = tokio::fs::metadata(plugin).await?.modified()?;
         if running.as_ref().is_some_and(|p| p.mtime != Some(mtime)) {
             *running = None;
         }
     }
     let child = match running {
         Some(child) => child,
-        slot @ None => slot.insert(spawn(plugin, path_cmd)?),
+        slot @ None => slot.insert(spawn(plugin, path_cmd).await?),
     };
 
     timed(timeout, async {
@@ -193,7 +194,7 @@ async fn try_serve(
 /// Spawn `/bin/sh -c <plugin>` with stdio piped and stderr inherited
 /// so plugin logs reach the relay log. `kill_on_drop` cleans the
 /// process up on error paths and shutdown.
-fn spawn(plugin: &str, path_cmd: bool) -> Result<Plugin, PolicyError> {
+async fn spawn(plugin: &str, path_cmd: bool) -> Result<Plugin, PolicyError> {
     let mut child = Command::new("/bin/sh")
         .arg("-c")
         .arg(plugin)
@@ -205,7 +206,7 @@ fn spawn(plugin: &str, path_cmd: bool) -> Result<Plugin, PolicyError> {
     let stdin = child.stdin.take().ok_or(PolicyError::Stdio)?;
     let stdout = child.stdout.take().ok_or(PolicyError::Stdio)?;
     let mtime = if path_cmd {
-        Some(std::fs::metadata(plugin)?.modified()?)
+        Some(tokio::fs::metadata(plugin).await?.modified()?)
     } else {
         None
     };

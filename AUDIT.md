@@ -256,7 +256,9 @@ identifiers are authoritative.
     from `getrandom` natively) and passes it to `Session::new`; the core
     never generates randomness.
   - It requires a `relay` tag matching `service_url` (`RelayUrl::matches`,
-    normalized like strfry) and a valid signature.
+    normalized like strfry), a `created_at` within ±600 s of the
+    relay's time (NIP-42's ~10 minutes, a dedicated symmetric window
+    not the ephemeral-age rule), and a valid signature.
   - AUTH events are never stored or broadcast. A kind 22242 sent as EVENT is
     rejected.
   - Files: `crates/nosfry-core/src/session.rs` (`on_auth`), `url.rs`.
@@ -537,6 +539,14 @@ Ranked by risk:
 - **Kind 41 is regular.** NIP-01 says so. strfry 1.1.3 and nostr-rs-relay
   0.10.0 treat it as replaceable per author, so the same event stream stores
   more kind-41 events on nosfry.
+- **Authenticated pubkey cap.** NIP-42 says every correctly signed AUTH
+  pubkey MUST be treated as authenticated; per connection the relay caps
+  them at `MAX_AUTHED_PUBKEYS` (8) and answers a ninth `restricted:`
+  (bounded per-connection state).
+- **Client-controlled metrics series.** `nostr_events_total{kind}` is
+  counted before moderation and policy, so clients control its series
+  count, bounded at 65,536 kinds. `/metrics` is off by default and must
+  stay behind a proxy.
 - **Per-connection memory.** The baseline is about 11 KiB per idle connection,
   plain or with pooled deflate, against about 1 KiB for strfry without
   compression. The broadcast CPU per delivery is about 2.4× strfry's (round 7,
