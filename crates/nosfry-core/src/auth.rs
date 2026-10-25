@@ -13,6 +13,7 @@ use serde::Deserialize;
 use crate::event::PublicKey;
 use crate::filter::Filter;
 use crate::kind::Kind;
+use crate::moderation::Moderation;
 use crate::packed::PackedRef;
 use crate::url::RelayUrl;
 
@@ -117,34 +118,50 @@ impl AuthRules {
 /// connection had authenticated at REQ time.
 ///
 /// `Default` is an open gate (admin tooling, tests): nothing is
-/// restricted.
+/// restricted and nothing is moderated.
 #[derive(Debug, Clone, Default)]
 pub struct ReadGate {
     /// Configured rules.
     pub(crate) rules: Arc<AuthRules>,
     /// Pubkeys authenticated on the connection at REQ time.
     pub(crate) authed: Arc<[PublicKey]>,
+    /// The NIP-86 moderation snapshot at REQ time; `Default` moderates
+    /// nothing.
+    pub(crate) moderation: Arc<Moderation>,
 }
 
 impl ReadGate {
     /// A gate over `rules` for a connection that authenticated `authed`
     /// pubkeys (REQ-time snapshot).
     #[must_use]
-    pub const fn new(rules: Arc<AuthRules>, authed: Arc<[PublicKey]>) -> Self {
-        Self { rules, authed }
+    pub fn new(rules: Arc<AuthRules>, authed: Arc<[PublicKey]>) -> Self {
+        Self {
+            rules,
+            authed,
+            ..Self::default()
+        }
+    }
+
+    /// Attach the NIP-86 moderation snapshot the subscription was
+    /// opened under (REQ-time snapshot).
+    #[must_use]
+    pub fn with_moderation(mut self, moderation: Arc<Moderation>) -> Self {
+        self.moderation = moderation;
+        self
     }
 
     /// Whether this subscription may see `ev` (strfry
     /// `shouldSendToSubscriber`): unrestricted kinds always pass; a
     /// restricted kind needs an authenticated pubkey, and under
     /// `involved_only` that pubkey must be the author or a packed `p`
-    /// tag value.
+    /// tag value. Either way a moderated event — banned or unlisted
+    /// author, banned id, disallowed kind — is never served.
     #[must_use]
     pub fn allows(&self, ev: PackedRef<'_>) -> bool {
         if !self.rules.is_restricted(ev.kind().0) {
-            return true;
+            return !self.moderation.hides(ev);
         }
-        if self.authed.is_empty() {
+        if self.authed.is_empty() || self.moderation.hides(ev) {
             return false;
         }
         if !self.rules.involved_only {
@@ -180,10 +197,10 @@ mod tests {
     }
 
     fn gate(rules: &AuthRules, authed: &[[u8; 32]]) -> ReadGate {
-        ReadGate {
-            rules: Arc::new(rules.clone()),
-            authed: authed.iter().map(|pk| PublicKey(*pk)).collect(),
-        }
+        ReadGate::new(
+            Arc::new(rules.clone()),
+            authed.iter().map(|pk| PublicKey(*pk)).collect(),
+        )
     }
 
     fn event(kind: u16, pubkey: u8, p_tag: Option<u8>) -> crate::packed::PackedEvent {
@@ -258,5 +275,44 @@ mod tests {
             gate(&open, &[other]).allows(packed),
             "involved_only = false"
         );
+    }
+
+    #[test]
+    fn gate_hides_moderated_events() {
+        use crate::event::EventId;
+        use crate::moderation::Moderation;
+
+        let author = [1u8; 32];
+        let tagged = [2u8; 32];
+        let rules = auth_rules("wss://relay.example", &[4], true);
+        let mut moderation = Moderation::default();
+        moderation.banned_pubkeys.insert(PublicKey(author), None);
+        moderation.disallowed_kinds.insert(7);
+        // The shared `event` helper pins id [9;32]; use a distinct
+        // one so the banned-id rule is what hides this frame.
+        let banned_id = crate::packed::PackedEvent::build(
+            &EventId([7; 32]),
+            &PublicKey([9; 32]),
+            0,
+            Kind(1),
+            0,
+            Vec::<Vec<String>>::new(),
+        );
+        moderation.banned_events.insert(EventId([7; 32]), None);
+        let moderated = gate(&rules, &[tagged]).with_moderation(Arc::new(moderation));
+
+        // An unrestricted note by the banned author is hidden.
+        assert!(!moderated.allows(event(1, 1, None).packed()));
+        // A disallowed kind is hidden.
+        assert!(!moderated.allows(event(7, 9, None).packed()));
+        // A banned id is hidden.
+        assert!(!moderated.allows(banned_id.packed()));
+        // A restricted DM by the banned author stays hidden even for
+        // the involved, authenticated reader.
+        assert!(!moderated.allows(event(4, 1, Some(2)).packed()));
+        // The same frames pass once the moderation snapshot is gone.
+        let open = gate(&rules, &[tagged]);
+        assert!(open.allows(event(1, 1, None).packed()));
+        assert!(open.allows(event(4, 1, Some(2)).packed()));
     }
 }

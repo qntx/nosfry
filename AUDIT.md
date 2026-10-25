@@ -130,7 +130,8 @@ Trust boundaries:
     re-publication.
   - A NIP-62 request to vanish removes the author's history up to its
     `created_at` and blocks older re-publication.
-  - NIP-86 bans remove matching content and block it.
+  - NIP-86 bans block new writes and hide matching stored content at
+    read time; `banevent` deletes the stored event.
 - **Integrity of stored events.** Only events with a valid id and a valid
   BIP-340 signature enter storage through the network path.
 - **Admin authority.** Only configured `[relay.management] admins` may issue
@@ -235,11 +236,13 @@ identifiers are authoritative.
     `crates/nosfry-lmdb/src/scan.rs`; the Workers equivalent is in
     `crates/nosfry-worker/src/relay.rs`.
 - **P4 — Read gate.**
-  - A `ReadGate` snapshot is taken at REQ time from `AuthRules` and the
-    connection's authenticated pubkeys.
+  - A `ReadGate` snapshot is taken at REQ time from `AuthRules`, the
+    connection's authenticated pubkeys, and the current NIP-86
+    `Moderation` snapshot.
   - It filters stored scans, counts, negentropy storage, and live delivery
     alike: restricted kinds are served only to involved, authenticated
-    readers.
+    readers, and events moderated by NIP-86 — banned or unlisted pubkeys
+    and kinds, banned ids — are hidden until the entry is lifted.
   - With `service_url` empty, restricted kinds are stored but never served.
   - A Workers restore rebuilds the gate from the persisted REQ-time count of
     authenticated pubkeys.
