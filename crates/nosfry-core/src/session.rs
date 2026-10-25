@@ -760,10 +760,7 @@ impl Session {
                 generation,
             },
             filters: Arc::from([filter]),
-            gate: ReadGate {
-                rules: Arc::clone(&self.limits.auth),
-                authed: Arc::clone(&self.authed),
-            },
+            gate: ReadGate::new(Arc::clone(&self.limits.auth), Arc::clone(&self.authed)),
             msg,
         });
     }
@@ -872,10 +869,7 @@ impl Session {
                 id: sub_id,
                 generation,
             },
-            ReadGate {
-                rules: Arc::clone(&self.limits.auth),
-                authed: Arc::clone(&self.authed),
-            },
+            ReadGate::new(Arc::clone(&self.limits.auth), Arc::clone(&self.authed)),
         )
     }
 }

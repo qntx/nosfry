@@ -1056,6 +1056,77 @@ fn management_banpubkey_refuses_publish() {
     assert!(oks.last().unwrap().contains(",true,"), "{oks:?}");
 }
 
+/// A banned pubkey's stored events stop answering REQ, and the read
+/// gate a subscription carries survives a hibernation restore — the
+/// ban keeps hiding the author's frames even for the only kind a
+/// banned author may still store (a relay-scoped request to vanish).
+#[test]
+fn moderation_hides_stored_events_and_restored_subs() {
+    let config = admin_config();
+    let exec = Connection::open_in_memory().unwrap();
+    let a = FakeSocket::default();
+    let b = FakeSocket::default();
+    let (att_a, att_b);
+    {
+        let mut r = relay_on(exec, &config, vec![]);
+        att_a = r.accept(a.clone(), 1, None, "challenge-a".into()).unwrap();
+        att_b = r.accept(b.clone(), 2, None, "challenge-b".into()).unwrap();
+        let note = event(&key(1), 1, NOW, &json!([]), "pre-ban note");
+        msg(&mut r, 1, &event_frame(&note));
+        msg(&mut r, 2, &req_frame("s", &json!({"kinds": [1, 62]})));
+        assert_eq!(event_frames(&b.sent(), "s").len(), 1);
+        rpc(
+            &mut r,
+            9,
+            &json!({"method": "banpubkey", "params": [pubkey_of(1)]}),
+        );
+        // The stored note is hidden from new REQs — hidden, not deleted.
+        msg(
+            &mut r,
+            2,
+            &req_frame("t", &json!({"authors": [pubkey_of(1)]})),
+        );
+        assert!(event_frames(&b.sent(), "t").is_empty(), "{:?}", b.sent());
+        let exec = r.into_store().into_exec();
+        // Simulated hibernation: reopen with the same sockets so the
+        // `subs` rows restore under the current moderation snapshot.
+        let mut r = relay_on(exec, &config, vec![(a.clone(), att_a), (b.clone(), att_b)]);
+        // The vanish request is exempt from the write gate and
+        // stored, but the restored subscription's read gate still
+        // hides the banned author's frames.
+        let vanish = event(
+            &key(1),
+            62,
+            NOW + 1,
+            &json!([["relay", "wss://relay.example.com"]]),
+            "",
+        );
+        msg(&mut r, 1, &event_frame(&vanish));
+        assert!(
+            ok_frames(&a.sent()).last().unwrap().contains(",true,"),
+            "{:?}",
+            a.sent()
+        );
+        assert!(
+            event_frames(&b.sent(), "s")
+                .iter()
+                .all(|f| f.contains("pre-ban")),
+            "{:?}",
+            b.sent()
+        );
+        // An unbanned author still reaches the restored subscription.
+        let ok = event(&key(2), 1, NOW + 2, &json!([]), "b note");
+        msg(&mut r, 1, &event_frame(&ok));
+        assert!(
+            event_frames(&b.sent(), "s")
+                .iter()
+                .any(|f| f.contains("b note")),
+            "{:?}",
+            b.sent()
+        );
+    }
+}
+
 /// `banevent` deletes the stored event in the same transaction and
 /// blocks its republish.
 #[test]

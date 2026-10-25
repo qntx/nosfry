@@ -3634,6 +3634,49 @@ async fn nip86_pubkey_event_and_kind_moderation() {
     relay.stop().await;
 }
 
+/// Bans and disallowed kinds hide already-stored events at read
+/// time — REQ and COUNT stop serving them until the entry is lifted.
+#[tokio::test]
+async fn nip86_moderation_hides_stored_events() {
+    let admin = key(9);
+    let relay = Relay::start_with(mgmt_config(&admin)).await;
+    let mut ws = relay.connect().await;
+    let (a, b) = (key(1), key(2));
+    let pk_a = pubkey_hex(&a);
+
+    let a1 = common::event(&a, 1, now(), &json!([]), "a1");
+    let a2 = common::event(&a, 1, now(), &json!([]), "a2");
+    let b1 = common::event(&b, 1, now(), &json!([]), "b1");
+    for ev in [&a1, &a2, &b1] {
+        assert_eq!(publish(&mut ws, ev).await[2], true);
+    }
+    let authors_a = format!("{{\"authors\":[\"{pk_a}\"]}}");
+    assert_eq!(req_ids(&mut ws, "s", &authors_a).await.len(), 2);
+    send_text(&mut ws, &count_wire("c", &authors_a)).await;
+    assert_eq!(recv_count(&mut ws, "c").await["count"], 2);
+
+    rpc(&relay, &admin, "banpubkey", json!([pk_a]), &[]).await;
+    // Hidden, not deleted: a's stored events vanish from REQ and
+    // COUNT; b's note still serves.
+    let hidden = req_ids(&mut ws, "s2", &authors_a).await;
+    assert!(hidden.is_empty(), "{hidden:?}");
+    send_text(&mut ws, &count_wire("c2", &authors_a)).await;
+    assert_eq!(recv_count(&mut ws, "c2").await["count"], 0);
+    assert_eq!(req_ids(&mut ws, "s3", "{\"kinds\":[1]}").await.len(), 1);
+
+    rpc(&relay, &admin, "unbanpubkey", json!([pk_a]), &[]).await;
+    assert_eq!(req_ids(&mut ws, "s4", &authors_a).await.len(), 2);
+
+    // disallowkind hides stored events of the kind; allowkind moves
+    // to allow-list mode and serves kind 1 again.
+    rpc(&relay, &admin, "disallowkind", json!([1]), &[]).await;
+    let hidden = req_ids(&mut ws, "s5", "{\"kinds\":[1]}").await;
+    assert!(hidden.is_empty(), "{hidden:?}");
+    rpc(&relay, &admin, "allowkind", json!([1]), &[]).await;
+    assert_eq!(req_ids(&mut ws, "s6", &authors_a).await.len(), 2);
+    relay.stop().await;
+}
+
 #[tokio::test]
 async fn nip86_ip_block_and_relay_info() {
     let admin = key(9);
