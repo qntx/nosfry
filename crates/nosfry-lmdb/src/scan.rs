@@ -124,9 +124,10 @@ struct PlanState {
     /// `(created_at, id, seq)` matches collected so far (`Ids` plans
     /// only; they are bounded by the id count).
     collected: Vec<Match>,
-    /// Matches sharing the merge's current `created_at`; flushed when a
-    /// lower `created_at` pops or the merge is exhausted.
-    group: Vec<Match>,
+    /// Matches sharing the merge's current `created_at`, bounded to
+    /// `limit - taken` smallest entries; flushed when a lower
+    /// `created_at` pops or the merge is exhausted.
+    group: BinaryHeap<Match>,
     /// Entries counted toward `limit` by flushed groups.
     taken: u64,
     /// The last seq considered; duplicates of one event (several tag
@@ -258,7 +259,7 @@ impl Scan {
                     mode: (!finished).then(|| plan(filter)),
                     state: PlanState {
                         collected: Vec::new(),
-                        group: Vec::new(),
+                        group: BinaryHeap::new(),
                         taken: 0,
                         last_seq: None,
                         limit,
@@ -436,14 +437,10 @@ fn scan_ids(
 ) -> Result<(), StoreError> {
     while let Some(id) = pending.pop_front() {
         step.processed += 1;
-        if let Some(bytes) = step.store.db(Index::Id).get(step.txn, &id)? {
-            try_candidate(
-                step,
-                filter,
-                &mut state.collected,
-                &mut state.last_seq,
-                decode_seq(bytes)?,
-            )?;
+        if let Some(bytes) = step.store.db(Index::Id).get(step.txn, &id)?
+            && let Some(m) = try_candidate(step, filter, &mut state.last_seq, decode_seq(bytes)?)?
+        {
+            state.collected.push(m);
         }
         if budget_elapsed(step) {
             return Ok(());
@@ -502,20 +499,23 @@ fn scan_ranges(
         }
         // A lower created_at completes the current group; keys
         // are popped in non-increasing order.
-        if state.group.first().is_some_and(|m| head.created_at < m.0) {
+        if state.group.peek().is_some_and(|m| head.created_at < m.0) {
             flush_group(step, state)?;
             if state.taken >= state.limit {
                 *finished = true;
                 return Ok(());
             }
         }
-        try_candidate(
-            step,
-            filter,
-            &mut state.group,
-            &mut state.last_seq,
-            head.seq,
-        )?;
+        if let Some(m) = try_candidate(step, filter, &mut state.last_seq, head.seq)? {
+            // `taken` only grows on a flush, so `remaining` is constant
+            // while one group fills; drop the largest id beyond it.
+            let remaining =
+                usize::try_from(state.limit.saturating_sub(state.taken)).unwrap_or(usize::MAX);
+            state.group.push(m);
+            if state.group.len() > remaining {
+                state.group.pop();
+            }
+        }
         if budget_elapsed(step) {
             restore_heads(&mut heap, cursors);
             return Ok(());
@@ -530,9 +530,9 @@ fn scan_ranges(
 /// `limit - taken` entries, each counted toward `taken` whether or not
 /// it is re-sent (limit-then-dedup across filters).
 fn flush_group(step: &mut Step<'_, '_>, state: &mut PlanState) -> Result<(), StoreError> {
-    state.group.sort_by_key(|m| m.1);
-    let remaining = usize::try_from(state.limit.saturating_sub(state.taken)).unwrap_or(usize::MAX);
-    for m in state.group.drain(..).take(remaining) {
+    // The bounded heap holds the group's smallest `limit - taken`
+    // entries; `into_sorted_vec` emits them id-ascending.
+    for m in std::mem::take(&mut state.group).into_sorted_vec() {
         state.taken += 1;
         if step.emitted.insert(m.2) {
             emit_match(step, m)?;
@@ -571,36 +571,36 @@ fn restore_heads(heap: &mut BinaryHeap<Head>, cursors: &mut [Cursor]) {
     }
 }
 
-/// seq/snapshot/dup checks, packed load, `Filter::matches`, collect.
+/// seq/snapshot/dup checks, packed load, `Filter::matches`; answers
+/// the match for the caller to collect into its own container.
 fn try_candidate(
     step: &Step<'_, '_>,
     filter: &Filter,
-    collected: &mut Vec<Match>,
     last_seq: &mut Option<u64>,
     seq: u64,
-) -> Result<(), StoreError> {
+) -> Result<Option<Match>, StoreError> {
     if seq > step.snapshot || *last_seq == Some(seq) {
-        return Ok(());
+        return Ok(None);
     }
     *last_seq = Some(seq);
     let Some(bytes) = step.store.events.get(step.txn, &seq.to_be_bytes())? else {
-        return Ok(()); // deleted between slices
+        return Ok(None); // deleted between slices
     };
     let packed = PackedRef::new(bytes).ok_or(StoreError::Corrupt("bad packed record"))?;
     // NIP-40: an expired event is never served and never consumes a
     // limit, even before the sweep removes it.
     let expiration = packed.expiration();
     if expiration != 0 && expiration <= step.now {
-        return Ok(());
+        return Ok(None);
     }
     // The read gate hides restricted kinds without consuming a limit.
     if !step.gate.allows(packed) {
-        return Ok(());
+        return Ok(None);
     }
     if filter.matches(packed) {
-        collected.push((packed.created_at(), packed.id(), seq));
+        return Ok(Some((packed.created_at(), packed.id(), seq)));
     }
-    Ok(())
+    Ok(None)
 }
 
 /// Sort collected matches newest-first, truncate to the limit, emit the

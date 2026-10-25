@@ -638,6 +638,51 @@ fn vanish_honored_when_superseded_by_foreign_request() {
     assert_eq!(van.outcomes, vec![WriteOutcome::Vanished]);
 }
 
+/// A `created_at` tie group is bounded by the limit: 2,000 events at
+/// one timestamp still answer only the lowest ids, id-ascending, and
+/// an overlapping second filter dedups the same seqs.
+#[test]
+fn created_at_tie_group_is_bounded() {
+    let store = store();
+    let k = key(1);
+    let events: Vec<Arc<Event>> = (0..2_000u64)
+        .map(|i| event(&k, 1, 100, &json!([]), &format!("{i:04}")))
+        .collect();
+    store.write(&events, None).unwrap();
+    let mut ids: Vec<String> = events.iter().map(|e| e.id().to_string()).collect();
+    ids.sort_unstable();
+    let want = ids[..5].to_vec();
+    let serve = |filters: &[Filter]| {
+        let mut got = Vec::new();
+        store
+            .query(
+                filters,
+                &ReadGate::default(),
+                0,
+                u64::MAX,
+                usize::MAX,
+                &mut |hit| {
+                    got.push(
+                        serde_json::from_str::<serde_json::Value>(&hit.json).unwrap()["id"]
+                            .as_str()
+                            .unwrap()
+                            .to_owned(),
+                    );
+                },
+            )
+            .unwrap();
+        got
+    };
+    let single = [filter("{\"limit\":5}")];
+    assert_eq!(serve(&single), want);
+    // The same seqs through an overlapping filter arrive once.
+    let pair = [
+        filter("{\"limit\":5}"),
+        filter("{\"kinds\":[1],\"limit\":5}"),
+    ];
+    assert_eq!(serve(&pair), want);
+}
+
 /// A tag filter with hundreds of values counts an event carrying
 /// several covered values exactly once — the cover check searches
 /// earlier values, it must not double-count.

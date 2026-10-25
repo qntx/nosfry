@@ -425,38 +425,35 @@ fn try_candidate(
     now: u64,
     seq: u64,
     packed: PackedRef<'_>,
-    collected: &mut Vec<Match>,
     last_seq: &mut Option<u64>,
-) {
+) -> Option<Match> {
     if *last_seq == Some(seq) {
-        return;
+        return None;
     }
     *last_seq = Some(seq);
     let expiration = packed.expiration();
     if expiration != 0 && expiration <= now {
-        return;
+        return None;
     }
     if !gate.allows(packed) {
-        return;
+        return None;
     }
-    if filter.matches(packed) {
-        collected.push((packed.created_at(), packed.id(), seq));
-    }
+    filter
+        .matches(packed)
+        .then(|| (packed.created_at(), packed.id(), seq))
 }
 
-/// Emit one complete `created_at` group: id-ascending, at most
-/// `limit - taken` entries, each counted toward `taken` whether or not
-/// it is re-sent (limit-then-dedup across filters).
+/// Emit one complete `created_at` group: the bounded heap holds the
+/// smallest `limit - taken` entries and `into_sorted_vec` emits them
+/// id-ascending, each counted toward `taken` whether or not it is
+/// re-sent (limit-then-dedup across filters).
 fn flush_group(
-    group: &mut Vec<Match>,
-    limit: u64,
+    group: &mut BinaryHeap<Match>,
     taken: &mut u64,
     emitted: &mut HashSet<u64>,
     out: &mut Vec<Match>,
 ) {
-    group.sort_by_key(|m| m.1);
-    let remaining = usize::try_from(limit.saturating_sub(*taken)).unwrap_or(usize::MAX);
-    for m in group.drain(..).take(remaining) {
+    for m in std::mem::take(group).into_sorted_vec() {
         *taken += 1;
         if emitted.insert(m.2) {
             out.push(m);
@@ -500,15 +497,9 @@ fn scan_ids<E: Executor>(
         *seen += 1;
         match (uint(&row, 0), record(&row, 1)) {
             (Ok(seq), Ok(packed)) => {
-                try_candidate(
-                    filter,
-                    gate,
-                    now,
-                    seq,
-                    packed,
-                    &mut collected,
-                    &mut last_seq,
-                );
+                if let Some(m) = try_candidate(filter, gate, now, seq, packed, &mut last_seq) {
+                    collected.push(m);
+                }
             }
             (Err(err), _) | (_, Err(err)) => {
                 failure = Some(err);
@@ -560,7 +551,7 @@ fn scan_ranges<E: Executor>(
             heap.push(Head { row, cursor: i });
         }
     }
-    let mut group: Vec<Match> = Vec::new();
+    let mut group: BinaryHeap<Match> = BinaryHeap::new();
     let mut taken = 0u64;
     let mut last_seq = None;
     let mut out = Vec::new();
@@ -576,26 +567,26 @@ fn scan_ranges<E: Executor>(
         }
         // A lower created_at completes the current group; heads pop
         // in non-increasing order.
-        if group.first().is_some_and(|m| head.row.created_at < m.0) {
-            flush_group(&mut group, limit, &mut taken, emitted, &mut out);
+        if group.peek().is_some_and(|m| head.row.created_at < m.0) {
+            flush_group(&mut group, &mut taken, emitted, &mut out);
             if taken >= limit {
                 return Ok(out);
             }
         }
         let packed =
             PackedRef::new(&head.row.packed).ok_or(StoreError::Corrupt("bad packed record"))?;
-        try_candidate(
-            filter,
-            gate,
-            now,
-            head.row.seq,
-            packed,
-            &mut group,
-            &mut last_seq,
-        );
+        if let Some(m) = try_candidate(filter, gate, now, head.row.seq, packed, &mut last_seq) {
+            // `taken` only grows on a flush, so `remaining` is constant
+            // while one group fills; drop the largest id beyond it.
+            let remaining = usize::try_from(limit.saturating_sub(taken)).unwrap_or(usize::MAX);
+            group.push(m);
+            if group.len() > remaining {
+                group.pop();
+            }
+        }
     }
     if !*budget {
-        flush_group(&mut group, limit, &mut taken, emitted, &mut out);
+        flush_group(&mut group, &mut taken, emitted, &mut out);
     }
     Ok(out)
 }
