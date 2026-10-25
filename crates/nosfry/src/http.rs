@@ -184,9 +184,13 @@ async fn root(State(state): State<AppState>, request: Request) -> Response {
                 .into_response(),
         );
     }
-    Response::builder()
+    let mut builder = Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .header(header::CONTENT_TYPE, "text/html; charset=utf-8");
+    for (name, value) in nosfry_core::site::LANDING_HEADERS {
+        builder = builder.header(name, value);
+    }
+    builder
         .body(Body::from(state.live.borrow().landing.clone()))
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }

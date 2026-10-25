@@ -407,7 +407,12 @@ identifiers are authoritative.
   - The NIP-86 IP block applies to new requests only.
 - **P16 — Safe HTTP surface.**
   - The landing page escapes every interpolated value and emits only
-    `http(s)`/`mailto` URLs as `src`/`href` targets (`site.rs`).
+    `http(s)`/`mailto` URLs as `src`/`href` targets (`site.rs`). It
+    carries `Content-Security-Policy` (`default-src 'none'`, `img-src`
+    http/https, inline `style-src`, `base-uri`/`form-action`/
+    `frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, and
+    `Referrer-Policy: no-referrer` (`site::LANDING_HEADERS`), in both
+    editions; API responses send none of them.
   - NIP-11 and NIP-86 send the shared CORS headers (`site::CORS_HEADERS`);
     `/metrics` sends none and exists only when enabled.
   - Metrics labels are fixed enums or `u16` kinds (`metrics.rs`).
