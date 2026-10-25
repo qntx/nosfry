@@ -10,6 +10,12 @@ The format is based on [Keep a Changelog]; this project follows
 
 ## [Unreleased]
 
+### Added
+
+- The HTML landing page sends `Content-Security-Policy`,
+  `X-Content-Type-Options`, and `Referrer-Policy`
+  (`site::LANDING_HEADERS`), in both editions.
+
 ### Changed
 
 - Only the newest kind-62 request to vanish per author is stored

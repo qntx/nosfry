@@ -26,6 +26,21 @@ pub const CORS_HEADERS: [(&str, &str); 4] = [
     ("access-control-max-age", "86400"),
 ];
 
+/// Defense-in-depth headers for the HTML landing page.
+///
+/// The page uses an inline `<style>`, `<img>` icons/banners, and
+/// plain `<a>` links; no scripts or forms exist to allow. Not applied
+/// to API responses such as the NIP-11 document.
+pub const LANDING_HEADERS: [(&str, &str); 3] = [
+    (
+        "Content-Security-Policy",
+        "default-src 'none'; img-src http: https:; style-src 'unsafe-inline'; \
+         base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    ),
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "no-referrer"),
+];
+
 /// Escape `&`, `<`, `>`, `"`, and `'` — valid for both text nodes
 /// and double-quoted attribute values.
 fn escape(s: &str) -> String {

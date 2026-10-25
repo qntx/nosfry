@@ -714,6 +714,9 @@ impl DurableObject for RelayObject {
                 response
                     .headers()
                     .set("Content-Type", "text/html; charset=utf-8")?;
+                for (name, value) in nosfry_core::site::LANDING_HEADERS {
+                    response.headers().set(name, value)?;
+                }
                 Ok(response)
             }
             Err(err) => Self::down_response(err),

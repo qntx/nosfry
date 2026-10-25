@@ -4181,3 +4181,28 @@ async fn nip62_superseded_vanish_request_is_still_honored() {
     settled_ids(&mut ws, "s", &mut want).await;
     relay.stop().await;
 }
+
+/// The HTML landing page carries defense-in-depth headers; the NIP-11
+/// document response does not.
+#[tokio::test]
+async fn landing_security_headers() {
+    let relay = Relay::start().await;
+    let text = http_get_browser(relay.addr, "/").await;
+    for header in [
+        "content-security-policy: default-src 'none'; img-src http: https:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        "x-content-type-options: nosniff",
+        "referrer-policy: no-referrer",
+    ] {
+        assert!(text.contains(header), "missing {header}\n{text}");
+    }
+    let text = http_get(relay.addr, "/").await;
+    assert!(text.contains("content-type: application/nostr+json"));
+    for name in [
+        "content-security-policy",
+        "x-content-type-options",
+        "referrer-policy",
+    ] {
+        assert!(!text.contains(name), "unexpected {name}\n{text}");
+    }
+    relay.stop().await;
+}
