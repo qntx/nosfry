@@ -124,6 +124,26 @@ pub fn model_store(events: &[Arc<Event>], service_url: Option<&RelayUrl>) -> Mod
         if ev.kind().is_ephemeral() || m.by_id.contains_key(&ev.id()) {
             continue;
         }
+        // NIP-62 bookkeeping: only the author's newest request to
+        // vanish is stored — a newer stored one supersedes the
+        // incoming event, a newer incoming one replaces the rest.
+        if ev.kind().0 == 62 {
+            let stored62: Vec<u64> = m
+                .stored
+                .iter()
+                .filter(|(_, e)| e.pubkey() == ev.pubkey() && e.kind().0 == 62)
+                .map(|(seq, _)| *seq)
+                .collect();
+            if stored62.iter().any(|&seq| {
+                let old = &m.stored[&seq];
+                supersedes((old.created_at(), &old.id()), (ev.created_at(), &ev.id()))
+            }) {
+                continue;
+            }
+            for seq in stored62 {
+                model_delete_seq(&mut m, seq);
+            }
+        }
         if !matches!(ev.kind().0, 5 | 62)
             && m.blocked_ids
                 .get(&(ev.id(), ev.pubkey()))

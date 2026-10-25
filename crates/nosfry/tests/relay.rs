@@ -4044,3 +4044,22 @@ async fn ingest_logs_rejected_ok() {
     }
     relay.stop().await;
 }
+
+/// A superseded kind-62 is answered `duplicate: have a newer version`
+/// and never replaces the stored newest request.
+#[tokio::test]
+async fn nip62_older_vanish_request_is_duplicate() {
+    let relay = Relay::start_with(vanish_config()).await;
+    let mut ws = relay.connect().await;
+    let author = key(60);
+    let tag = json!([["relay", "wss://relay.example.com"]]);
+    let newer = common::event(&author, 62, now(), &tag, "new");
+    let older = common::event(&author, 62, now() - 10, &tag, "old");
+    assert_eq!(publish(&mut ws, &newer).await[2], true);
+    let ok = publish(&mut ws, &older).await;
+    assert_eq!(
+        (ok[2].as_bool(), ok[3].as_str()),
+        (Some(false), Some("duplicate: have a newer version"))
+    );
+    relay.stop().await;
+}

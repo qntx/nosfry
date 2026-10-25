@@ -338,8 +338,8 @@ impl<E: Executor> SqlStore<E> {
     /// duplicate ids are skipped, a NIP-09-blocked event is `Deleted`,
     /// a losing replace is `Superseded`, a winner deletes its
     /// predecessor before the insert, and a stored kind 5 deletes its
-    /// targets. Identical to the LMDB store minus NIP-62 vanish,
-    /// which this slice does not implement.
+    /// targets. Identical to the LMDB store minus the writer-side
+    /// plumbing (`deleted` seqs go to no listener here).
     fn apply(&self, event: &Event) -> Result<WriteOutcome, StoreError> {
         // NIP-62: a stored request to vanish blocks the author's
         // equal-or-older events (never a kind 62 itself) and gift
@@ -358,6 +358,11 @@ impl<E: Executor> SqlStore<E> {
         let id = event.id().0;
         if self.exists("SELECT 1 FROM events WHERE id = ?1", &[Param::Blob(&id)])? {
             return Ok(WriteOutcome::Duplicate);
+        }
+        // NIP-62: relays may keep the signed request to vanish for
+        // bookkeeping — store only the author's newest.
+        if event.kind().0 == 62 && self.vanish_request_superseded(event)? {
+            return Ok(WriteOutcome::Superseded);
         }
         // NIP-09: an id covered by a stored same-author kind 5 stays
         // deleted; a kind 5 itself is never blocked, and a kind 62
@@ -447,6 +452,39 @@ impl<E: Executor> SqlStore<E> {
             self.apply_deletions(event)?;
         }
         Ok(WriteOutcome::Stored { seq })
+    }
+
+    /// Whether a stored kind-62 of `event`'s author supersedes the
+    /// incoming request — `true` means the caller answers `Superseded`.
+    /// Otherwise every stored one is deleted and `event` may insert, so
+    /// a db holding several requests collapses to the newest. Seqs are
+    /// collected before deleting — never mutate while iterating.
+    fn vanish_request_superseded(&self, event: &Event) -> Result<bool, StoreError> {
+        let mut stored_newer = false;
+        let mut seqs = Vec::new();
+        self.query_rows(
+            "SELECT seq, packed FROM events WHERE pubkey = ?1 AND kind = 62",
+            &[Param::Blob(&event.pubkey().0)],
+            |row| {
+                let old = record(row, 1)?;
+                if supersedes(
+                    (old.created_at(), &old.id()),
+                    (event.created_at(), &event.id()),
+                ) {
+                    stored_newer = true;
+                    return Ok(());
+                }
+                seqs.push(uint(row, 0)?);
+                Ok(())
+            },
+        )?;
+        if stored_newer {
+            return Ok(true);
+        }
+        for seq in seqs {
+            self.delete_seq(seq)?;
+        }
+        Ok(false)
     }
 
     /// Apply one event and, when it is a stored (or duplicate)

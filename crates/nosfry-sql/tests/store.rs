@@ -499,3 +499,85 @@ fn int_params_outside_the_js_range_are_rejected() {
     let err = err.unwrap();
     assert!(err.to_string().contains("JavaScript-safe"), "{err}");
 }
+
+/// NIP-62 bookkeeping: only the author's newest request to vanish is
+/// stored; a stored newer one makes the incoming write `Superseded`.
+#[test]
+fn vanish_request_keeps_only_the_newest() {
+    let store = store();
+    let url = nosfry_core::url::RelayUrl::parse("wss://relay.example.com").unwrap();
+    let author = key(1);
+    let tag = json!([["relay", "wss://relay.example.com"]]);
+    let v1 = event(&author, 62, 100, &tag, "v1");
+    let v2 = event(&author, 62, 200, &tag, "v2");
+    let v3 = event(&author, 62, 150, &tag, "v3");
+    assert!(matches!(
+        store
+            .write(&[Arc::clone(&v1)], Some(&url))
+            .unwrap()
+            .outcomes[0],
+        WriteOutcome::Stored { .. }
+    ));
+    assert!(matches!(
+        store
+            .write(&[Arc::clone(&v2)], Some(&url))
+            .unwrap()
+            .outcomes[0],
+        WriteOutcome::Stored { .. }
+    ));
+    let sup = store.write(&[v3], Some(&url)).unwrap().outcomes;
+    assert_eq!(sup[0], WriteOutcome::Superseded);
+    // Only the newest survives; the vanish point stays T=200.
+    let mut hits = Vec::new();
+    store
+        .query(
+            &[filter(&format!(
+                "{{\"kinds\":[62],\"authors\":[\"{}\"]}}",
+                author.x_only_public_key().0
+            ))],
+            &ReadGate::default(),
+            0,
+            u64::MAX,
+            usize::MAX,
+            &mut |hit| hits.push(hit.json.to_string()),
+        )
+        .unwrap();
+    assert_eq!(hits, vec![v2.json()]);
+    let covered = event(&author, 1, 150, &json!([]), "x");
+    let van = store.write(&[covered], Some(&url)).unwrap().outcomes;
+    assert_eq!(van[0], WriteOutcome::Vanished);
+    // Equal created_at: the lower id wins.
+    let (v4, v5) = (
+        event(&author, 62, 300, &tag, "v4"),
+        event(&author, 62, 300, &tag, "v5"),
+    );
+    let (first, second) = if v4.id() < v5.id() {
+        (v4, v5)
+    } else {
+        (v5, v4)
+    };
+    assert!(matches!(
+        store
+            .write(&[Arc::clone(&first)], Some(&url))
+            .unwrap()
+            .outcomes[0],
+        WriteOutcome::Stored { .. }
+    ));
+    let tie = store.write(&[second], Some(&url)).unwrap().outcomes;
+    assert_eq!(tie[0], WriteOutcome::Superseded);
+    let mut kept = Vec::new();
+    store
+        .query(
+            &[filter(&format!(
+                "{{\"kinds\":[62],\"authors\":[\"{}\"]}}",
+                author.x_only_public_key().0
+            ))],
+            &ReadGate::default(),
+            0,
+            u64::MAX,
+            usize::MAX,
+            &mut |hit| kept.push(hit.json.to_string()),
+        )
+        .unwrap();
+    assert_eq!(kept, vec![first.json()]);
+}
