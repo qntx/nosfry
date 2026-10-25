@@ -191,6 +191,9 @@ enum Cmd {
         pid: Option<u32>,
         #[arg(long, default_value = "ingest-open")]
         label: String,
+        /// Corpus lines to skip before the first send.
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
     },
     /// Closed-loop ingest: K outstanding events per connection.
     IngestClosed {
@@ -213,6 +216,9 @@ enum Cmd {
         pid: Option<u32>,
         #[arg(long, default_value = "ingest-closed")]
         label: String,
+        /// Corpus lines to skip before the first send.
+        #[arg(long, default_value_t = 0)]
+        skip: usize,
     },
     /// Stored-query mix driver: closed REQ->EOSE->CLOSE loops.
     Query {
@@ -871,6 +877,7 @@ async fn fanout(
         }
     }
     let latency_ms = latencies.json();
+    let missing = expected_total.saturating_sub(received);
     let result = json!({
         "scenario": "fanout",
         "label": label,
@@ -885,10 +892,16 @@ async fn fanout(
         "ok_rejected": rejected,
         "expected": expected_total,
         "delivered": received,
-        "missing": expected_total.saturating_sub(received),
+        "missing": missing,
         "duplicates": duplicates,
         "unknown": unknown,
         "subscriber_errors": errors,
+        "valid": missing == 0
+            && duplicates == 0
+            && subs_failed == 0
+            && errors == 0
+            && unknown == 0
+            && meter_json["harness_saturated"].as_bool() == Some(false),
         "publish_secs": publish_secs,
         "elapsed_secs": elapsed_secs,
         "latency_p50_ms": latency_ms["p50_ms"],
@@ -1107,6 +1120,7 @@ async fn main() -> Result<(), String> {
             deflate,
             pid,
             label,
+            skip,
         } => {
             let url = url.parse().expect("valid ws url");
             let opts = openloop::IngestOpts {
@@ -1117,6 +1131,7 @@ async fn main() -> Result<(), String> {
                 deflate,
                 pid,
                 label,
+                skip,
             };
             openloop::ingest_open(url, opts, rate)
                 .await
@@ -1132,6 +1147,7 @@ async fn main() -> Result<(), String> {
             deflate,
             pid,
             label,
+            skip,
         } => {
             let url = url.parse().expect("valid ws url");
             let opts = openloop::IngestOpts {
@@ -1142,6 +1158,7 @@ async fn main() -> Result<(), String> {
                 deflate,
                 pid,
                 label,
+                skip,
             };
             openloop::ingest_closed(url, opts, window)
                 .await

@@ -51,6 +51,8 @@ pub(crate) struct IngestOpts {
     pub(crate) pid: Option<u32>,
     /// Run label echoed into the result.
     pub(crate) label: String,
+    /// Corpus lines to skip before the first send (warmup included).
+    pub(crate) skip: usize,
 }
 
 /// One corpus line ready to send: the `["EVENT",..]` wire message
@@ -76,13 +78,20 @@ pub(crate) fn unhex(s: &str) -> Option<[u8; 32]> {
     Some(out)
 }
 
-/// Read at most `limit` corpus lines, wrapping each in `["EVENT",]`
-/// and extracting its `id`.
-pub(crate) fn load_corpus(path: &Path, limit: usize) -> Result<Vec<Ready>, String> {
+/// Read at most `limit` corpus lines after discarding the first
+/// `skip` lines, wrapping each in `["EVENT",]` and extracting its
+/// `id`.
+pub(crate) fn load_corpus(path: &Path, limit: usize, skip: usize) -> Result<Vec<Ready>, String> {
     let file = std::fs::File::open(path).map_err(|e| format!("{path:?}: {e}"))?;
     let mut reader = BufReader::with_capacity(1 << 20, file);
     let mut out = Vec::with_capacity(limit.min(1 << 20));
     let mut line = String::with_capacity(4096);
+    for _ in 0..skip {
+        line.clear();
+        if reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
+            break;
+        }
+    }
     while out.len() < limit {
         line.clear();
         if reader.read_line(&mut line).map_err(|e| e.to_string())? == 0 {
@@ -109,6 +118,8 @@ pub(crate) fn load_corpus(path: &Path, limit: usize) -> Result<Vec<Ready>, Strin
 #[derive(Default)]
 struct ConnOut {
     accepted: usize,
+    /// Rejected `OK`s that are really duplicates or superseded
+    /// replaceable versions: nosfry `duplicate:`, strfry `replaced:`.
     accepted_duplicate: usize,
     rejected_rate_limited: usize,
     rejected_other: usize,
@@ -153,7 +164,7 @@ fn count_ok(out: &mut ConnOut, accepted: bool, reason: &str, latency_us: u64) {
         out.accepted += 1;
     } else {
         match reason.split(':').next().unwrap_or("") {
-            "duplicate" => out.accepted_duplicate += 1,
+            "duplicate" | "replaced" => out.accepted_duplicate += 1,
             "rate-limited" => out.rejected_rate_limited += 1,
             _ => out.rejected_other += 1,
         }
@@ -292,7 +303,7 @@ pub(crate) async fn ingest_open(url: url::Url, opts: IngestOpts, rate: f64) -> R
         return Err("--rate must be positive".to_owned());
     }
     let need = (rate * (opts.warmup + opts.duration) as f64 * 1.05).ceil() as usize + opts.conns;
-    let corpus = Arc::new(load_corpus(&opts.corpus, need)?);
+    let corpus = Arc::new(load_corpus(&opts.corpus, need, opts.skip)?);
     if corpus.len() < (rate * (opts.warmup + opts.duration) as f64) as usize {
         return Err(format!(
             "corpus too short: {} events < R*(W+D) needed",
@@ -394,6 +405,7 @@ pub(crate) async fn ingest_open(url: url::Url, opts: IngestOpts, rate: f64) -> R
         "duration": opts.duration,
         "warmup": opts.warmup,
         "corpus": opts.corpus,
+        "skip": opts.skip,
         "offered_rate": rate,
         "achieved_send_rate": sends as f64 / opts.duration.max(1) as f64,
         "sends_measured": sends,
@@ -538,7 +550,7 @@ pub(crate) async fn ingest_closed(
     window: usize,
 ) -> Result<(), String> {
     let started_utc = crate::unix_now();
-    let corpus = Arc::new(load_corpus(&opts.corpus, CLOSED_PRELOAD_MAX)?);
+    let corpus = Arc::new(load_corpus(&opts.corpus, CLOSED_PRELOAD_MAX, opts.skip)?);
     if corpus.len() < opts.conns * window {
         return Err(format!(
             "corpus too short: {} events < C*K needed",
@@ -599,6 +611,7 @@ pub(crate) async fn ingest_closed(
         "duration": opts.duration,
         "warmup": opts.warmup,
         "corpus": opts.corpus,
+        "skip": opts.skip,
         "accepted_per_sec": totals.accepted as f64 / opts.duration.max(1) as f64,
         "accepted": totals.accepted,
         "accepted_duplicate": totals.accepted_duplicate,
@@ -623,7 +636,6 @@ pub(crate) async fn ingest_closed(
     println!("{result}");
     Ok(())
 }
-// marker-1792749036
 
 #[cfg(test)]
 mod tests {
@@ -644,6 +656,21 @@ mod tests {
         assert_eq!(reason, "duplicate: already have this event");
 
         assert!(classify_ok(r#"["EVENT","s",{}]"#).is_none());
+    }
+
+    #[test]
+    fn count_ok_buckets_duplicates_and_superseded() {
+        let mut out = ConnOut::default();
+        count_ok(&mut out, true, "", 0);
+        count_ok(&mut out, false, "duplicate: have a newer version", 0);
+        // strfry's answer to an older replaceable event.
+        count_ok(&mut out, false, "replaced: have newer event", 0);
+        count_ok(&mut out, false, "rate-limited: slow down", 0);
+        count_ok(&mut out, false, "invalid: bad sig", 0);
+        assert_eq!(out.accepted, 1);
+        assert_eq!(out.accepted_duplicate, 2);
+        assert_eq!(out.rejected_rate_limited, 1);
+        assert_eq!(out.rejected_other, 1);
     }
 
     #[test]

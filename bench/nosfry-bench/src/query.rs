@@ -501,6 +501,9 @@ pub(crate) async fn query(url: url::Url, opts: QueryOpts) -> Result<(), String> 
             .map(|c| json!(c / events_served.max(1) as f64 * 1000.0))
             .unwrap_or(Value::Null),
         "errors": errors,
+        "valid": errors.is_empty()
+            && events_served > 0
+            && meter_json["harness_saturated"].as_bool() == Some(false),
         "server_extensions": extensions,
         "sampler": sampler_json,
         "harness": meter_json,
