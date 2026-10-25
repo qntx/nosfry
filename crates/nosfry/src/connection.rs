@@ -387,7 +387,10 @@ impl<'a> Connection<'a> {
 
     /// Register a subscription with this connection's shard; the shard
     /// assigns the scan snapshot and starts it on the reader itself.
+    /// The NIP-86 snapshot is attached here so REQ, COUNT and NEG all
+    /// hide moderated events.
     async fn subscribe(&self, sub: SubKey, filters: Arc<[Filter]>, gate: ReadGate, kind: ScanKind) {
+        let gate = gate.with_moderation(self.handle.moderation.borrow().clone());
         drop(
             self.shard
                 .send(ShardMsg::Register(Box::new(ScanStart {

@@ -174,9 +174,9 @@ pub struct Relay<E: Executor, S: Socket> {
     /// Parsed `[relay.management] admins` — hex strings are validated
     /// in [`Config::parse`]; `open` parses them once.
     admins: Vec<PublicKey>,
-    /// The NIP-86 snapshot hot paths read; `manage` refreshes it
-    /// after every applied op.
-    moderation: Moderation,
+    /// The NIP-86 snapshot hot paths read; `manage` replaces it with
+    /// a fresh `Arc` after every applied op.
+    moderation: Arc<Moderation>,
     conns: HashMap<u64, Conn<S>>,
     /// `AddressBuckets` shared by every connection of one client
     /// address; the entry dies with the last.
@@ -199,6 +199,17 @@ pub struct Relay<E: Executor, S: Socket> {
     /// the wake's one-line restore log.
     restored_subs: usize,
     dropped_subs: usize,
+}
+
+/// The fields `restore_subs` streams each `subs` row through while
+/// the executor holds `self.store`.
+struct Restore<'a, S: Socket> {
+    conns: &'a mut HashMap<u64, Conn<S>>,
+    limits: &'a Arc<Limits>,
+    moderation: &'a Arc<Moderation>,
+    monitors: &'a mut Monitors<u64>,
+    sub_bytes: &'a mut HashMap<u64, HashMap<SubId, usize>>,
+    subs_bytes: &'a mut usize,
 }
 
 impl<E: Executor, S: Socket> Relay<E, S> {
@@ -225,7 +236,7 @@ impl<E: Executor, S: Socket> Relay<E, S> {
             .exec()
             .execute(SUBS_SCHEMA, &[])
             .map_err(|err| StoreError::Sql(Box::new(err)))?;
-        let moderation = store.moderation()?;
+        let moderation = Arc::new(store.moderation()?);
         let admins = config
             .relay
             .management
@@ -525,7 +536,7 @@ impl<E: Executor, S: Socket> Relay<E, S> {
             Ok(Action::Respond(result)) => managed(200, serde_json::json!({"result": result})),
             Ok(Action::Apply(op)) => match self.store.moderate(op) {
                 Ok(moderation) => {
-                    self.moderation = moderation;
+                    self.moderation = Arc::new(moderation);
                     managed(200, serde_json::json!({"result": true}))
                 }
                 Err(err) => managed(200, serde_json::json!({"error": format!("error: {err}")})),
@@ -613,10 +624,17 @@ impl<E: Executor, S: Socket> Relay<E, S> {
                 self.publish(conn, &event, authed, now_ms, effects);
             }
             Command::Subscribe { sub, filters, gate } => {
-                self.subscribe(conn, sub, filters, gate, now_ms / 1000);
+                self.subscribe(
+                    conn,
+                    sub,
+                    filters,
+                    gate.with_moderation(Arc::clone(&self.moderation)),
+                    now_ms / 1000,
+                );
             }
             Command::Unsubscribe { sub_id } => self.unsubscribe(conn, &sub_id),
             Command::Count { sub, filters, gate } => {
+                let gate = gate.with_moderation(Arc::clone(&self.moderation));
                 self.count(conn, &sub, &filters, &gate, now_ms / 1000);
             }
             Command::NegOpen {
@@ -624,7 +642,10 @@ impl<E: Executor, S: Socket> Relay<E, S> {
                 filters,
                 gate,
                 msg,
-            } => self.neg_open(conn, &sub, &filters, &gate, &msg, now_ms),
+            } => {
+                let gate = gate.with_moderation(Arc::clone(&self.moderation));
+                self.neg_open(conn, &sub, &filters, &gate, &msg, now_ms);
+            }
             Command::NegMsg { sub, msg } => self.neg_msg(conn, &sub, &msg, now_ms),
             Command::NegClose { sub_id } => self.neg_close(conn, &sub_id),
         }
@@ -1145,6 +1166,7 @@ impl<E: Executor, S: Socket> Relay<E, S> {
     fn decode_sub(
         conns: &mut HashMap<u64, Conn<S>>,
         limits: &Arc<Limits>,
+        moderation: &Arc<Moderation>,
         row: &[Value],
     ) -> Option<(SubKey, Arc<[Filter]>, ReadGate)> {
         let uint = |i: usize| match row.get(i) {
@@ -1171,7 +1193,8 @@ impl<E: Executor, S: Socket> Relay<E, S> {
         let gate = ReadGate::new(
             Arc::clone(&limits.auth),
             keys.get(..n).unwrap_or(&[]).into(),
-        );
+        )
+        .with_moderation(Arc::clone(moderation));
         Some((key, parsed.into(), gate))
     }
 
@@ -1182,27 +1205,26 @@ impl<E: Executor, S: Socket> Relay<E, S> {
     /// dropped, never a reason to brick the open.
     fn restore_row(
         row: &[Value],
-        conns: &mut HashMap<u64, Conn<S>>,
-        limits: &Arc<Limits>,
-        monitors: &mut Monitors<u64>,
-        sub_bytes: &mut HashMap<u64, HashMap<SubId, usize>>,
-        subs_bytes: &mut usize,
+        state: &mut Restore<'_, S>,
         budget: usize,
     ) -> Option<(u64, String)> {
         let (conn, sub_id) = sub_pk(row)?;
-        let Some((key, filters, gate)) = Self::decode_sub(conns, limits, row) else {
+        let Some((key, filters, gate)) =
+            Self::decode_sub(state.conns, state.limits, state.moderation, row)
+        else {
             return Some((conn, sub_id));
         };
         let bytes: usize = filters.iter().map(Filter::approx_bytes).sum();
-        if budget != 0 && bytes > budget.saturating_sub(*subs_bytes) {
+        if budget != 0 && bytes > budget.saturating_sub(*state.subs_bytes) {
             return Some((conn, sub_id));
         }
-        *subs_bytes += bytes;
-        sub_bytes
+        *state.subs_bytes += bytes;
+        state
+            .sub_bytes
             .entry(conn)
             .or_default()
             .insert(key.id.clone(), bytes);
-        monitors.insert(conn, key, filters, gate);
+        state.monitors.insert(conn, key, filters, gate);
         None
     }
 
@@ -1255,20 +1277,21 @@ impl<E: Executor, S: Socket> Relay<E, S> {
         {
             // Row-at-a-time decode: the callback borrows the fields it
             // touches so `self.store` can stay borrowed by the query.
-            let conns = &mut self.conns;
-            let limits = &self.limits;
-            let monitors = &mut self.monitors;
-            let sub_bytes = &mut self.sub_bytes;
-            let subs_bytes = &mut self.subs_bytes;
+            let mut state = Restore {
+                conns: &mut self.conns,
+                limits: &self.limits,
+                moderation: &self.moderation,
+                monitors: &mut self.monitors,
+                sub_bytes: &mut self.sub_bytes,
+                subs_bytes: &mut self.subs_bytes,
+            };
             self.store
                 .exec()
                 .query(
                     "SELECT conn, sub_id, filters, authed FROM subs",
                     &[],
                     &mut |row| {
-                        doomed.extend(Self::restore_row(
-                            &row, conns, limits, monitors, sub_bytes, subs_bytes, budget,
-                        ));
+                        doomed.extend(Self::restore_row(&row, &mut state, budget));
                         ControlFlow::Continue(())
                     },
                 )
