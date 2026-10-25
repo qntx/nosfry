@@ -10,6 +10,20 @@ The format is based on [Keep a Changelog]; this project follows
 
 ## [Unreleased]
 
+### Changed
+
+- Only the newest kind-62 request to vanish per author is stored
+  (NIP-62 bookkeeping); an older or equal-dated incoming request is
+  answered `duplicate: have a newer version` instead of accumulating.
+
+### Fixed
+
+- NIP-86 bans and allow/disallow lists now hide matching stored
+  events at read time: a REQ, COUNT, or NEG-OPEN taken after a
+  `banpubkey`, `disallowkind`, or allow-list change no longer serves
+  the moderated events, and the entries hide again after a Workers
+  hibernation restore. `banevent` still deletes the stored event.
+
 ## [0.3.0] - 2026-10-23
 
 ### Added

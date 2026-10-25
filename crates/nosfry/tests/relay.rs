@@ -3634,6 +3634,49 @@ async fn nip86_pubkey_event_and_kind_moderation() {
     relay.stop().await;
 }
 
+/// Bans and disallowed kinds hide already-stored events at read
+/// time — REQ and COUNT stop serving them until the entry is lifted.
+#[tokio::test]
+async fn nip86_moderation_hides_stored_events() {
+    let admin = key(9);
+    let relay = Relay::start_with(mgmt_config(&admin)).await;
+    let mut ws = relay.connect().await;
+    let (a, b) = (key(1), key(2));
+    let pk_a = pubkey_hex(&a);
+
+    let a1 = common::event(&a, 1, now(), &json!([]), "a1");
+    let a2 = common::event(&a, 1, now(), &json!([]), "a2");
+    let b1 = common::event(&b, 1, now(), &json!([]), "b1");
+    for ev in [&a1, &a2, &b1] {
+        assert_eq!(publish(&mut ws, ev).await[2], true);
+    }
+    let authors_a = format!("{{\"authors\":[\"{pk_a}\"]}}");
+    assert_eq!(req_ids(&mut ws, "s", &authors_a).await.len(), 2);
+    send_text(&mut ws, &count_wire("c", &authors_a)).await;
+    assert_eq!(recv_count(&mut ws, "c").await["count"], 2);
+
+    rpc(&relay, &admin, "banpubkey", json!([pk_a]), &[]).await;
+    // Hidden, not deleted: a's stored events vanish from REQ and
+    // COUNT; b's note still serves.
+    let hidden = req_ids(&mut ws, "s2", &authors_a).await;
+    assert!(hidden.is_empty(), "{hidden:?}");
+    send_text(&mut ws, &count_wire("c2", &authors_a)).await;
+    assert_eq!(recv_count(&mut ws, "c2").await["count"], 0);
+    assert_eq!(req_ids(&mut ws, "s3", "{\"kinds\":[1]}").await.len(), 1);
+
+    rpc(&relay, &admin, "unbanpubkey", json!([pk_a]), &[]).await;
+    assert_eq!(req_ids(&mut ws, "s4", &authors_a).await.len(), 2);
+
+    // disallowkind hides stored events of the kind; allowkind moves
+    // to allow-list mode and serves kind 1 again.
+    rpc(&relay, &admin, "disallowkind", json!([1]), &[]).await;
+    let hidden = req_ids(&mut ws, "s5", "{\"kinds\":[1]}").await;
+    assert!(hidden.is_empty(), "{hidden:?}");
+    rpc(&relay, &admin, "allowkind", json!([1]), &[]).await;
+    assert_eq!(req_ids(&mut ws, "s6", &authors_a).await.len(), 2);
+    relay.stop().await;
+}
+
 #[tokio::test]
 async fn nip86_ip_block_and_relay_info() {
     let admin = key(9);
@@ -4079,5 +4122,62 @@ async fn store_write_failure_answers_internal_error_and_keeps_serving() {
 
     // The relay still serves: a REQ completes with EOSE.
     req_ids(&mut ws, "s", "{}").await;
+    relay.stop().await;
+}
+
+/// A superseded kind-62 is answered `duplicate: have a newer version`
+/// and never replaces the stored newest request.
+#[tokio::test]
+async fn nip62_older_vanish_request_is_duplicate() {
+    let relay = Relay::start_with(vanish_config()).await;
+    let mut ws = relay.connect().await;
+    let author = key(60);
+    let tag = json!([["relay", "wss://relay.example.com"]]);
+    let newer = common::event(&author, 62, now(), &tag, "new");
+    let older = common::event(&author, 62, now() - 10, &tag, "old");
+    assert_eq!(publish(&mut ws, &newer).await[2], true);
+    let ok = publish(&mut ws, &older).await;
+    assert_eq!(
+        (ok[2].as_bool(), ok[3].as_str()),
+        (Some(false), Some("duplicate: have a newer version"))
+    );
+    relay.stop().await;
+}
+
+/// A superseded request to vanish is still honored: the newer stored
+/// request naming another relay is bookkeeping only (NIP-62 MUST).
+#[tokio::test]
+async fn nip62_superseded_vanish_request_is_still_honored() {
+    let relay = Relay::start_with(vanish_config()).await;
+    let mut ws = relay.connect().await;
+    let author = key(60);
+    let note = common::event(&author, 1, now(), &json!([]), "note");
+    publish(&mut ws, &note).await;
+    // A newer request naming another relay stores fine (bookkeeping).
+    let foreign = common::event(
+        &author,
+        62,
+        now() + 100,
+        &json!([["relay", "wss://other.example"]]),
+        "",
+    );
+    let foreign_id = foreign.id().to_string();
+    assert_eq!(publish(&mut ws, &foreign).await[2], true);
+    // The older request naming this relay is superseded but honored.
+    let honored = common::event(
+        &author,
+        62,
+        now(),
+        &json!([["relay", "wss://relay.example.com"]]),
+        "",
+    );
+    let ok = publish(&mut ws, &honored).await;
+    assert_eq!(
+        (ok[2].as_bool(), ok[3].as_str()),
+        (Some(false), Some("duplicate: have a newer version"))
+    );
+    // The covered note is swept despite the superseded write.
+    let mut want = vec![foreign_id];
+    settled_ids(&mut ws, "s", &mut want).await;
     relay.stop().await;
 }

@@ -78,6 +78,19 @@ fn vanish_blocked(m: &Model, ev: &Event) -> bool {
         })
 }
 
+/// Raise `ev`'s author vanish point to `ev.created_at` when the
+/// request honors this relay, then apply the sweep — also reached
+/// for a superseded kind 62 whose storage is skipped.
+fn raise_vanish(m: &mut Model, ev: &Event, service_url: Option<&RelayUrl>) {
+    if !ev.requests_vanish(service_url) {
+        return;
+    }
+    let point = m.vanish.entry(ev.pubkey()).or_insert(0);
+    *point = (*point).max(ev.created_at());
+    let t = *point;
+    apply_vanish(m, &ev.pubkey(), t);
+}
+
 /// Apply the NIP-62 sweep `t` demands for `author` right away —
 /// where the real stores queue it for `vanish_step`, the model
 /// deletes at once. Kind 62 survives; only kind-1059 wraps (not
@@ -124,6 +137,29 @@ pub fn model_store(events: &[Arc<Event>], service_url: Option<&RelayUrl>) -> Mod
         if ev.kind().is_ephemeral() || m.by_id.contains_key(&ev.id()) {
             continue;
         }
+        // NIP-62 bookkeeping: only the author's newest request to
+        // vanish is stored — a newer stored one supersedes the
+        // incoming event, a newer incoming one replaces the rest.
+        if ev.kind().0 == 62 {
+            let stored62: Vec<u64> = m
+                .stored
+                .iter()
+                .filter(|(_, e)| e.pubkey() == ev.pubkey() && e.kind().0 == 62)
+                .map(|(seq, _)| *seq)
+                .collect();
+            if stored62.iter().any(|&seq| {
+                let old = &m.stored[&seq];
+                supersedes((old.created_at(), &old.id()), (ev.created_at(), &ev.id()))
+            }) {
+                // Superseded but still honored — bookkeeping storage
+                // is independent of the vanish request itself.
+                raise_vanish(&mut m, ev, service_url);
+                continue;
+            }
+            for seq in stored62 {
+                model_delete_seq(&mut m, seq);
+            }
+        }
         if !matches!(ev.kind().0, 5 | 62)
             && m.blocked_ids
                 .get(&(ev.id(), ev.pubkey()))
@@ -162,12 +198,7 @@ pub fn model_store(events: &[Arc<Event>], service_url: Option<&RelayUrl>) -> Mod
         }
         // NIP-62: raise the vanish point and apply the sweep now —
         // same-batch events stored earlier are covered too.
-        if ev.requests_vanish(service_url) {
-            let point = m.vanish.entry(ev.pubkey()).or_insert(0);
-            *point = (*point).max(ev.created_at());
-            let t = *point;
-            apply_vanish(&mut m, &ev.pubkey(), t);
-        }
+        raise_vanish(&mut m, ev, service_url);
     }
     m
 }
