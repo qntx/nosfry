@@ -9,13 +9,11 @@
 #
 # Multi-arch: the base images are multi-arch out of the box.
 
-# RUST_VERSION must track rust-toolchain.toml: that file is excluded via
+# The Rust tag must track rust-toolchain.toml: that file is excluded via
 # .dockerignore, so the image's Rust base pins the compiler instead of
-# rustup downloading a toolchain during the build.
-ARG RUST_VERSION=1.99
-
-# The digest pins the multi-arch index; RUST_VERSION still selects the tag.
-FROM rust:${RUST_VERSION}-slim-bookworm@sha256:86234e857a413004348b471d11a4ebe1aa92d2eae2b6b143cac68fd1ac3c48be AS chef
+# rustup downloading a toolchain during the build. Dependabot's docker
+# ecosystem bumps the tag and digest together.
+FROM rust:1.99-slim-bookworm@sha256:86234e857a413004348b471d11a4ebe1aa92d2eae2b6b143cac68fd1ac3c48be AS chef
 ENV CARGO_TERM_COLOR=always
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \

@@ -4058,14 +4058,11 @@ async fn store_write_failure_answers_internal_error_and_keeps_serving() {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut failed = false;
     let mut i = 0u64;
+    // ~8 KiB events fill the 1 MiB map in a hundred-odd round trips;
+    // ids stay distinct through the content alone.
+    let pad = "x".repeat(8192);
     while Instant::now() < deadline {
-        let ev = common::event(
-            &author,
-            1,
-            now() + i, // distinct ids without invalid duplicates
-            &json!([]),
-            &format!("fill {i}"),
-        );
+        let ev = common::event(&author, 1, now(), &json!([]), &format!("fill {i} {pad}"));
         let ok = publish(&mut ws, &ev).await;
         if ok[2] == false {
             assert_eq!(
