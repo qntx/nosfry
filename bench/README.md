@@ -272,7 +272,32 @@ SciPy and statsmodels.
 The durability comparison adds a measurement-only build, never shipped,
 that opens LMDB with `EnvFlags::NO_META_SYNC` in `Store::open`. This
 reproduces the `MDB_NOMETASYNC` strfry effectively runs with: rasgueadb
-passes `MDB_CREATE`, the same bit 0x40000, to `mdb_env_open`.
+passes `MDB_CREATE`, the same bit 0x40000, to `mdb_env_open`
+(hoytech/strfry#282).
+
+### Round 7b
+
+`r7/params-7b.toml` re-measures the cells touched by #79, #80 and #81:
+
+- W1 closed-c32 and open-4500/5400;
+- W2 c8 and c64, plain and deflate;
+- W3 broadcast-5000-plain;
+- W4 10,000 connections;
+- W5.
+
+Every workload value it sets is the Round 7 one. `nosfry-030` runs in the same session as the control, and `[analysis]` points the primaries at the new build.
+
+W2 and W5 reuse the Round 7 imports instead of importing again; the volume has no room for a second pair of 18.7 GB databases. The shared directories are symlinks, and each needs a `prep-imports.jsonl` record so `require_main_dbs` accepts it:
+
+```bash
+mkdir -p /bench/work/r7b/db /bench/results/r7b
+ln -s /bench/work/r7/db/nosfry-030 /bench/work/r7b/db/nosfry-030
+ln -s /bench/work/r7/db/nosfry-030 /bench/work/r7b/db/nosfry-7b
+ln -s /bench/work/r7/db/strfry     /bench/work/r7b/db/strfry
+# one {"corpus": "d2", "label": ..., "stored": <current count>} line per label
+```
+
+nosfry-030 and nosfry-7b share one database (same on-disk format). They must never both ingest into it, so only nosfry-7b and strfry run W5. Round 7 already ingested slices 0, 200k, and 400k, so `w5.skip_base = 600_000` starts the new ones after them. Both databases hold 5 to 7 % more events than during the Round 7 W2 runs, and the report says so.
 
 ## Output
 

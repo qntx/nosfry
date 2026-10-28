@@ -303,6 +303,7 @@ def units_w5(prm, pilot):
     corpus = str(d2 / "holdout.jsonl")
     port = str(prm.p("net", "port"))
     rate = w["ingest_rate"]
+    skip_base = int(w.get("skip_base", 0))
     if rate * isecs >= W5_SKIP_STRIDE:
         sys.exit(f"run.py: w5 sends {rate * isecs:g} events per rep, "
                  f"W5_SKIP_STRIDE {W5_SKIP_STRIDE} too small")
@@ -326,7 +327,7 @@ def units_w5(prm, pilot):
     # a few percent per rep — that is documented, not hidden).
     for rep in range(1, reps + 1):
         for label in rotated(w["relays"], rep):
-            skip = (rep - 1) * W5_SKIP_STRIDE
+            skip = skip_base + (rep - 1) * W5_SKIP_STRIDE
             out.append(unit("w5", "ingest", label, rep, "w5ingest", [
                 harness_cmd(prm, "ingest-open", "--url", ws_url(port),
                             "--corpus", corpus, "--conns", str(w["open_conns"]),

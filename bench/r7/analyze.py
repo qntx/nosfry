@@ -422,6 +422,12 @@ def main():
     ap.add_argument("--json", type=Path, help="write the machine-readable summary here")
     args = ap.parse_args()
     prm = tomllib.loads(args.params.read_text())
+    # The optional [analysis] table overrides the analyzed relay and
+    # the table column order; defaults keep today's constants.
+    global NOSFRY, LINEUP
+    analysis = prm.get("analysis", {})
+    NOSFRY = analysis.get("nosfry", NOSFRY)
+    LINEUP = tuple(analysis.get("lineup", LINEUP))
     units = load_units(args.results)
     data = collect(args.results, units)
     summary: dict = {}
