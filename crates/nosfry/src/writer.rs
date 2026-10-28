@@ -488,7 +488,7 @@ mod tests {
     fn charge_releases_budget() {
         let budget = Arc::new(Semaphore::new(64 << 20));
         let n = 4_096;
-        budget.clone().try_acquire_many_owned(n).unwrap().forget();
+        budget.try_acquire_many(n).unwrap().forget();
         let charge = QueueCharge {
             budget: Arc::clone(&budget),
             bytes: n,
