@@ -211,9 +211,10 @@ pub(crate) fn ip_blocked(state: &AppState, headers: &header::HeaderMap, peer: Ip
 /// start would be per-connection memory spent on nothing.
 const READ_BUFFER_CAPACITY: usize = 2 * 1024;
 
-/// Initial capacity of each socket's write buffer, for the same
-/// corpus reason as [`READ_BUFFER_CAPACITY`].
-const WRITE_BUFFER_CAPACITY: usize = 2 * 1024;
+/// Initial capacity of each socket's write buffer. Zero: yawc reserves
+/// room per frame and `release_write_buffer` gives the memory back
+/// after each flush, so an idle connection holds no write buffer.
+const WRITE_BUFFER_CAPACITY: usize = 0;
 
 /// Outbound payloads shorter than this are sent uncompressed: every
 /// reply type (OK, EOSE, CLOSED, NOTICE, AUTH, COUNT) is shorter and
