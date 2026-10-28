@@ -840,7 +840,7 @@ mod tests {
         store.write(&events, None).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let (shard_tx, _shard_rx) = mpsc::channel(8);
-        let (out, mut out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
         tx.send(ReaderMsg::Start(Box::new(ScanStart {
             conn: 1,
@@ -969,13 +969,13 @@ mod tests {
         let (shard_tx, mut shard_rx) = mpsc::channel(8);
         // Conn 1 is already more than one chunk behind; conn 2 has
         // nothing pending. Both share the same total.
-        let (behind_out, mut behind_rx) = Outbound::new(usize::MAX, Arc::clone(&total));
+        let (behind_out, behind_rx) = Outbound::new(usize::MAX, Arc::clone(&total));
         behind_out.push(Out::Frame {
             sub: None,
             verb: RelayVerb::Notice,
             text: "x".repeat(CHUNK_BYTES + 1),
         });
-        let (caught_out, mut caught_rx) = Outbound::new(1 << 30, Arc::clone(&total));
+        let (caught_out, caught_rx) = Outbound::new(1 << 30, Arc::clone(&total));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
         for (conn, out) in [(1, behind_out), (2, caught_out)] {
             tx.send(ReaderMsg::Start(Box::new(ScanStart {
@@ -1018,11 +1018,10 @@ mod tests {
         let mut eose = false;
         while !eose && Instant::now() < deadline {
             match caught_rx.try_recv() {
-                Ok(Out::Frame { ref text, .. }) if text.contains("EOSE") => eose = true,
-                Ok(_) | Err(mpsc::error::TryRecvError::Empty) => {
+                Some(Out::Frame { ref text, .. }) if text.contains("EOSE") => eose = true,
+                Some(_) | None => {
                     std::thread::sleep(Duration::from_millis(1));
                 }
-                Err(mpsc::error::TryRecvError::Disconnected) => break,
             }
         }
         assert!(eose, "caught-up scan did not complete under total budget");
@@ -1033,7 +1032,7 @@ mod tests {
         );
         std::thread::sleep(Duration::from_millis(100));
         let mut behind_frames = 0usize;
-        while let Ok(out) = behind_rx.try_recv() {
+        while let Some(out) = behind_rx.try_recv() {
             behind_frames += usize::from(matches!(out, Out::Frames { .. }));
             assert!(
                 matches!(out, Out::Frame { ref text, .. } if !text.contains("EOSE")),
@@ -1058,7 +1057,7 @@ mod tests {
         // Every finishing scan `blocking_send`s an `Activate`; keep the
         // inbox bigger than the flood.
         let (shard_tx, mut shard_rx) = mpsc::channel(8_192);
-        let (long_out, mut long_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let (long_out, long_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let all: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
         let one: Arc<[Filter]> =
             Arc::from(vec![Filter::parse("{\"kinds\":[1],\"limit\":1}").unwrap()]);
@@ -1121,7 +1120,7 @@ mod tests {
         let (mut activates, mut eose) = (0usize, false);
         let deadline = Instant::now() + Duration::from_secs(30);
         while !eose && activates < 500 && Instant::now() < deadline {
-            while let Ok(out) = long_rx.try_recv() {
+            while let Some(out) = long_rx.try_recv() {
                 eose |= matches!(out, Out::Frame { ref text, .. } if text.contains("EOSE"));
             }
             match shard_rx.try_recv() {
@@ -1149,7 +1148,7 @@ mod tests {
             max_sync_memory_bytes: 0,
             sync_memory: Arc::new(AtomicUsize::new(80)),
         };
-        let (out, mut out_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
+        let (out, out_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
         let mut negs = Negs::with_hasher(foldhash::fast::RandomState::default());
         let session = |id: &str, generation: u64, last_active: Instant, conn_out: &Outbound| {
             let mut storage = NegentropyStorageVector::new();
@@ -1271,7 +1270,7 @@ mod tests {
         store.write(&events, None).unwrap();
         // One charge step (1024 records x 40 B) already exceeds it.
         let (tx, counter, reader) = spawn_reader(store, Duration::from_secs(10), 1_000);
-        let (out, mut out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
         tx.send(neg_start(1, "n", filters, out)).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -1318,7 +1317,7 @@ mod tests {
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..100).map(event).collect();
         store.write(&events, None).unwrap();
         let (tx, counter, reader) = spawn_reader(store, Duration::from_secs(10), 0);
-        let (outbound, mut out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let (outbound, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
         tx.send(neg_start(1, "n", filters, outbound)).unwrap();
         // The session seals once the NEG-MSG reply arrives; its

@@ -439,36 +439,39 @@ impl<'a> Connection<'a> {
         &mut self,
         ws: &mut HttpWebSocket,
         first: Out,
-        out_rx: &mut OutboundRx,
+        out_rx: &OutboundRx,
     ) -> Result<(), WriteError> {
         let mut batch = std::mem::take(&mut self.batch);
         let mut bytes = first.accounted_bytes();
         batch.push_back(first);
-        while batch.len() < BATCH_MAX_FRAMES && bytes < BATCH_MAX_BYTES {
-            match out_rx.try_recv() {
-                Ok(msg) => {
-                    bytes += msg.accounted_bytes();
-                    batch.push_back(msg);
-                }
-                Err(_) => break,
-            }
-        }
+        out_rx.take_into(&mut batch, BATCH_MAX_FRAMES, BATCH_MAX_BYTES, &mut bytes);
         // Account every drained frame up front: a timeout mid-batch
         // drops the rest, and their bytes must not stay charged to the
         // outbound queue.
         for msg in &batch {
             out_rx.written(msg.accounted_bytes());
         }
-        // One deadline covers every surviving feed plus the flush.
-        let result = tokio::time::timeout(self.ping_interval, async {
-            while let Some(msg) = batch.pop_front() {
-                self.feed(ws, msg).await.map_err(WriteError::Socket)?;
+        // The deadline counts from the first time a write blocks: poll
+        // the feed-all-then-flush future once, and only a batch the
+        // socket could not take synchronously races the timeout (a
+        // stalled socket still fails as before).
+        let ping_interval = self.ping_interval;
+        let result = {
+            let mut fut = std::pin::pin!(async {
+                while let Some(msg) = batch.pop_front() {
+                    self.feed(ws, msg).await.map_err(WriteError::Socket)?;
+                }
+                ws.flush().await.map_err(WriteError::Socket)
+            });
+            match std::future::poll_fn(|cx| std::task::Poll::Ready(fut.as_mut().poll(cx))).await {
+                std::task::Poll::Ready(result) => result,
+                std::task::Poll::Pending => tokio::time::timeout(ping_interval, fut)
+                    .await
+                    .map_err(|_| WriteError::Stalled)?,
             }
-            ws.flush().await.map_err(WriteError::Socket)
-        })
-        .await;
+        };
         self.batch = batch;
-        result.map_err(|_| WriteError::Stalled)?
+        result
     }
 
     /// One drained batch: feed + flush; `false` means the connection
@@ -477,7 +480,7 @@ impl<'a> Connection<'a> {
         &mut self,
         ws: &mut HttpWebSocket,
         first: Option<Out>,
-        out_rx: &mut OutboundRx,
+        out_rx: &OutboundRx,
     ) -> bool {
         let Some(first) = first else {
             return false;
@@ -674,7 +677,7 @@ pub(crate) async fn run(
     peer: IpAddr,
     address: Arc<AddressBuckets>,
 ) {
-    let Some((mut conn, mut out_rx)) = Connection::new(handle, peer, address) else {
+    let Some((mut conn, out_rx)) = Connection::new(handle, peer, address) else {
         return;
     };
     let mut ping = tokio::time::interval(conn.ping_interval);
@@ -689,7 +692,7 @@ pub(crate) async fn run(
                 }
             }
             first = out_rx.recv() => {
-                if !conn.write_out(ws, first, &mut out_rx).await {
+                if !conn.write_out(ws, first, &out_rx).await {
                     break;
                 }
             }
