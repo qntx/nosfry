@@ -26,6 +26,9 @@ The format is based on [Keep a Changelog]; this project follows
   channel buffer block: the per-connection outbound queue is a
   mutex-guarded deque with a waker (~2.4 KiB less per connection),
   and the socket write buffer no longer pre-reserves 2 KiB.
+- The per-connection write deadline now starts only when a write
+  actually blocks, instead of arming and cancelling a timer around
+  every outbound batch (~7% of write-path CPU in timer work).
 - Only the newest kind-62 request to vanish per author is stored
   (NIP-62 bookkeeping); an older or equal-dated incoming request is
   answered `duplicate: have a newer version` instead of accumulating.
