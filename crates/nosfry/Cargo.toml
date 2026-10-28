@@ -37,6 +37,7 @@ yawc.workspace               = true
 
 [dev-dependencies]
 base64.workspace     = true
+nosfry-core          = { workspace = true, features = ["test-util"] }
 flate2.workspace     = true
 negentropy.workspace = true
 proptest.workspace   = true

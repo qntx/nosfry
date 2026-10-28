@@ -29,6 +29,10 @@ The format is based on [Keep a Changelog]; this project follows
 - The per-connection write deadline now starts only when a write
   actually blocks, instead of arming and cancelling a timer around
   every outbound batch (~7% of write-path CPU in timer work).
+- Writer transactions now batch up to 16,384 events (bounded also by
+  index entries) instead of 1,024, and the writer inbox is bounded by
+  64 MiB of event bytes, lifting sustained ingest throughput toward
+  the store's synced-write bandwidth.
 - Only the newest kind-62 request to vanish per author is stored
   (NIP-62 bookkeeping); an older or equal-dated incoming request is
   answered `duplicate: have a newer version` instead of accumulating.

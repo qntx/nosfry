@@ -51,8 +51,15 @@ use crate::channels::{ReaderMsg, ShardMsg, WriterMsg};
 use crate::config::Config;
 
 /// How many publish requests the writer queues before backpressuring
-/// connections.
-const WRITER_QUEUE: usize = 4096;
+/// connections; the byte budget in [`WRITER_QUEUE_BYTES`] binds first
+/// under sustained load.
+const WRITER_QUEUE: usize = 65_536;
+
+/// Bytes of verified event JSON queued on the writer across all
+/// connections; a publish acquires its `json().len()` before it may
+/// occupy an inbox slot, so a flood of large events backpressures at
+/// 64 MiB instead of an event count.
+const WRITER_QUEUE_BYTES: usize = 64 << 20;
 
 /// How many messages one monitor shard queues.
 const SHARD_QUEUE: usize = 4096;
@@ -412,6 +419,7 @@ impl Server {
         }
         let conn = connection::Handle {
             writer: writer_tx.clone(),
+            writer_budget: Arc::new(tokio::sync::Semaphore::new(WRITER_QUEUE_BYTES)),
             shards: Arc::from(shard_txs.as_slice()),
             live: live_rx.clone(),
             moderation: mod_rx.clone(),
