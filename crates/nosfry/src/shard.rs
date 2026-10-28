@@ -388,7 +388,7 @@ mod tests {
             Arc::new(AtomicUsize::new(0)),
             0,
         );
-        let (out, mut out_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
+        let (out, out_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
 
         shard.handle(ShardMsg::Register(Box::new(ScanStart {
             conn: 1,
@@ -422,7 +422,7 @@ mod tests {
         let batch: crate::channels::Batch = vec![(1u64, event(1, "hi"))];
         shard.handle(ShardMsg::Batch(Arc::new(batch)));
         assert!(
-            out_rx.try_recv().is_err(),
+            out_rx.try_recv().is_none(),
             "stale Activate delivered frames to gen2"
         );
 
@@ -432,7 +432,7 @@ mod tests {
             sub: sub_key("s", 2),
         });
         match out_rx.try_recv() {
-            Ok(Out::Event { sub, .. }) => assert_eq!(sub.generation, 2),
+            Some(Out::Event { sub, .. }) => assert_eq!(sub.generation, 2),
             other => panic!("expected buffered Event, got {other:?}"),
         }
     }
@@ -549,11 +549,11 @@ mod tests {
     fn over_budget_register_is_refused() {
         let bytes = Filter::parse("{\"kinds\":[1]}").unwrap().approx_bytes();
         let (mut shard, charge, reader_rx, _dir) = shard_with_budget(bytes - 1);
-        let (out, mut out_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
+        let (out, out_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
 
         shard.handle(req(1, "s", 1, &out));
         match out_rx.try_recv() {
-            Ok(Out::Closed { sub, reason }) => {
+            Some(Out::Closed { sub, reason }) => {
                 assert_eq!(sub.id.as_str(), "s");
                 assert_eq!(reason, "blocked: subscription capacity exhausted");
             }
@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn overflow_close_releases_the_charge() {
         let (mut shard, charge, _reader_rx, _dir) = shard_with_budget(0);
-        let (out, mut out_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
+        let (out, out_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
 
         shard.handle(req(1, "s", 1, &out));
         let state = shard.conns.get_mut(&1).unwrap();
@@ -618,7 +618,7 @@ mod tests {
         let batch: crate::channels::Batch = vec![(1u64, event(1, "hi"))];
         shard.handle(ShardMsg::Batch(Arc::new(batch)));
         match out_rx.try_recv() {
-            Ok(Out::Closed { reason, .. }) => {
+            Some(Out::Closed { reason, .. }) => {
                 assert_eq!(reason, "error: subscription fell behind");
             }
             other => panic!("expected overflow Closed, got {other:?}"),

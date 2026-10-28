@@ -1,9 +1,12 @@
 //! Message types exchanged between the connection tasks and the
 //! writer, monitor shard, and reader threads.
 
-use std::sync::Arc;
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::task::Poll;
 
+use futures_util::task::AtomicWaker;
 use nosfry_core::auth::ReadGate;
 use nosfry_core::event::Event;
 use nosfry_core::filter::Filter;
@@ -11,7 +14,7 @@ use nosfry_core::message::{RelayVerb, SubId};
 use nosfry_core::moderation::ModOp;
 use nosfry_core::session::SubKey;
 use nosfry_lmdb::StoreError;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 /// Connection identifier; also the shard/reader routing key.
 pub(crate) type ConnId = u64;
@@ -266,16 +269,55 @@ impl Out {
     }
 }
 
+/// The [`Outbound`] queue's mutex payload: the frames themselves and
+/// whether the receiver is gone. The lock orders `closed` inside
+/// `push` against `Drop for OutboundRx` so a racing push either lands
+/// before close and is drained, or sees `closed` and releases itself.
+#[derive(Debug)]
+struct Queue {
+    /// Queued frames, oldest first.
+    items: VecDeque<Out>,
+    /// `OutboundRx` dropped; pushes release their charge immediately.
+    closed: bool,
+}
+
+impl Queue {
+    /// A burst grew this deque far past idle size; once drained, swap
+    /// in a fresh one so the buffer goes back to the allocator.
+    fn shrink(&mut self) {
+        if self.items.is_empty() && self.items.capacity() > 64 {
+            self.items = VecDeque::new();
+        }
+    }
+}
+
+/// Shared state of one connection's [`Outbound`]/[`OutboundRx`] pair.
+/// A few words per idle connection where the previous channel kept an
+/// eager buffer block plus channel state (~2.4 KiB).
+#[derive(Debug)]
+struct Shared {
+    /// Queued frames and the closed flag.
+    queue: Mutex<Queue>,
+    /// A `recv` parked on an empty queue; `push` and the last sender
+    /// `Drop` wake it.
+    waker: AtomicWaker,
+    /// Bytes queued on this connection.
+    pending: AtomicUsize,
+    /// Byte budget exceeded; the connection should close.
+    dead: AtomicBool,
+    /// Live `Outbound` clones; `recv` returns `None` once it hits 0.
+    senders: AtomicUsize,
+    /// The byte budget.
+    max_pending: usize,
+}
+
 /// Per-connection outbound queue: unbounded frames plus a bounded byte
 /// budget tracked atomically. `total` is the process-wide sum of every
 /// connection's `pending`, shared by all `Outbound`s.
 #[derive(Debug)]
 pub(crate) struct Outbound {
-    tx: mpsc::UnboundedSender<Out>,
-    pending: Arc<AtomicUsize>,
+    shared: Arc<Shared>,
     total: Arc<AtomicUsize>,
-    dead: Arc<AtomicBool>,
-    max_pending: usize,
 }
 
 impl Outbound {
@@ -283,17 +325,23 @@ impl Outbound {
     /// process-wide pending-byte counter shared by every connection.
     #[must_use]
     pub(crate) fn new(max_pending: usize, total: Arc<AtomicUsize>) -> (Self, OutboundRx) {
-        let (tx, rx) = mpsc::unbounded_channel();
-        let pending = Arc::new(AtomicUsize::new(0));
+        let shared = Arc::new(Shared {
+            queue: Mutex::new(Queue {
+                items: VecDeque::new(),
+                closed: false,
+            }),
+            waker: AtomicWaker::new(),
+            pending: AtomicUsize::new(0),
+            dead: AtomicBool::new(false),
+            senders: AtomicUsize::new(1),
+            max_pending,
+        });
         (
             Self {
-                tx,
-                pending: Arc::clone(&pending),
+                shared: Arc::clone(&shared),
                 total: Arc::clone(&total),
-                dead: Arc::new(AtomicBool::new(false)),
-                max_pending,
             },
-            OutboundRx { rx, pending, total },
+            OutboundRx { shared, total },
         )
     }
 
@@ -301,24 +349,43 @@ impl Outbound {
     /// the connection dead and drops the frame instead.
     pub(crate) fn push(&self, out: Out) {
         let len = out.accounted_bytes();
-        let prev = self.pending.fetch_add(len, Ordering::Relaxed);
+        let prev = self.shared.pending.fetch_add(len, Ordering::Relaxed);
         self.total.fetch_add(len, Ordering::Relaxed);
-        if prev + len > self.max_pending {
-            self.pending.fetch_sub(len, Ordering::Relaxed);
-            self.total.fetch_sub(len, Ordering::Relaxed);
-            self.dead.store(true, Ordering::Relaxed);
+        if prev + len > self.shared.max_pending {
+            self.release(len);
+            self.shared.dead.store(true, Ordering::Relaxed);
             return;
         }
-        if self.tx.send(out).is_err() {
-            self.pending.fetch_sub(len, Ordering::Relaxed);
-            self.total.fetch_sub(len, Ordering::Relaxed);
+        {
+            let mut queue = self.lock_queue();
+            if queue.closed {
+                self.release(len);
+                return;
+            }
+            queue.items.push_back(out);
         }
+        self.shared.waker.wake();
+    }
+
+    /// Undo a charge that never made it into the queue.
+    fn release(&self, len: usize) {
+        self.shared.pending.fetch_sub(len, Ordering::Relaxed);
+        self.total.fetch_sub(len, Ordering::Relaxed);
+    }
+
+    /// Lock the shared queue, ignoring poisoning (a panicked holder
+    /// left at most a dropped frame behind).
+    fn lock_queue(&self) -> std::sync::MutexGuard<'_, Queue> {
+        self.shared
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Pending outbound bytes.
     #[must_use]
     pub(crate) fn pending(&self) -> usize {
-        self.pending.load(Ordering::Relaxed)
+        self.shared.pending.load(Ordering::Relaxed)
     }
 
     /// Process-wide pending outbound bytes (every connection's
@@ -331,18 +398,26 @@ impl Outbound {
     /// The byte budget was exceeded; the connection should close.
     #[must_use]
     pub(crate) fn is_dead(&self) -> bool {
-        self.dead.load(Ordering::Relaxed)
+        self.shared.dead.load(Ordering::Relaxed)
     }
 }
 
 impl Clone for Outbound {
     fn clone(&self) -> Self {
+        self.shared.senders.fetch_add(1, Ordering::Relaxed);
         Self {
-            tx: self.tx.clone(),
-            pending: Arc::clone(&self.pending),
+            shared: Arc::clone(&self.shared),
             total: Arc::clone(&self.total),
-            dead: Arc::clone(&self.dead),
-            max_pending: self.max_pending,
+        }
+    }
+}
+
+impl Drop for Outbound {
+    fn drop(&mut self) {
+        // The last sender wakes a parked `recv` so it observes the
+        // empty `senders` count and returns `None`.
+        if self.shared.senders.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.shared.waker.wake();
         }
     }
 }
@@ -353,47 +428,111 @@ impl Clone for Outbound {
 /// connection never leaves its `pending` charged into `total`.
 #[derive(Debug)]
 pub(crate) struct OutboundRx {
-    rx: mpsc::UnboundedReceiver<Out>,
-    pending: Arc<AtomicUsize>,
+    shared: Arc<Shared>,
     total: Arc<AtomicUsize>,
 }
 
 impl OutboundRx {
     /// Next queued frame; `None` once every `Outbound` sender dropped.
-    pub(crate) async fn recv(&mut self) -> Option<Out> {
-        self.rx.recv().await
+    /// Cancel-safe: the waker registers before the queue is checked,
+    /// so a push between check and park still wakes the next poll.
+    pub(crate) async fn recv(&self) -> Option<Out> {
+        std::future::poll_fn(|cx| {
+            self.shared.waker.register(cx.waker());
+            if let Some(out) = self.pop() {
+                return Poll::Ready(Some(out));
+            }
+            if self.shared.senders.load(Ordering::Acquire) == 0 {
+                // A push before the AcqRel decrement is visible here;
+                // without this re-pop a last-sender push-then-drop
+                // would lose the frame.
+                return Poll::Ready(self.pop());
+            }
+            Poll::Pending
+        })
+        .await
     }
 
-    /// Next queued frame without waiting.
-    pub(crate) fn try_recv(&mut self) -> Result<Out, mpsc::error::TryRecvError> {
-        self.rx.try_recv()
+    /// Next queued frame without waiting (tests only; production
+    /// drains through [`OutboundRx::take_into`]).
+    #[cfg(test)]
+    pub(crate) fn try_recv(&self) -> Option<Out> {
+        self.pop()
+    }
+
+    /// Move frames into `batch` under one lock: at most until `batch`
+    /// holds `max_frames` or accumulates `max_bytes` accounted bytes.
+    /// `bytes` sums the moved charge, released later via `written`.
+    pub(crate) fn take_into(
+        &self,
+        batch: &mut VecDeque<Out>,
+        max_frames: usize,
+        max_bytes: usize,
+        bytes: &mut usize,
+    ) {
+        let mut queue = self.lock_queue();
+        while batch.len() < max_frames && *bytes < max_bytes {
+            let Some(out) = queue.items.pop_front() else {
+                break;
+            };
+            *bytes += out.accounted_bytes();
+            batch.push_back(out);
+        }
+        queue.shrink();
+    }
+
+    /// Pop one frame and shrink a burst-grown empty queue.
+    fn pop(&self) -> Option<Out> {
+        let mut queue = self.lock_queue();
+        let out = queue.items.pop_front();
+        queue.shrink();
+        out
+    }
+
+    /// Lock the shared queue; see [`Outbound::lock_queue`].
+    fn lock_queue(&self) -> std::sync::MutexGuard<'_, Queue> {
+        self.shared
+            .queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Next queued frame, blocking the calling thread (tests only).
     #[cfg(test)]
-    pub(crate) fn blocking_recv(&mut self) -> Option<Out> {
-        self.rx.blocking_recv()
+    pub(crate) fn blocking_recv(&self) -> Option<Out> {
+        loop {
+            if let out @ Some(_) = self.try_recv() {
+                return out;
+            }
+            if self.shared.senders.load(Ordering::Acquire) == 0 {
+                // Same re-pop as `recv`: a push before the decrement
+                // is still in the queue.
+                return self.try_recv();
+            }
+            std::thread::yield_now();
+        }
     }
 
     /// Release the bytes of frames removed from the queue (written to
     /// the socket or dropped mid-batch).
     pub(crate) fn written(&self, bytes: usize) {
-        self.pending.fetch_sub(bytes, Ordering::Relaxed);
+        self.shared.pending.fetch_sub(bytes, Ordering::Relaxed);
         self.total.fetch_sub(bytes, Ordering::Relaxed);
     }
 }
 
 impl Drop for OutboundRx {
     fn drop(&mut self) {
-        // Close first: a `push` racing the drop fails its `send` and
-        // subtracts the bytes it charged. Every frame that made it in
-        // before the close is still queued, so draining afterwards
-        // releases exactly the remaining charge — nothing can arrive
-        // after `close` that the drain would miss.
-        self.rx.close();
-        while let Ok(out) = self.rx.try_recv() {
+        // Close first: a `push` racing the drop sees `closed` under
+        // the same lock and releases the bytes it charged. Every
+        // frame that made it in before the close is still queued, so
+        // draining afterwards releases exactly the remaining charge —
+        // nothing can arrive after `closed` that the drain would miss.
+        let mut queue = self.lock_queue();
+        queue.closed = true;
+        for out in queue.items.drain(..) {
             let len = out.accounted_bytes();
-            self.pending.fetch_sub(len, Ordering::Relaxed);
+            self.shared.pending.fetch_sub(len, Ordering::Relaxed);
             self.total.fetch_sub(len, Ordering::Relaxed);
         }
     }
@@ -438,11 +577,98 @@ mod tests {
         assert_eq!(out.total(), 0);
     }
 
+    /// `recv` returns `None` once the last `Outbound` clone drops.
+    #[test]
+    fn recv_ends_after_last_sender_drops() {
+        use std::task::{Context, Waker};
+
+        let (out, rx) = Outbound::new(usize::MAX, Arc::new(AtomicUsize::new(0)));
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        let mut fut = Box::pin(rx.recv());
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        drop(out);
+        assert!(matches!(fut.as_mut().poll(&mut cx), Poll::Ready(None)));
+    }
+
+    /// A push that lands before the last sender drops is delivered
+    /// even when `recv` first polls after the drop: the senders-0
+    /// path re-pops instead of losing the frame.
+    #[test]
+    fn recv_delivers_final_push_after_sender_drops() {
+        use std::task::{Context, Waker};
+
+        let (out, rx) = Outbound::new(usize::MAX, Arc::new(AtomicUsize::new(0)));
+        out.push(frame(9));
+        drop(out);
+        let waker = Waker::noop();
+        let mut cx = Context::from_waker(waker);
+        let mut fut = Box::pin(rx.recv());
+        assert!(matches!(fut.as_mut().poll(&mut cx), Poll::Ready(Some(_))));
+        let mut next = Box::pin(rx.recv());
+        assert!(matches!(next.as_mut().poll(&mut cx), Poll::Ready(None)));
+    }
+
+    /// A `push` from another thread wakes a `recv` parked on an empty
+    /// queue.
+    #[test]
+    fn push_wakes_pending_recv() {
+        use std::task::{Context, Wake, Waker};
+
+        struct Flag(AtomicBool);
+        impl Wake for Flag {
+            fn wake(self: Arc<Self>) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let (out, rx) = Outbound::new(usize::MAX, Arc::new(AtomicUsize::new(0)));
+        let flag = Arc::new(Flag(AtomicBool::new(false)));
+        let waker = Waker::from(Arc::clone(&flag));
+        let mut cx = Context::from_waker(&waker);
+        let mut fut = Box::pin(rx.recv());
+        assert!(fut.as_mut().poll(&mut cx).is_pending());
+        std::thread::spawn(move || out.push(frame(7)))
+            .join()
+            .unwrap();
+        assert!(flag.0.load(Ordering::SeqCst), "push did not wake recv");
+        assert!(matches!(fut.as_mut().poll(&mut cx), Poll::Ready(Some(_))));
+    }
+
+    /// Draining a large burst returns the grown `VecDeque` capacity.
+    #[test]
+    fn drained_burst_releases_queue_capacity() {
+        let (out, rx) = Outbound::new(usize::MAX, Arc::new(AtomicUsize::new(0)));
+        for _ in 0..1_000 {
+            out.push(frame(100));
+        }
+        while rx.try_recv().is_some() {}
+        let cap = rx.lock_queue().items.capacity();
+        assert_eq!(cap, 0, "burst capacity not returned: {cap}");
+    }
+
+    /// `take_into` stops at the frame count and at the byte cap.
+    #[test]
+    fn take_into_respects_both_limits() {
+        let (out, rx) = Outbound::new(usize::MAX, Arc::new(AtomicUsize::new(0)));
+        for _ in 0..10 {
+            out.push(frame(100));
+        }
+        let mut batch = VecDeque::new();
+        let mut bytes = 0usize;
+        rx.take_into(&mut batch, 3, usize::MAX, &mut bytes);
+        assert_eq!(batch.len(), 3, "frame limit");
+        rx.take_into(&mut batch, usize::MAX, bytes, &mut bytes);
+        assert_eq!(batch.len(), 3, "byte limit");
+        rx.take_into(&mut batch, usize::MAX, usize::MAX, &mut bytes);
+        assert_eq!(batch.len(), 10, "remainder");
+    }
+
     /// `written` releases exactly the received frame's bytes.
     #[test]
     fn written_releases_only_the_received_frame() {
         let total = Arc::new(AtomicUsize::new(0));
-        let (out, mut rx) = Outbound::new(usize::MAX, Arc::clone(&total));
+        let (out, rx) = Outbound::new(usize::MAX, Arc::clone(&total));
         out.push(frame(100));
         out.push(frame(200));
         let first = rx.blocking_recv().unwrap();
