@@ -11,7 +11,7 @@ use nosfry_core::message::{RelayVerb, SubId};
 use nosfry_core::moderation::ModOp;
 use nosfry_core::session::SubKey;
 use nosfry_lmdb::StoreError;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 
 /// Connection identifier; also the shard/reader routing key.
 pub(crate) type ConnId = u64;
@@ -51,6 +51,34 @@ pub(crate) enum WriterMsg {
     },
 }
 
+/// A publish's share of the writer queue byte budget, returned to the
+/// semaphore when the request is dropped (after its `OK`).
+#[derive(Debug)]
+pub(crate) struct QueueCharge {
+    /// The semaphore the bytes are returned to on drop.
+    pub(crate) budget: Arc<Semaphore>,
+    /// Permits held.
+    pub(crate) bytes: u32,
+}
+
+impl QueueCharge {
+    /// Wait for `bytes` of `budget`; `None` once the semaphore is closed.
+    pub(crate) async fn acquire(budget: &Arc<Semaphore>, bytes: u32) -> Option<Self> {
+        budget.acquire_many(bytes).await.ok()?.forget();
+        Some(Self {
+            budget: Arc::clone(budget),
+            bytes,
+        })
+    }
+}
+
+impl Drop for QueueCharge {
+    fn drop(&mut self) {
+        self.budget
+            .add_permits(usize::try_from(self.bytes).unwrap_or(usize::MAX));
+    }
+}
+
 /// A publish request queued for the single writer thread.
 #[derive(Debug)]
 pub(crate) struct WriteRequest {
@@ -62,6 +90,10 @@ pub(crate) struct WriteRequest {
     /// is pushed only after the batch is queued on every shard, so a
     /// `REQ` issued after `OK` always snapshots the event.
     pub(crate) out: Outbound,
+    /// The event's share of `WRITER_QUEUE_BYTES`; dropping the request
+    /// returns it to the budget, so a publish holds writer-queue bytes
+    /// only while it waits in the inbox or rides a commit.
+    pub(crate) _charge: QueueCharge,
 }
 
 /// Inbox item for a monitor shard thread.

@@ -15,8 +15,15 @@ use crate::Live;
 use crate::channels::{Batch, Out, Outbound, ShardMsg, WriteRequest, WriterMsg};
 use crate::metrics::{Metrics, StoreOp};
 
-/// Maximum events applied per write transaction.
-const BATCH_CAP: usize = 1024;
+/// Maximum events applied per write transaction; the drain keeps
+/// pulling the inbox until this or [`MAX_BATCH_INDEX_ENTRIES`] binds.
+/// Backlogged events already paid their parse and signature work —
+/// syncing them in one commit amortizes the fsync that dominates W1.
+const MAX_BATCH_EVENTS: usize = 16_384;
+
+/// Maximum index entries applied per write transaction; bounds the
+/// commit for tag-heavy events when the event count alone would not.
+const MAX_BATCH_INDEX_ENTRIES: usize = 262_144;
 
 /// Events deleted per expiry sweep; a sweep hitting the cap keeps
 /// looping (without blocking on the inbox) until it clears.
@@ -41,8 +48,9 @@ fn now() -> u64 {
 }
 
 /// Writer thread main loop: block for the first message, drain up to
-/// [`BATCH_CAP`] publishes (an `Expire` seen while draining is
-/// deferred, not batched), commit once, queue the batch — minus the
+/// [`MAX_BATCH_EVENTS`] publishes or [`MAX_BATCH_INDEX_ENTRIES`] index
+/// entries (an `Expire` seen while draining is deferred, not batched),
+/// commit once, queue the batch — minus the
 /// seqs the same transaction deleted — on every shard, then push each
 /// request's `OK` straight onto its connection's outbound queue.
 /// After the batch, one expiry sweep runs when pending; a sweep that
@@ -86,16 +94,13 @@ pub(crate) fn run(
         };
         match first {
             Some(WriterMsg::Publish(req)) => {
-                let mut reqs = vec![req];
-                let mut moderations = Vec::new();
-                while reqs.len() < BATCH_CAP {
-                    match rx.try_recv() {
-                        Ok(WriterMsg::Publish(next)) => reqs.push(next),
-                        Ok(WriterMsg::Expire) => expire_pending = true,
-                        Ok(WriterMsg::Moderate { op, reply }) => moderations.push((op, reply)),
-                        Err(_) => break,
-                    }
-                }
+                let (reqs, moderations) = drain(
+                    req,
+                    &mut rx,
+                    &mut expire_pending,
+                    MAX_BATCH_EVENTS,
+                    MAX_BATCH_INDEX_ENTRIES,
+                );
                 vanish_pending |= write_batch(store, reqs, shards, metrics, live);
                 for (op, reply) in moderations {
                     moderate(store, op, reply, metrics, mod_tx);
@@ -320,5 +325,176 @@ pub(crate) fn expire_timer(tx: &mpsc::Sender<WriterMsg>, stop_rx: &std::sync::mp
             Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
             Err(mpsc::error::TrySendError::Closed(_)) => break,
         }
+    }
+}
+
+/// Drain the inbox into one publish batch: `first` (always taken, even
+/// alone over budget) plus queued publishes while the batch holds
+/// fewer than `max_events` events and fewer than `max_entries` index
+/// entries. An `Expire` seen while
+/// draining is deferred (flagged for the next sweep), `Moderate`
+/// requests collect for after the commit, and an empty or closed
+/// inbox ends the drain.
+fn drain(
+    first: WriteRequest,
+    rx: &mut mpsc::Receiver<WriterMsg>,
+    expire_pending: &mut bool,
+    max_events: usize,
+    max_entries: usize,
+) -> (Vec<WriteRequest>, Vec<QueuedModeration>) {
+    let mut entries = nosfry_lmdb::index_entry_count(&first.event);
+    let mut reqs = vec![first];
+    let mut moderations = Vec::new();
+    while reqs.len() < max_events && entries < max_entries {
+        match rx.try_recv() {
+            Ok(WriterMsg::Publish(next)) => {
+                entries += nosfry_lmdb::index_entry_count(&next.event);
+                reqs.push(next);
+            }
+            Ok(WriterMsg::Expire) => *expire_pending = true,
+            Ok(WriterMsg::Moderate { op, reply }) => moderations.push((op, reply)),
+            Err(_) => break,
+        }
+    }
+    (reqs, moderations)
+}
+
+/// One queued management op deferred past the publish commit.
+type QueuedModeration = (
+    nosfry_core::moderation::ModOp,
+    tokio::sync::oneshot::Sender<Result<(), nosfry_lmdb::StoreError>>,
+);
+
+#[cfg(test)]
+#[allow(
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "unit tests may panic on failure"
+)]
+mod tests {
+    use std::sync::atomic::AtomicUsize;
+
+    use serde_json::json;
+    use tokio::sync::Semaphore;
+
+    use super::*;
+    use crate::channels::QueueCharge;
+
+    fn request(keypair: &secp256k1::Keypair, tags: &serde_json::Value) -> WriteRequest {
+        let event = nosfry_core::sign::event(keypair, 1, 1_700_000_000, tags, "x");
+        let (out, _rx) = Outbound::new(usize::MAX, Arc::new(AtomicUsize::new(0)));
+        let charge = QueueCharge {
+            budget: Arc::new(Semaphore::new(0)),
+            bytes: 0,
+        };
+        WriteRequest {
+            event,
+            out,
+            _charge: charge,
+        }
+    }
+
+    /// Three thousand queued publishes drain into one batch — well
+    /// past the old 1024-event cap — under the real constants.
+    #[test]
+    fn drain_takes_past_old_cap() {
+        let kp = nosfry_core::sign::key(1);
+        let (tx, mut rx) = mpsc::channel(4_096);
+        for _ in 0..3_000 {
+            tx.try_send(WriterMsg::Publish(request(&kp, &json!([]))))
+                .unwrap();
+        }
+        let mut expire = false;
+        let (reqs, mods) = drain(
+            request(&kp, &json!([])),
+            &mut rx,
+            &mut expire,
+            MAX_BATCH_EVENTS,
+            MAX_BATCH_INDEX_ENTRIES,
+        );
+        assert_eq!(reqs.len(), 3_001);
+        assert!(mods.is_empty());
+    }
+
+    /// The index-entry budget ends the drain; the remainder stays
+    /// queued for the next transaction.
+    #[test]
+    fn drain_stops_at_entry_budget() {
+        let kp = nosfry_core::sign::key(1);
+        let tags = json!(
+            (0..10)
+                .map(|i| vec!["t".into(), format!("v{i}")])
+                .collect::<Vec<_>>()
+        );
+        let (tx, mut rx) = mpsc::channel(64);
+        for _ in 0..30 {
+            tx.try_send(WriterMsg::Publish(request(&kp, &tags)))
+                .unwrap();
+        }
+        let mut expire = false;
+        // ~15 index entries per event -> about three fit under 50.
+        let (reqs, _) = drain(request(&kp, &tags), &mut rx, &mut expire, usize::MAX, 50);
+        assert!(reqs.len() < 10, "{}", reqs.len());
+        assert_eq!(reqs.len() + rx.len(), 31);
+    }
+
+    /// The event-count budget ends the drain.
+    #[test]
+    fn drain_stops_at_event_budget() {
+        let kp = nosfry_core::sign::key(1);
+        let (tx, mut rx) = mpsc::channel(64);
+        for _ in 0..30 {
+            tx.try_send(WriterMsg::Publish(request(&kp, &json!([]))))
+                .unwrap();
+        }
+        let mut expire = false;
+        let (reqs, _) = drain(
+            request(&kp, &json!([])),
+            &mut rx,
+            &mut expire,
+            5,
+            usize::MAX,
+        );
+        assert_eq!(reqs.len(), 5);
+        assert_eq!(rx.len(), 26);
+    }
+
+    /// A single event over the entry budget still forms a batch of
+    /// one: the first request is always taken, so the writer makes
+    /// progress even when one event alone exceeds the budget.
+    #[test]
+    fn drain_single_over_budget() {
+        let kp = nosfry_core::sign::key(1);
+        let tags = json!(
+            (0..10)
+                .map(|i| vec!["t".into(), format!("v{i}")])
+                .collect::<Vec<_>>()
+        );
+        let (tx, mut rx) = mpsc::channel(64);
+        for _ in 0..5 {
+            tx.try_send(WriterMsg::Publish(request(&kp, &json!([]))))
+                .unwrap();
+        }
+        let mut expire = false;
+        let (reqs, _) = drain(request(&kp, &tags), &mut rx, &mut expire, usize::MAX, 10);
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(rx.len(), 5);
+    }
+
+    /// Dropping a charge returns its bytes to the queue budget.
+    #[test]
+    fn charge_releases_budget() {
+        let budget = Arc::new(Semaphore::new(64 << 20));
+        let n = 4_096;
+        budget.clone().try_acquire_many_owned(n).unwrap().forget();
+        let charge = QueueCharge {
+            budget: Arc::clone(&budget),
+            bytes: n,
+        };
+        assert_eq!(budget.available_permits(), (64 << 20) - n as usize);
+        drop(charge);
+        assert_eq!(budget.available_permits(), 64 << 20);
     }
 }

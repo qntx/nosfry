@@ -181,6 +181,20 @@ pub(crate) enum Index {
     ReplaceDeletion,
 }
 
+/// How many index entries the store produces for `event`.
+///
+/// Five base trees plus one per indexed packed tag, one for `address`,
+/// one for `expiration`, and one per deletion target. The writer
+/// charges batches by this so a few tag-heavy events cannot overrun a
+/// commit.
+#[must_use]
+pub fn index_entry_count(event: &Event) -> usize {
+    5 + event.packed().tags().count()
+        + usize::from(event.address().is_some())
+        + usize::from(event.expiration().unwrap_or(0) != 0)
+        + event.deletion_targets().len()
+}
+
 /// Derive every index entry of an event from its packed record, the
 /// metadata that cannot be recovered from it (`address`, `expiration`,
 /// `deletion_targets`), and its sequence number. Insert and delete
@@ -1451,6 +1465,55 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    /// `index_entry_count` must equal the number of entries
+    /// `index_entries` produces, over events exercising every index.
+    #[test]
+    fn index_entry_count_matches_index_entries() {
+        let signer = key(1);
+        let kind5 = event(
+            &signer,
+            5,
+            100,
+            &json!([
+                ["e", "aa".repeat(32)],
+                ["a", format!("1:{}:d", "bb".repeat(32))]
+            ]),
+            "del",
+        );
+        let addressable = event(
+            &signer,
+            30000,
+            100,
+            &json!([
+                ["d", "art"],
+                ["expiration", "999999999"],
+                ["t", "x"],
+                ["e", "cc".repeat(32)]
+            ]),
+            "addr",
+        );
+        let plain = event(&signer, 1, 100, &json!([]), "plain");
+        let tag_heavy = event(
+            &signer,
+            1,
+            100,
+            &json!([["t", "a"], ["t", "b"], ["t", "c"], ["e", "dd".repeat(32)]]),
+            "tags",
+        );
+        for e in [&kind5, &addressable, &plain, &tag_heavy] {
+            let mut entries = Vec::new();
+            index_entries(
+                e.packed(),
+                e.address(),
+                e.expiration().unwrap_or(0),
+                e.deletion_targets(),
+                7,
+                &mut entries,
+            );
+            assert_eq!(index_entry_count(e), entries.len(), "kind {}", e.kind().0);
+        }
+    }
 
     /// Deleting a superseded event must leave no index entry pointing at
     /// its sequence number.

@@ -23,8 +23,8 @@ use yawc::close::CloseCode;
 use yawc::{Frame, HttpWebSocket, OpCode};
 
 use crate::channels::{
-    ConnId, Out, Outbound, OutboundRx, ScanKind, ScanStart, ShardMsg, WriteRequest, WriterMsg,
-    route,
+    ConnId, Out, Outbound, OutboundRx, QueueCharge, ScanKind, ScanStart, ShardMsg, WriteRequest,
+    WriterMsg, route,
 };
 use crate::metrics::Metrics;
 
@@ -33,6 +33,9 @@ use crate::metrics::Metrics;
 pub(crate) struct Handle {
     /// Writer inbox.
     pub(crate) writer: mpsc::Sender<WriterMsg>,
+    /// Shared writer-inbox byte budget (`WRITER_QUEUE_BYTES`); a
+    /// publish acquires its event's JSON size before queueing.
+    pub(crate) writer_budget: Arc<tokio::sync::Semaphore>,
     /// Monitor shard inboxes, indexed by `conn % shards.len()`; the
     /// shard owns the reader routing for scans.
     pub(crate) shards: Arc<[mpsc::Sender<ShardMsg>]>,
@@ -354,12 +357,23 @@ impl<'a> Connection<'a> {
             return;
         }
         let id = event.id();
+        let bytes = u32::try_from(event.json().len().clamp(1, crate::WRITER_QUEUE_BYTES))
+            .unwrap_or(u32::MAX);
+        let Some(charge) = QueueCharge::acquire(&self.handle.writer_budget, bytes).await else {
+            self.out.push(Out::Frame {
+                sub: None,
+                verb: RelayVerb::Ok,
+                text: ok_frame(&id, false, "error: internal error"),
+            });
+            return;
+        };
         if self
             .handle
             .writer
             .send(WriterMsg::Publish(WriteRequest {
                 event,
                 out: self.out.clone(),
+                _charge: charge,
             }))
             .await
             .is_err()
