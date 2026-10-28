@@ -445,16 +445,27 @@ impl<'a> Connection<'a> {
         for msg in &batch {
             out_rx.written(msg.accounted_bytes());
         }
-        // One deadline covers every surviving feed plus the flush.
-        let result = tokio::time::timeout(self.ping_interval, async {
-            while let Some(msg) = batch.pop_front() {
-                self.feed(ws, msg).await.map_err(WriteError::Socket)?;
+        // The deadline counts from the first time a write blocks: poll
+        // the feed-all-then-flush future once, and only a batch the
+        // socket could not take synchronously races the timeout (a
+        // stalled socket still fails as before).
+        let ping_interval = self.ping_interval;
+        let result = {
+            let mut fut = std::pin::pin!(async {
+                while let Some(msg) = batch.pop_front() {
+                    self.feed(ws, msg).await.map_err(WriteError::Socket)?;
+                }
+                ws.flush().await.map_err(WriteError::Socket)
+            });
+            match std::future::poll_fn(|cx| std::task::Poll::Ready(fut.as_mut().poll(cx))).await {
+                std::task::Poll::Ready(result) => result,
+                std::task::Poll::Pending => tokio::time::timeout(ping_interval, fut)
+                    .await
+                    .map_err(|_| WriteError::Stalled)?,
             }
-            ws.flush().await.map_err(WriteError::Socket)
-        })
-        .await;
+        };
         self.batch = batch;
-        result.map_err(|_| WriteError::Stalled)?
+        result
     }
 
     /// One drained batch: feed + flush; `false` means the connection

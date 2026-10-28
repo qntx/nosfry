@@ -22,6 +22,9 @@ The format is based on [Keep a Changelog]; this project follows
   window (`created_at` within ~10 minutes of the relay's time, per
   NIP-42) instead of the ephemeral-age rules that limited them to
   60 s in the past.
+- The per-connection write deadline now starts only when a write
+  actually blocks, instead of arming and cancelling a timer around
+  every outbound batch (~7% of write-path CPU in timer work).
 - Only the newest kind-62 request to vanish per author is stored
   (NIP-62 bookkeeping); an older or equal-dated incoming request is
   answered `duplicate: have a newer version` instead of accumulating.
