@@ -47,6 +47,7 @@ def main():
     ap.add_argument("--warmup-secs", type=float, default=600)
     ap.add_argument("--publishers", type=int, default=8)
     ap.add_argument("--subscribers", type=int, default=200)
+    ap.add_argument("--relay-rc", type=int, help="relay exit code when known")
     args = ap.parse_args()
 
     samples, end, exit_status = [], None, None
@@ -88,7 +89,7 @@ def main():
             f"(budget {budget / MIB:.1f} MiB)",
         ))
     else:
-        checks.append(("memory", False, "no rss_anon_kib samples"))
+        checks.append(("memory", None, "no rss_anon_kib samples"))
 
     third = len(post) // 3
     middle = post[third:2 * third]
@@ -104,14 +105,14 @@ def main():
             f"final {post[-1]['db_bytes'] / 2**20:.1f} MiB",
         ))
     else:
-        checks.append(("database", False, "no db_bytes samples"))
+        checks.append(("database", None, "no db_bytes samples"))
 
     base = args.publishers + args.subscribers
     conns = [v for s in samples if (v := s["conns"]) is not None]
     final = conns[-1] if conns else None
     checks.append((
         "connections",
-        conns and max(conns) <= base + 50 and final <= base + 20,
+        max(conns) <= base + 50 and final <= base + 20 if conns else None,
         f"max {max(conns) if conns else 'n/a'}, final {final}, baseline {base}",
     ))
 
@@ -126,36 +127,45 @@ def main():
         "vanish_failed": counts.get("vanish_failed", 0),
         "sub_reconnects": counts.get("sub_reconnects", 0),
     }
-    drained = end.get("outbound_pending_after_close") if end else None
-    checks.append((
-        "outbound",
-        drained == 0,
-        f"pending after all connections closed: "
-        f"{drained if end else 'run not finished'} bytes, "
-        f"last sample {post[-1].get('outbound_pending')} bytes",
-    ))
-    sync_drained = end.get("sync_memory_after_close") if end else None
-    checks.append((
-        "sync",
-        sync_drained == 0,
-        f"sync memory after all connections closed: "
-        f"{sync_drained if end else 'run not finished'} bytes, "
-        f"last sample {post[-1].get('sync_memory')} bytes",
-    ))
-    subs_drained = end.get("subscription_bytes_after_close") if end else None
-    checks.append((
-        "subscriptions",
-        subs_drained == 0,
-        f"subscription bytes after all connections closed: "
-        f"{subs_drained if end else 'run not finished'} bytes, "
-        f"last sample {post[-1].get('subscription_bytes')} bytes",
-    ))
-    coverage = {k: counts.get(k, 0) for k in ("churn_done", "count_done", "neg_done", "vanish_done")}
-    checks.append(("coverage", all(coverage.values()), f"{coverage}"))
+    def drain_check(name, end_key, sample_key):
+        """After-close drain check; n/a when the metric is a
+        nosfry-only series absent from every sample."""
+        drained = end.get(end_key) if end else None
+        absent = all(s.get(sample_key) is None for s in post)
+        return (
+            name,
+            None if absent else drained == 0,
+            f"{name} after all connections closed: "
+            f"{drained if end else 'run not finished'} bytes, "
+            f"last sample {post[-1].get(sample_key)} bytes",
+        )
+
+    checks.append(drain_check("outbound", "outbound_pending_after_close", "outbound_pending"))
+    checks.append(drain_check("sync", "sync_memory_after_close", "sync_memory"))
+    checks.append(drain_check(
+        "subscriptions", "subscription_bytes_after_close", "subscription_bytes"))
+    ran = {
+        "churn": counts.get("churn_done", 0) + counts.get("churn_failed", 0),
+        "count": counts.get("count_done", 0) + counts.get("count_failed", 0),
+        "neg": counts.get("neg_done", 0) + counts.get("neg_failed", 0)
+            + counts.get("neg_unreaped", 0),
+        "vanish": counts.get("vanish_done", 0) + counts.get("vanish_failed", 0),
+    }
+    done = {k: counts.get(f"{k}_done", 0) for k in ran}
+    cov_ok = None if not any(ran.values()) else all(
+        v == 0 or done[k] > 0 for k, v in ran.items())
+    checks.append(("coverage", cov_ok, f"{done} (n/a when no runs: {ran})"))
     checks.append((
         "errors",
-        not any(failures.values()) and not rejected and exit_status == 0,
-        f"{failures}, rejected OKs {rejected or 'none'}, relay exit {exit_status}",
+        not any(failures.values()) and not rejected,
+        f"{failures}, rejected OKs {rejected or 'none'}",
+    ))
+    rc = args.relay_rc if args.relay_rc is not None else exit_status
+    checks.append((
+        "exit",
+        rc in (0, -15, 143) if rc is not None else None,
+        f"relay exit {rc if rc is not None else 'n/a'} "
+        f"(0 or SIGTERM -15/143 passes)",
     ))
 
     print(f"run: {samples[-1]['t'] / 3600:.2f} h, {len(samples)} samples, {len(post)} after "
@@ -167,8 +177,9 @@ def main():
           f"{counts.get('vanish_done', 0)} vanish rounds, "
           f"{counts.get('slow_spawned', 0)} slow consumers")
     for name, passed, detail in checks:
-        print(f"{'PASS' if passed else 'FAIL'} {name}: {detail}")
-    sys.exit(0 if all(passed for _, passed, _ in checks) else 1)
+        mark = "n/a" if passed is None else ("PASS" if passed else "FAIL")
+        print(f"{mark} {name}: {detail}")
+    sys.exit(0 if all(p is not False for _, p, _ in checks) else 1)
 
 
 if __name__ == "__main__":

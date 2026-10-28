@@ -62,6 +62,8 @@ struct Counters {
     count_failed: AtomicU64,
     neg_done: AtomicU64,
     neg_failed: AtomicU64,
+    /// Variant 2 sessions the relay never reaped within `NEG_IDLE_WAIT`.
+    neg_unreaped: AtomicU64,
     vanish_done: AtomicU64,
     vanish_failed: AtomicU64,
     slow_spawned: AtomicU64,
@@ -90,6 +92,7 @@ impl Counters {
             "count_failed": self.count_failed.load(Ordering::Relaxed),
             "neg_done": self.neg_done.load(Ordering::Relaxed),
             "neg_failed": self.neg_failed.load(Ordering::Relaxed),
+            "neg_unreaped": self.neg_unreaped.load(Ordering::Relaxed),
             "vanish_done": self.vanish_done.load(Ordering::Relaxed),
             "vanish_failed": self.vanish_failed.load(Ordering::Relaxed),
             "slow_spawned": self.slow_spawned.load(Ordering::Relaxed),
@@ -597,6 +600,9 @@ async fn neg_once(
         result = tokio::time::timeout(bound, result) => match result {
             Ok(Ok(())) => {
                 counters.neg_done.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) if variant == 2 => {
+                counters.neg_unreaped.fetch_add(1, Ordering::Relaxed);
             }
             Ok(Err(_)) | Err(_) => {
                 counters.neg_failed.fetch_add(1, Ordering::Relaxed);

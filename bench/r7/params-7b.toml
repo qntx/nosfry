@@ -1,0 +1,104 @@
+# Round 7b: re-measures the Round 7 cells touched by #79 (writer
+# batching), #80 (connection memory) and #81 (lazy write deadline).
+# Every workload parameter that appears here is the Round 7 value
+# (params.toml); only the lineups, the scenario subsets and the W5
+# slice base differ. nosfry-030 runs alongside as the in-session
+# control. The shared W2/W5 databases are the Round 7 imports, reused
+# through symlinks (see bench/README.md, Round 7b).
+
+[paths]
+bench           = "/bench"
+results         = "/bench/results/r7b"
+work            = "/bench/work/r7b"
+harness         = "/bench/harness/target/release/nosfry-bench"
+bin_dir         = "/bench/bin"
+strfry_bin      = "/bench/strfry-1.1.3/strfry"
+wrappers        = "/bench/relays"
+variants        = "/bench/variants"
+mix             = "/bench/mix.json"
+d2              = "/bench/corpus/d2"
+regular         = "/bench/corpus/d2/regular.jsonl"
+holdout_regular = "/bench/corpus/d2/holdout-regular.jsonl"
+d1_corpus       = "/bench/corpus/nostr_vitor_startup_data.json.gz"
+relaybench      = "/bench/relaybench/bin/relaybench"
+strfry_pinned   = "/bench/strfry-pinned.sh"
+build_info      = "/bench/results/build-info.txt"
+
+[cores]
+relay   = "0-3"
+harness = "4-9"
+
+[net]
+port = 17777
+
+[reps]
+default = 6
+
+[analysis]
+# The nosfry entry the primaries compare against strfry, and the
+# column order of the per-workload tables.
+nosfry = "nosfry-7b"
+lineup = ["nosfry-7b", "nosfry-030", "strfry"]
+
+[w1]
+relays       = ["nosfry-7b", "nosfry-030", "strfry"]
+closed_conns = [32]
+window       = 64
+closed_secs  = 30
+warmup_secs  = 10
+open_conns   = 32
+open_secs    = 60
+open_rates   = { "nosfry-7b" = [4500, 5400], "nosfry-030" = [4500, 5400], "strfry" = [4500, 5400] }
+
+[w2]
+relays  = ["nosfry-7b", "nosfry-030", "strfry"]
+conns   = [8, 64]
+secs    = 60
+warmup  = 15
+deflate = [false, true]
+seed    = 1
+d1_reps = 0
+
+[w3]
+relays    = ["nosfry-7b", "nosfry-030", "strfry"]
+broadcast = [{ subs = 5000, rate = 20 }]
+selective = []
+authors   = 200
+secs      = 60
+deflate   = [false]
+
+[w4]
+relays    = ["nosfry-7b", "nosfry-030", "strfry"]
+conns     = [10000]
+hold_secs = 30
+deflate   = [false, true]
+
+[w5]
+reps = 3
+# nosfry-030 shares nosfry-7b's database (same on-disk format), so it
+# cannot ingest the same slices; it is not in the W5 lineup.
+relays      = ["nosfry-7b", "strfry"]
+conns       = 8
+query_secs  = 60
+query_warm  = 15
+open_conns  = 32
+ingest_secs = 60
+ingest_rate = 3000
+# Round 7 ingested slices 0, 200k and 400k into these databases.
+skip_base = 600_000
+
+[primary]
+P1 = { id = "P1", workload = "w1", scenario = "closed-c32", metric = "accepted_per_sec", better = "higher" }
+P2 = { id = "P2", workload = "w1", scenario = "open-4500", metric = "ok_latency.p99_ms", better = "lower" }
+P3 = { id = "P3", workload = "w2", scenario = "q-c8-plain-warm", metric = "queries.overall.latency.p50_ms", better = "lower" }
+P4 = { id = "P4", workload = "w2", scenario = "q-c64-plain-warm", metric = "events_per_sec", better = "higher" }
+P5 = { id = "P5", workload = "w3", scenario = "broadcast-5000-plain", metric = "latency_p50_ms", better = "lower" }
+P6 = { id = "P6", workload = "w3", scenario = "broadcast-5000-plain", metric = "relay_cpu_us_per_delivery", better = "lower" }
+P7 = { id = "P7", workload = "w4", scenario = "conns-10000-plain", metric = "kib_per_conn", better = "lower" }
+P8 = { id = "P8", workload = "w4", scenario = "conns-10000-deflate", metric = "kib_per_conn", better = "lower" }
+
+[pilot]
+reps      = 1
+secs      = 10
+warmup    = 3
+hold_secs = 5
