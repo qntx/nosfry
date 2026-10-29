@@ -26,10 +26,9 @@ The format is based on [Keep a Changelog]; this project follows
   channel buffer block: the per-connection outbound queue is a
   mutex-guarded deque with a waker (~2.4 KiB less per connection),
   and the socket write buffer no longer pre-reserves 2 KiB.
-- Writer transactions now batch up to 16,384 events (bounded also by
-  index entries) instead of 1,024, and the writer inbox is bounded by
-  64 MiB of event bytes, lifting sustained ingest throughput toward
-  the store's synced-write bandwidth.
+- Writer transactions take every queued publish (bounded by the
+  65,536-request / 64 MiB writer inbox) instead of at most 1,024
+  events, amortizing commit cost on large databases.
 - Only the newest kind-62 request to vanish per author is stored
   (NIP-62 bookkeeping); an older or equal-dated incoming request is
   answered `duplicate: have a newer version` instead of accumulating.

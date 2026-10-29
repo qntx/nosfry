@@ -52,13 +52,15 @@ use crate::config::Config;
 
 /// How many publish requests the writer queues before backpressuring
 /// connections; the byte budget in [`WRITER_QUEUE_BYTES`] binds first
-/// under sustained load.
+/// under sustained load. One write transaction drains the whole
+/// inbox, so this also bounds the events in a commit.
 const WRITER_QUEUE: usize = 65_536;
 
 /// Bytes of verified event JSON queued on the writer across all
 /// connections; a publish acquires its `json().len()` before it may
 /// occupy an inbox slot, so a flood of large events backpressures at
-/// 64 MiB instead of an event count.
+/// 64 MiB instead of an event count. With [`WRITER_QUEUE`] it also
+/// bounds one write transaction.
 const WRITER_QUEUE_BYTES: usize = 64 << 20;
 
 /// How many messages one monitor shard queues.
