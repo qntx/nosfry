@@ -26,9 +26,6 @@ The format is based on [Keep a Changelog]; this project follows
   channel buffer block: the per-connection outbound queue is a
   mutex-guarded deque with a waker (~2.4 KiB less per connection),
   and the socket write buffer no longer pre-reserves 2 KiB.
-- The per-connection write deadline now starts only when a write
-  actually blocks, instead of arming and cancelling a timer around
-  every outbound batch (~7% of write-path CPU in timer work).
 - Writer transactions now batch up to 16,384 events (bounded also by
   index entries) instead of 1,024, and the writer inbox is bounded by
   64 MiB of event bytes, lifting sustained ingest throughput toward
