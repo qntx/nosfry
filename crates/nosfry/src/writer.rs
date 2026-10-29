@@ -15,13 +15,6 @@ use crate::Live;
 use crate::channels::{Batch, Out, Outbound, ShardMsg, WriteRequest, WriterMsg};
 use crate::metrics::{Metrics, StoreOp};
 
-// One write transaction drains the whole inbox: its bound is the
-// inbox itself, WRITER_QUEUE requests / WRITER_QUEUE_BYTES of event
-// bytes. On databases larger than RAM a commit's cost is dominated
-// by distinct dirty B-tree pages, which grows sublinearly with batch
-// size, so draining the backlog amortizes it — strfry's writer does
-// the same.
-
 /// Events deleted per expiry sweep; a sweep hitting the cap keeps
 /// looping (without blocking on the inbox) until it clears.
 const EXPIRE_CAP: usize = 10_000;
@@ -47,9 +40,9 @@ fn now() -> u64 {
 /// Writer thread main loop: block for the first message, drain every
 /// queued publish into one transaction (an `Expire` seen while
 /// draining is deferred, not batched), commit once, queue the batch —
-/// minus the
-/// seqs the same transaction deleted — on every shard, then push each
-/// request's `OK` straight onto its connection's outbound queue.
+/// minus the seqs the same transaction deleted — on every shard, then
+/// push each request's `OK` straight onto its connection's outbound
+/// queue.
 /// After the batch, one expiry sweep runs when pending; a sweep that
 /// hits [`EXPIRE_CAP`] keeps the loop in non-blocking mode so large
 /// backlogs interleave with publishes instead of starving them.
@@ -320,8 +313,14 @@ pub(crate) fn expire_timer(tx: &mpsc::Sender<WriterMsg>, stop_rx: &std::sync::mp
 }
 
 /// Drain the inbox into one publish batch: `first` plus every publish
-/// already queued — the batch has no cap of its own, the inbox bound
-/// ([`WRITER_QUEUE`]/[`WRITER_QUEUE_BYTES`]) bounds the transaction.
+/// already queued. The batch has no cap of its own; the inbox bound
+/// ([`crate::WRITER_QUEUE`] requests, [`crate::WRITER_QUEUE_BYTES`]
+/// of event bytes held until each `OK`) bounds the transaction. On a
+/// database larger than RAM a commit costs roughly one write per
+/// distinct dirty B-tree page, which grows sublinearly with the batch,
+/// so committing the whole backlog at once amortizes it (strfry's
+/// writer drains its queue the same way).
+///
 /// An `Expire` seen while draining is deferred (flagged for the next
 /// sweep), `Moderate` requests collect for after the commit, and an
 /// empty or closed inbox ends the drain.
