@@ -316,7 +316,7 @@ def units_w5(prm, pilot):
                     "--params", str(d2 / "params.json"),
                     "--mix", str(prm.path_of("mix")), "--log", "/dev/null",
                     "--conns", str(w["conns"]), "--duration", str(qsecs),
-                    "--warmup", str(qwarm), "--seed", str(w.get("seed", 1)),
+                    "--warmup", str(qwarm), "--seed", str(w["seed"]),
                     "--label", f"w5-q-{'cold' if cold else 'warm'}-r{rep}")
             out.append(unit("w5", "query-restart", label, rep, "w5ro",
                             [q(True), q(False)]))
@@ -681,9 +681,14 @@ def prepare_db(prm, unit):
         rc = subprocess.call(["cp", "-a", "--reflink=never",
                               str(src) + "/.", str(d)])
         wall = time.monotonic() - t0
+        copied = du_bytes(d)
+        if rc != 0 or copied != src_bytes:
+            shutil.rmtree(d, ignore_errors=True)
+            sys.exit(f"run.py: db copy {src} -> {d} failed "
+                     f"(rc={rc}, {copied} of {src_bytes} bytes)")
         drop_caches()
         return {"db_copy": {"source": str(src), "source_bytes": src_bytes,
-                            "bytes": du_bytes(d), "wall_secs": round(wall, 2),
+                            "bytes": copied, "wall_secs": round(wall, 2),
                             "rc": rc}}
     sys.exit(f"run.py: unknown db mode {mode}")
 
@@ -933,11 +938,9 @@ def run_w5ingest_unit(prm, unit, unit_dir):
     for o in outputs:
         if isinstance(o, dict) and "valid" in o:
             valid = valid and bool(o["valid"])
-    copy_ok = (db_copy is not None and db_copy["rc"] == 0
-               and db_copy["bytes"] == db_copy["source_bytes"])
     return {"cmds_rc": codes, "relay_rc": proc.returncode, "port_up": port_up,
             "warmup_req": warm, "db_copy": db_copy, "db_bytes": db_bytes,
-            "valid": valid and copy_ok}
+            "valid": valid}
 
 
 def run_w8_unit(prm, unit, unit_dir):

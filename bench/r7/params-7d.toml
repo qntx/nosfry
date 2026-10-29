@@ -9,16 +9,22 @@
 read_ahead_kb = 128
 
 [paths]
-corpus          = "/bench/corpus"
-harness         = "/bench/harness/target/release/nosfry-bench"
+bench           = "/bench"
 results         = "/bench/results/r7d"
 work            = "/bench/work/r7d"
+harness         = "/bench/harness/target/release/nosfry-bench"
+bin_dir         = "/bench/bin"
+strfry_bin      = "/bench/strfry-1.1.3/strfry"
+wrappers        = "/bench/relays"
+variants        = "/bench/variants"
 mix             = "/bench/mix.json"
-build_info      = "/bench/results/build-info.txt"
 d2              = "/bench/corpus/d2"
 regular         = "/bench/corpus/d2/regular.jsonl"
-holdout         = "/bench/corpus/d2/holdout.jsonl"
 holdout_regular = "/bench/corpus/d2/holdout-regular.jsonl"
+d1_corpus       = "/bench/corpus/nostr_vitor_startup_data.json.gz"
+relaybench      = "/bench/relaybench/bin/relaybench"
+strfry_pinned   = "/bench/strfry-pinned.sh"
+build_info      = "/bench/results/build-info.txt"
 
 [cores]
 relay   = "0-3"

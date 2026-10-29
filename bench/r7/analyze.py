@@ -162,7 +162,7 @@ def neg_rep(d: dict) -> tuple[dict, list]:
 EXTRACT = {"w2": query_rep, "w3": fanout_rep, "w4": conns_rep, "w6": neg_rep}
 
 
-def w5_rep(scenario: str, path: Path, result: dict, label: str,
+def w5_rep(scenario: str, path: Path, result: dict,
            superseded_ok: bool | None):
     recs = all_json(path)
     if scenario.startswith("ingest"):
@@ -187,7 +187,7 @@ def collect(root: Path, units: dict) -> dict:
     """key -> list of {rep, metrics, flags}, for w1-w6."""
     out = {}
     for key, reps in sorted(units.items()):
-        wl, scenario, label = key
+        wl, scenario, _label = key
         if wl in ("w7", "w8") or scenario == "d1":
             continue
         udir = unit_dir(root, key)
@@ -200,7 +200,7 @@ def collect(root: Path, units: dict) -> dict:
                 rows.append({"rep": rep, "metrics": {}, "flags": ["no_output"]})
                 continue
             if wl == "w5":
-                m, flags = w5_rep(scenario, path, result, label, superseded_ok)
+                m, flags = w5_rep(scenario, path, result, superseded_ok)
             elif wl == "w1":
                 m, flags = ingest_rep(last_json(path), superseded_ok)
             else:

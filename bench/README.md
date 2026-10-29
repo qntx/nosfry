@@ -297,7 +297,7 @@ ln -s /bench/work/r7/db/strfry     /bench/work/r7b/db/strfry
 # one {"corpus": "d2", "label": ..., "stored": <current count>} line per label
 ```
 
-nosfry-030 and nosfry-7b share one database (same on-disk format). They must never both ingest into it, so only nosfry-7b and strfry run W5. Round 7 already ingested slices 0, 200k and 400k, so `w5.skip_base = 600_000` starts the new ones after them. Both databases hold 5 to 7 % more events than during the Round 7 W2 runs, and the report says so.
+nosfry-030 and nosfry-7b share one database (same on-disk format). They must never both ingest into it, so only nosfry-7b and strfry run W5. Round 7 already ingested slices 0, 200k, and 400k, so `w5.skip_base = 600_000` starts the new ones after them. Both databases hold 5 to 7 % more events than during the Round 7 W2 runs, and the report says so.
 
 These W5 ingest cells are void for the read-ahead reason Round 7d explains: they ran with the filesystem bdi read-ahead at 4 MiB and every rep hit the same LMDB page-fault storm.
 
@@ -309,7 +309,7 @@ These W5 ingest cells are void for the read-ahead reason Round 7d explains: they
 
 `r7/params-7d.toml` re-measures W5 after the btrfs read-ahead finding: on the bench host, btrfs raises the filesystem bdi read-ahead to at least 4 MiB (`/sys/class/bdi/btrfs-*/read_ahead_kb = 4096`), and with a 21 GB LMDB db bigger than RAM every writer page fault read megabytes — the Round 7/7b/7c W5 ingest collapse was that storm, not the relays. At 128 KiB (the ext4/xfs default) both relays sustain 1500/s with zero timeouts, and queries are unaffected (MDB_NORDAHEAD also fixes ingest but costs ~10x warm query throughput). W1/W3/W4 results stand — they ran on RAM-resident databases — and W2/W5 query cells are unaffected.
 
-Method: fresh D2 imports via `run.py prep` with `params-7d.toml`; `[host] read_ahead_kb = 128` pins the fs bdi read-ahead for prep and for the run, recorded into `run-meta.json` and restored afterwards (also on SIGTERM). Every ingest unit gets a fresh `--reflink=never` copy of the shared import under `work/db-w5/`, dropped caches, and the identical corpus slice (`skip_base = 0`, `ceil(rate * ingest_secs)` lines); a 10 GiB free-space guard aborts before a copy that would not fit. Lineup: `nosfry-7d` = main at the read-ahead fix round, and strfry; three reps at 1500/2000/2500/3000 events per second.
+Method: fresh D2 imports via `run.py prep` with `params-7d.toml`; `[host] read_ahead_kb = 128` pins the fs bdi read-ahead for prep and for the run, recorded into `run-meta.json` and restored afterwards (also on SIGTERM). Every ingest unit gets a fresh `--reflink=never` copy of the shared import under `work/db-w5/`, dropped caches, and the identical corpus slice (`skip_base = 0`, `ceil(rate * ingest_secs)` lines); a 10 GiB free-space guard aborts before a copy that would not fit. Lineup: `nosfry-7d` = main at `af66802` (Round 7b's writer plus the #81 revert), and strfry; three reps at 1500/2000/2500/3000 events per second.
 
 ## Output
 
