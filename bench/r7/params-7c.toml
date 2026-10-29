@@ -1,0 +1,67 @@
+# Round 7c: a 12-rep A/B of W2 q-c64-plain between nosfry-7b and
+# nosfry-030 to settle the possible #80 regression, and a W5 ingest
+# rate sweep of nosfry-7b vs strfry to find each relay's sustainable
+# rate on the grown databases. The shared databases are the Round 7
+# imports, reused through symlinks like Round 7b (see
+# bench/README.md, Round 7c).
+
+[paths]
+bench           = "/bench"
+results         = "/bench/results/r7c"
+work            = "/bench/work/r7c"
+harness         = "/bench/harness/target/release/nosfry-bench"
+bin_dir         = "/bench/bin"
+strfry_bin      = "/bench/strfry-1.1.3/strfry"
+wrappers        = "/bench/relays"
+variants        = "/bench/variants"
+mix             = "/bench/mix.json"
+d2              = "/bench/corpus/d2"
+regular         = "/bench/corpus/d2/regular.jsonl"
+holdout_regular = "/bench/corpus/d2/holdout-regular.jsonl"
+d1_corpus       = "/bench/corpus/nostr_vitor_startup_data.json.gz"
+relaybench      = "/bench/relaybench/bin/relaybench"
+strfry_pinned   = "/bench/strfry-pinned.sh"
+build_info      = "/bench/results/build-info.txt"
+
+[cores]
+relay   = "0-3"
+harness = "4-9"
+
+[net]
+port = 17777
+
+[reps]
+default = 6
+
+[analysis]
+# The nosfry entry the per-workload tables lead with, and the column
+# order of those tables.
+nosfry = "nosfry-7b"
+lineup = ["nosfry-7b", "nosfry-030", "strfry"]
+
+[w2]
+relays  = ["nosfry-7b", "nosfry-030"]
+reps    = 12
+conns   = [64]
+secs    = 60
+warmup  = 15
+deflate = [false]
+seed    = 1
+d1_reps = 0
+
+[w5]
+reps = 2
+# nosfry-030 shares nosfry-7b's database (same on-disk format), so it
+# cannot ingest the same slices; it is not in the W5 lineup.
+relays       = ["nosfry-7b", "strfry"]
+conns        = 8
+query_secs   = 60
+query_warm   = 15
+query_reps   = 0
+open_conns   = 32
+ingest_secs  = 60
+ingest_rates = [1500, 2000, 2500]
+# Round 7 ingested slices 0, 200k and 400k into these databases;
+# Round 7b ingested 600k, 800k and 1M (each 180k lines). The slices
+# below end at 1,920,000 of the 2,000,000-line holdout.
+skip_base = 1_200_000

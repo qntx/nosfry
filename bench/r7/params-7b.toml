@@ -77,14 +77,16 @@ deflate   = [false, true]
 reps = 3
 # nosfry-030 shares nosfry-7b's database (same on-disk format), so it
 # cannot ingest the same slices; it is not in the W5 lineup.
-relays      = ["nosfry-7b", "strfry"]
-conns       = 8
-query_secs  = 60
-query_warm  = 15
-open_conns  = 32
-ingest_secs = 60
-ingest_rate = 3000
-# Round 7 ingested slices 0, 200k and 400k into these databases.
+relays       = ["nosfry-7b", "strfry"]
+conns        = 8
+query_secs   = 60
+query_warm   = 15
+open_conns   = 32
+ingest_secs  = 60
+ingest_rates = [3000]
+# Round 7 ingested slices 0, 200k and 400k into these databases;
+# Round 7b ingested 600k, 800k and 1M (each 180k lines), so the next
+# free line is 1,180,000.
 skip_base = 600_000
 
 [primary]

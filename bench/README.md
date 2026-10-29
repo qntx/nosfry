@@ -299,6 +299,10 @@ ln -s /bench/work/r7/db/strfry     /bench/work/r7b/db/strfry
 
 nosfry-030 and nosfry-7b share one database (same on-disk format). They must never both ingest into it, so only nosfry-7b and strfry run W5. Round 7 already ingested slices 0, 200k, and 400k, so `w5.skip_base = 600_000` starts the new ones after them. Both databases hold 5 to 7 % more events than during the Round 7 W2 runs, and the report says so.
 
+### Round 7c
+
+`r7/params-7c.toml` has two aims: a 12-rep A/B of W2 q-c64-plain between nosfry-7b and nosfry-030 to settle the possible #80 regression, and a W5 ingest rate sweep (1500/2000/2500) of nosfry-7b vs strfry to find each relay's sustainable rate on the grown databases. Results go to `/bench/results/r7c` and work dirs to `/bench/work/r7c`; the W2/W5 databases are again the Round 7 imports reused through symlinks (`/bench/work/r7c/db/<label>`), like Round 7b. W5 continues the holdout corpus after the Round 7b slices: `w5.skip_base = 1_200_000`, contiguous `rate * ingest_secs` slices per (rep, rate).
+
 ## Output
 
 - `run-relaybench.sh`: `<out>/<run>/<timestamp>/{report.md,results.json}` and

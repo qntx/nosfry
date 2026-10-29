@@ -165,7 +165,7 @@ EXTRACT = {"w2": query_rep, "w3": fanout_rep, "w4": conns_rep, "w6": neg_rep}
 def w5_rep(scenario: str, path: Path, result: dict, prep: dict, label: str,
            superseded_ok: bool | None):
     recs = all_json(path)
-    if scenario == "ingest":
+    if scenario.startswith("ingest"):
         m, flags = ingest_rep(recs[-1], superseded_ok)
         expected = prep.get(label)
         before = result.get("events_before")
@@ -321,6 +321,8 @@ PRIMARY_METRIC = {
 
 
 def primary(data: dict, prm: dict, summary: dict) -> list[str]:
+    if not prm.get("primary"):
+        return []
     rows, pvals = [], {}
     for pid, spec in sorted(prm["primary"].items()):
         metric = PRIMARY_METRIC[spec["metric"]]
@@ -331,8 +333,8 @@ def primary(data: dict, prm: dict, summary: dict) -> list[str]:
         pvals[pid] = c["p"] if c else 1.0
         rows.append((pid, spec, (a, len(ra)), (b, len(rb)), c))
     adj = stats.holm(pvals)
-    out = ["\n## Primary comparisons (nosfry 0.3.0 vs strfry 1.1.3)\n",
-           "Holm over all eight; a point without data enters as p = 1. A difference is "
+    out = [f"\n## Primary comparisons ({NOSFRY} vs {STRFRY})\n",
+           f"Holm over all {len(pvals)}; a point without data enters as p = 1. A difference is "
            "claimed only when the adjusted p < 0.05 and the two median intervals are disjoint.\n",
            "| id | point | nosfry | strfry | ratio | p | Holm p | verdict |",
            "|---|---|---|---|---|---|---|---|"]
@@ -356,6 +358,8 @@ def primary(data: dict, prm: dict, summary: dict) -> list[str]:
 
 
 def soak(root: Path, units: dict, summary: dict) -> list[str]:
+    if not any(key[0] == "w7" for key in units):
+        return []
     out = ["\n## W7 soak (24 h per relay)\n",
            f"RSS slope and mean over samples after {SOAK_WARMUP_S} s.\n",
            "| relay | hours | OKs | deliveries | RssAnon mean MiB | slope MiB/h "
@@ -396,6 +400,8 @@ def slope(xs: list[float], ys: list[float]) -> float:
 
 
 def durability(root: Path, units: dict, summary: dict) -> list[str]:
+    if not any(key[0] == "w8" for key in units):
+        return []
     out = ["\n## W8 kill -9 durability\n",
            "`missing` is cumulative: acknowledged ids absent after the last restart.\n",
            "| relay | cycles | acked | missing | restart ms median [min, max] |",
@@ -431,7 +437,7 @@ def main():
     units = load_units(args.results)
     data = collect(args.results, units)
     summary: dict = {}
-    lines = ["# Round 7 results\n",
+    lines = [f"# Benchmark results: {args.results.name}\n",
              "Cells: median [distribution-free 95%+ interval] over unflagged reps; "
              "(k/n) when reps were flagged."]
     lines += primary(data, prm, summary)

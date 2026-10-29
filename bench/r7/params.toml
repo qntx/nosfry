@@ -73,14 +73,14 @@ hold_secs = 30
 deflate   = [false, true]
 
 [w5]
-reps        = 3
-relays      = ["nosfry-030", "strfry"]
-conns       = 8
-query_secs  = 60
-query_warm  = 15
-open_conns  = 32
-ingest_secs = 60
-ingest_rate = 3000
+reps         = 3
+relays       = ["nosfry-030", "strfry"]
+conns        = 8
+query_secs   = 60
+query_warm   = 15
+open_conns   = 32
+ingest_secs  = 60
+ingest_rates = [3000]
 
 [w6]
 relays           = ["nosfry-030", "strfry"]
