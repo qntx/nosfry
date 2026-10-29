@@ -472,7 +472,10 @@ def ra_bdi_file(work):
     it under /sys/fs/btrfs/<uuid>/bdi (raised to 4 MiB at mount),
     other filesystems under the device bdi (parent dir resolves a
     partition to the whole device)."""
-    r = sh(["findmnt", "-no", "FSTYPE,UUID,MAJ:MIN", "-T", str(work)])
+    probe = Path(work)
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    r = sh(["findmnt", "-no", "FSTYPE,UUID,MAJ:MIN", "-T", str(probe)])
     parts = r.stdout.split()
     if r.returncode != 0 or not parts:
         return None
