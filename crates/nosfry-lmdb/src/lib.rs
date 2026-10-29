@@ -73,7 +73,11 @@ pub struct StoreOptions {
     pub map_size: usize,
     /// Maximum reader slots.
     pub max_readers: u32,
-    /// Disable OS read-ahead on the map (`MDB_NORDAHEAD`).
+    /// Disable OS read-ahead on the map (`MDB_NORDAHEAD`). Leave
+    /// off: it cuts query throughput by about 10x. If the database
+    /// outgrows RAM on a filesystem with large read-ahead (btrfs uses
+    /// at least 4 MiB), lower the filesystem's `read_ahead_kb` (e.g.
+    /// to 128) instead.
     pub no_read_ahead: bool,
 }
 
