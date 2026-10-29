@@ -33,6 +33,7 @@ from pathlib import Path
 FOREIGN_PROCS = ("nosfry", "strfry", "nostr-rs", "nosfry-bench", "relaybench")
 READY_TIMEOUT_S = 60.0
 TERM_GRACE_S = 10.0
+STOP_GRACE_S = 180.0
 RTT_TIMEOUT_S = 15.0
 RESTART_POLL_S = 0.05
 RESTART_DEADLINE_S = 120.0
@@ -588,7 +589,9 @@ def wait_port(port, proc, timeout=READY_TIMEOUT_S):
     while time.monotonic() < deadline:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=1):
-                return True
+                # The port accepting means nothing if the relay we
+                # started already died (a stale relay can hold it).
+                return proc.poll() is None
         except OSError:
             if proc.poll() is not None:
                 return False
@@ -605,14 +608,21 @@ def rtt_probe(prm):
 
 
 def stop_relay(proc, sig=signal.SIGTERM):
+    """SIGTERM with STOP_GRACE_S for a relay draining its write
+    backlog (a mid-commit store keeps running after the harness
+    ends); a still-stuck process gets SIGKILL and an unbounded wait —
+    a killed process always exits once its I/O returns. Returns the
+    shutdown seconds."""
     if proc.poll() is not None:
-        return
+        return 0.0
+    t0 = time.monotonic()
     proc.send_signal(sig)
     try:
-        proc.wait(timeout=TERM_GRACE_S)
+        proc.wait(timeout=STOP_GRACE_S)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=TERM_GRACE_S)
+        proc.wait()
+    return time.monotonic() - t0
 
 
 def restart_timed(prm, unit, entry, run_dir):
@@ -768,14 +778,14 @@ def run_harness_unit(prm, unit, unit_dir):
                                   rep_json, rep_log)
     else:
         codes, outputs = [-1], []
-    stop_relay(proc)
+    stop_secs = stop_relay(proc)
     copy_generated(entry, run_dir, unit_dir)
     valid = port_up and warm and all(c == 0 for c in codes)
     for o in outputs:
         if isinstance(o, dict) and "valid" in o:
             valid = valid and bool(o["valid"])
     return {"cmds_rc": codes, "relay_rc": proc.returncode, "port_up": port_up,
-            "warmup_req": warm, "cold_cache": cold_done,
+            "warmup_req": warm, "cold_cache": cold_done, "stop_secs": stop_secs,
             "db_bytes": du_bytes(db_dir(prm, unit)), "valid": valid}
 
 
@@ -903,13 +913,13 @@ def run_w5ro_unit(prm, unit, unit_dir):
                 jf.write(stdout if stdout.endswith("\n") or not stdout else stdout + "\n")
                 phases.append({"phase": name, "rc": p.returncode,
                                "wall_secs": round(time.monotonic() - t0, 2)})
-        stop_relay(proc)
+        stop_secs = stop_relay(proc)
         proc, ms = restart_timed(prm, unit, entry, run_dir)
         phases.append({"phase": "restart", "restart_ms": ms})
         stop_relay(proc)
         copy_generated(entry, run_dir, unit_dir)
     valid = all(p.get("rc", 0) == 0 for p in phases) and ms is not None
-    return {"phases": phases, "restart_ms": ms,
+    return {"phases": phases, "restart_ms": ms, "stop_secs": stop_secs,
             "db_bytes": du_bytes(db_dir(prm, unit)),
             "cmds_rc": [p["rc"] for p in phases if "rc" in p], "valid": valid}
 
@@ -931,7 +941,7 @@ def run_w5ingest_unit(prm, unit, unit_dir):
                                       rep_json, rep_log)
         else:
             codes, outputs = [-1], []
-        stop_relay(proc)
+        stop_secs = stop_relay(proc)
         copy_generated(entry, run_dir, unit_dir)
         db_bytes = du_bytes(db)
     finally:
@@ -943,7 +953,7 @@ def run_w5ingest_unit(prm, unit, unit_dir):
             valid = valid and bool(o["valid"])
     return {"cmds_rc": codes, "relay_rc": proc.returncode, "port_up": port_up,
             "warmup_req": warm, "db_copy": db_copy, "db_bytes": db_bytes,
-            "valid": valid}
+            "stop_secs": stop_secs, "valid": valid}
 
 
 def run_w8_unit(prm, unit, unit_dir):
@@ -1034,6 +1044,7 @@ def manifest_line(prm, unit, result, t0, t1, unit_dir):
         "relay_rc": result.get("relay_rc"),
         "db_bytes": result.get("db_bytes"),
         "restart_ms": result.get("restart_ms"),
+        "stop_secs": result.get("stop_secs"),
         "valid": result.get("valid"),
         "note": unit["note"],
         "path": str(unit_dir),

@@ -311,6 +311,12 @@ These W5 ingest cells are void for the read-ahead reason Round 7d explains: they
 
 Method: fresh D2 imports via `run.py prep` with `params-7d.toml`; `[host] read_ahead_kb = 128` pins the fs bdi read-ahead for prep and for the run, recorded into `run-meta.json` and restored afterwards (also on SIGTERM). Every ingest unit gets a fresh `--reflink=never` copy of the shared import under `work/db-w5/`, dropped caches, and the identical corpus slice (`skip_base = 0`, `ceil(rate * ingest_secs)` lines); a 10 GiB free-space guard aborts before a copy that would not fit. Lineup: `nosfry-7d` = main at `af66802` (Round 7b's writer plus the #81 revert), and strfry; three reps at 1500/2000/2500/3000 events per second.
 
+### Round 7e
+
+`r7/params-7e.toml` confirms the #87 writer change (drain the whole writer inbox per transaction) against strfry in one session: `nosfry-7e` = main at `2898125` (#87) vs strfry on W1 and a W5 ingest sweep at 2500/3000/3500. It reuses the Round 7d imports as copy sources — `data.mdb` is hard-linked (not symlinked: run.py compares `du -sb` of source and copy) and `prep-imports.jsonl` records are cloned — under `/bench/work/r7e` and `/bench/results/r7e`, with read-ahead pinned at 128 KiB.
+
+The first attempt aborted partway: one W5 unit ended while the relay was still committing its backlog — SIGTERM, a 10 s grace, SIGKILL and a bounded wait hit `proc.wait`'s timeout inside uninterruptible I/O and crashed `run.py` after 4 of 18 units — and the W1 chain that followed measured a still-draining predecessor relay on the shared port (the new relay died on `bind`, but `wait_port` only checked the socket). Those units are archived under `/bench/results/r7e/aborted/` and rerun with a stop_relay that waits out the shutdown (180 s, then SIGKILL with an unbounded wait) and a wait_port that requires the started process to still be alive.
+
 ## Output
 
 - `run-relaybench.sh`: `<out>/<run>/<timestamp>/{report.md,results.json}` and

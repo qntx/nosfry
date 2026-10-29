@@ -1,0 +1,64 @@
+# Round 7e: confirm the #87 writer change (each transaction drains the
+# whole writer inbox) against strfry in one session, on W1 and a W5
+# ingest sweep. Same method as Round 7d: fs read-ahead pinned to
+# 128 KiB and every ingest unit on a fresh full copy of the Round 7d
+# D2 imports (hard-linked copy sources, see bench/README.md).
+
+[host]
+read_ahead_kb = 128
+
+[paths]
+bench           = "/bench"
+results         = "/bench/results/r7e"
+work            = "/bench/work/r7e"
+harness         = "/bench/harness/target/release/nosfry-bench"
+bin_dir         = "/bench/bin"
+strfry_bin      = "/bench/strfry-1.1.3/strfry"
+wrappers        = "/bench/relays"
+variants        = "/bench/variants"
+mix             = "/bench/mix.json"
+d2              = "/bench/corpus/d2"
+regular         = "/bench/corpus/d2/regular.jsonl"
+holdout_regular = "/bench/corpus/d2/holdout-regular.jsonl"
+d1_corpus       = "/bench/corpus/nostr_vitor_startup_data.json.gz"
+relaybench      = "/bench/relaybench/bin/relaybench"
+strfry_pinned   = "/bench/strfry-pinned.sh"
+build_info      = "/bench/results/build-info.txt"
+
+[cores]
+relay   = "0-3"
+harness = "4-9"
+
+[net]
+port = 17777
+
+[reps]
+default = 6
+
+[analysis]
+nosfry = "nosfry-7e"
+lineup = ["nosfry-7e", "strfry"]
+
+[w1]
+reps         = 6
+relays       = ["nosfry-7e", "strfry"]
+closed_conns = [32]
+window       = 64
+closed_secs  = 30
+warmup_secs  = 10
+open_conns   = 32
+open_secs    = 60
+open_rates   = { "nosfry-7e" = [4500, 5400], "strfry" = [4500, 5400] }
+
+[w5]
+reps         = 3
+relays       = ["nosfry-7e", "strfry"]
+conns        = 8
+query_secs   = 60
+query_warm   = 15
+query_reps   = 0
+open_conns   = 32
+ingest_secs  = 60
+ingest_rates = [2500, 3000, 3500]
+skip_base    = 0
+seed         = 1
