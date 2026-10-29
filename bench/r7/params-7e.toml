@@ -1,9 +1,8 @@
-# Round 7d: re-measure W5 after the btrfs read-ahead finding.
-# R7/7b/7c W5 ingest cells ran with the fs bdi read-ahead at 4 MiB
-# (btrfs raises /sys/class/bdi/btrfs-*/read_ahead_kb at mount) and are
-# void; 7d pins it to 128 KiB and runs every ingest unit on a fresh
-# full copy of a fresh D2 import, so units no longer grow one shared
-# db. Query units keep the read-only shared db.
+# Round 7e: confirm the #87 writer change (each transaction drains the
+# whole writer inbox) against strfry in one session, on W1 and a W5
+# ingest sweep. Same method as Round 7d: fs read-ahead pinned to
+# 128 KiB and every ingest unit on a fresh full copy of the Round 7d
+# D2 imports (hard-linked copy sources, see bench/README.md).
 
 [host]
 read_ahead_kb = 128
