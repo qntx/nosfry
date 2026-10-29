@@ -15,6 +15,7 @@ scheduled units and their commands without starting anything.
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -35,8 +36,6 @@ RTT_TIMEOUT_S = 15.0
 RESTART_POLL_S = 0.05
 RESTART_DEADLINE_S = 120.0
 LMDB_MAP = 137438953472
-# Corpus lines each w5 ingest rep skips: reps send disjoint slices.
-W5_SKIP_STRIDE = 200_000
 
 
 def sh(cmd, **kw):
@@ -302,15 +301,13 @@ def units_w5(prm, pilot):
     d2 = prm.path_of("d2")
     corpus = str(d2 / "holdout.jsonl")
     port = str(prm.p("net", "port"))
-    rate = w["ingest_rate"]
+    rates = w["ingest_rates"]
     skip_base = int(w.get("skip_base", 0))
-    if rate * isecs >= W5_SKIP_STRIDE:
-        sys.exit(f"run.py: w5 sends {rate * isecs:g} events per rep, "
-                 f"W5_SKIP_STRIDE {W5_SKIP_STRIDE} too small")
+    query_reps = int(w.get("query_reps", reps))
     out = []
     # Read-only units first, on the shared imported db: cold and warm
     # queries plus a timed restart, per rep.
-    for rep in range(1, reps + 1):
+    for rep in range(1, query_reps + 1):
         for label in rotated(w["relays"], rep):
             def q(cold):
                 return harness_cmd(
@@ -322,19 +319,31 @@ def units_w5(prm, pilot):
                     "--label", f"w5-q-{'cold' if cold else 'warm'}-r{rep}")
             out.append(unit("w5", "query-restart", label, rep, "w5ro",
                             [q(True), q(False)]))
-    # Then ingest-on-top reps in sequence on the same db; the runner
-    # records the stored event count before each rep (the db grows by
-    # a few percent per rep — that is documented, not hidden).
+    # Then ingest-on-top units on the same db; the runner records the
+    # stored event count before each rep (the db grows by a few
+    # percent per rep — that is documented, not hidden). Each
+    # (rep, rate) pair gets its own corpus slice, contiguous from
+    # skip_base and ceil(rate * ingest_secs) lines long; every relay
+    # in the pair ingests the same slice.
+    skip = skip_base
     for rep in range(1, reps + 1):
-        for label in rotated(w["relays"], rep):
-            skip = skip_base + (rep - 1) * W5_SKIP_STRIDE
-            out.append(unit("w5", "ingest", label, rep, "w5ingest", [
-                harness_cmd(prm, "ingest-open", "--url", ws_url(port),
-                            "--corpus", corpus, "--conns", str(w["open_conns"]),
-                            "--rate", f"{rate:g}", "--duration", str(isecs),
-                            "--warmup", "0", "--skip", str(skip),
-                            "--label", f"w5-ingest-r{rep}")],
-                note={"ingest_rate": round(rate, 2), "skip": skip}))
+        for rate in rotated(rates, rep):
+            lines = math.ceil(rate * isecs)
+            for label in rotated(w["relays"], rep):
+                out.append(unit("w5", f"ingest-{rate:g}", label, rep, "w5ingest", [
+                    harness_cmd(prm, "ingest-open", "--url", ws_url(port),
+                                "--corpus", corpus, "--conns", str(w["open_conns"]),
+                                "--rate", f"{rate:g}", "--duration", str(isecs),
+                                "--warmup", "0", "--skip", str(skip),
+                                "--label", f"w5-ingest-{rate:g}-r{rep}")],
+                    note={"ingest_rate": round(rate, 2), "skip": skip,
+                          "lines": lines}))
+            skip += lines
+    with open(corpus) as f:
+        corpus_lines = sum(1 for _ in f)
+    if skip > corpus_lines:
+        sys.exit(f"run.py: w5 ingest slices end at line {skip} but "
+                 f"{corpus} has only {corpus_lines} lines")
     return out
 
 
