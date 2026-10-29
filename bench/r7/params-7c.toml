@@ -65,3 +65,4 @@ ingest_rates = [1500, 2000, 2500]
 # Round 7b ingested 600k, 800k and 1M (each 180k lines). The slices
 # below end at 1,920,000 of the 2,000,000-line holdout.
 skip_base = 1_200_000
+seed      = 1

@@ -88,6 +88,7 @@ ingest_rates = [3000]
 # Round 7b ingested 600k, 800k and 1M (each 180k lines), so the next
 # free line is 1,180,000.
 skip_base = 600_000
+seed      = 1
 
 [primary]
 P1 = { id = "P1", workload = "w1", scenario = "closed-c32", metric = "accepted_per_sec", better = "higher" }

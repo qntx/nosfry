@@ -162,17 +162,17 @@ def neg_rep(d: dict) -> tuple[dict, list]:
 EXTRACT = {"w2": query_rep, "w3": fanout_rep, "w4": conns_rep, "w6": neg_rep}
 
 
-def w5_rep(scenario: str, path: Path, result: dict, prep: dict, label: str,
+def w5_rep(scenario: str, path: Path, result: dict, label: str,
            superseded_ok: bool | None):
     recs = all_json(path)
     if scenario.startswith("ingest"):
         m, flags = ingest_rep(recs[-1], superseded_ok)
-        expected = prep.get(label)
-        before = result.get("events_before")
-        if expected is None:
-            flags.append("db_unverified(no prep record)")
-        elif before is None or before < expected:
-            flags.append(f"db_below_import(events_before={before}, imported={expected})")
+        dc = result.get("db_copy")
+        if dc is None:
+            flags.append("db_copy_missing")
+        elif dc.get("bytes") != dc.get("source_bytes") or dc.get("rc") != 0:
+            flags.append(f"db_copy_mismatch(bytes={dc.get('bytes')},"
+                         f"source={dc.get('source_bytes')},rc={dc.get('rc')})")
         return m, flags
     m, flags = {}, []
     for name, d in zip(("cold", "warm"), recs, strict=False):
@@ -183,21 +183,8 @@ def w5_rep(scenario: str, path: Path, result: dict, prep: dict, label: str,
     return m, flags
 
 
-def prep_counts(root: Path) -> dict:
-    path = root / "prep-imports.jsonl"
-    out = {}
-    if path.exists():
-        for line in path.read_text().splitlines():
-            if line.strip():
-                r = json.loads(line)
-                if r.get("corpus") == "d2" and r.get("stored"):
-                    out[r["label"]] = r["stored"]
-    return out
-
-
 def collect(root: Path, units: dict) -> dict:
     """key -> list of {rep, metrics, flags}, for w1-w6."""
-    prep = prep_counts(root)
     out = {}
     for key, reps in sorted(units.items()):
         wl, scenario, label = key
@@ -213,7 +200,7 @@ def collect(root: Path, units: dict) -> dict:
                 rows.append({"rep": rep, "metrics": {}, "flags": ["no_output"]})
                 continue
             if wl == "w5":
-                m, flags = w5_rep(scenario, path, result, prep, label, superseded_ok)
+                m, flags = w5_rep(scenario, path, result, label, superseded_ok)
             elif wl == "w1":
                 m, flags = ingest_rep(last_json(path), superseded_ok)
             else:
@@ -258,7 +245,7 @@ WORKLOAD_METRICS = {
            "rss_anon_mib_after"],
     "w4": ["kib_per_conn", "setup_secs"],
     "w5": ["cold_p50_ms", "warm_p50_ms", "warm_events_per_sec", "restart_ms",
-           "ok_p99_ms"],
+           "ok_p50_ms", "ok_p99_ms", "relay_cpu_us_per_ok"],
     "w6": ["wall_ms", "rounds", "bytes_received"],
 }
 
