@@ -13,6 +13,7 @@ scheduled units and their commands without starting anything.
 """
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -315,17 +316,15 @@ def units_w5(prm, pilot):
                     "--params", str(d2 / "params.json"),
                     "--mix", str(prm.path_of("mix")), "--log", "/dev/null",
                     "--conns", str(w["conns"]), "--duration", str(qsecs),
-                    "--warmup", str(qwarm), "--seed", str(prm.p("w2", "seed")),
+                    "--warmup", str(qwarm), "--seed", str(w["seed"]),
                     "--label", f"w5-q-{'cold' if cold else 'warm'}-r{rep}")
             out.append(unit("w5", "query-restart", label, rep, "w5ro",
                             [q(True), q(False)]))
-    # Then ingest-on-top units on the same db; the runner records the
-    # stored event count before each rep (the db grows by a few
-    # percent per rep — that is documented, not hidden). Each
-    # (rep, rate) pair gets its own corpus slice, contiguous from
-    # skip_base and ceil(rate * ingest_secs) lines long; every relay
-    # in the pair ingests the same slice.
-    skip = skip_base
+    # Then ingest units on a fresh full copy of the imported db: every
+    # unit replays the identical corpus slice (skip_base .. skip_base +
+    # ceil(rate * ingest_secs)) into `work/db-w5/<bin>`, so each rep
+    # measures ingest into the same on-disk db, not a growing shared
+    # one. Rate and relay order still rotate per rep.
     for rep in range(1, reps + 1):
         for rate in rotated(rates, rep):
             lines = math.ceil(rate * isecs)
@@ -334,15 +333,16 @@ def units_w5(prm, pilot):
                     harness_cmd(prm, "ingest-open", "--url", ws_url(port),
                                 "--corpus", corpus, "--conns", str(w["open_conns"]),
                                 "--rate", f"{rate:g}", "--duration", str(isecs),
-                                "--warmup", "0", "--skip", str(skip),
+                                "--warmup", "0", "--skip", str(skip_base),
                                 "--label", f"w5-ingest-{rate:g}-r{rep}")],
-                    note={"ingest_rate": round(rate, 2), "skip": skip,
+                    db="copy",
+                    note={"ingest_rate": round(rate, 2), "skip": skip_base,
                           "lines": lines}))
-            skip += lines
     with open(corpus) as f:
         corpus_lines = sum(1 for _ in f)
-    if skip > corpus_lines:
-        sys.exit(f"run.py: w5 ingest slices end at line {skip} but "
+    need = skip_base + max((math.ceil(r * isecs) for r in rates), default=0)
+    if need > corpus_lines:
+        sys.exit(f"run.py: w5 ingest slices end at line {need} but "
                  f"{corpus} has only {corpus_lines} lines")
     return out
 
@@ -467,6 +467,76 @@ def assert_quiet():
                  + "\n  ".join(bad))
 
 
+def ra_bdi_file(work):
+    """read_ahead_kb of the filesystem bdi holding `work`: btrfs keeps
+    it under /sys/fs/btrfs/<uuid>/bdi (raised to 4 MiB at mount),
+    other filesystems under the device bdi (parent dir resolves a
+    partition to the whole device)."""
+    probe = Path(work)
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    r = sh(["findmnt", "-no", "FSTYPE,UUID,MAJ:MIN", "-T", str(probe)])
+    parts = r.stdout.split()
+    if r.returncode != 0 or not parts:
+        return None
+    if parts[0] == "btrfs" and len(parts) > 1:
+        p = Path(f"/sys/fs/btrfs/{parts[1]}/bdi/read_ahead_kb")
+    else:
+        p = Path(f"/sys/dev/block/{parts[-1]}/bdi/read_ahead_kb")
+        if not p.exists():
+            p = Path(f"/sys/dev/block/{parts[-1]}/../bdi/read_ahead_kb").resolve()
+    return p
+
+
+def read_ahead_record(prm):
+    """{"path", "original_kb", "applied_kb"} for run-meta; applied_kb
+    stays None unless [host] read_ahead_kb is set."""
+    p = ra_bdi_file(prm.path_of("work"))
+    rec = {"path": str(p) if p else None,
+           "original_kb": int(p.read_text().strip())
+           if p and p.exists() else None,
+           "applied_kb": None}
+    target = prm.cfg.get("host", {}).get("read_ahead_kb")
+    if target is not None:
+        rec["applied_kb"] = int(target)
+    return rec
+
+
+@contextlib.contextmanager
+def read_ahead_ctx(prm):
+    """Pin the filesystem read_ahead_kb while units run; always yields
+    the meta record. With no [host] key this is a no-op that still
+    records the resolved path and original value."""
+    rec = read_ahead_record(prm)
+    target = rec["applied_kb"]
+    if target is None:
+        yield rec
+        return
+    path = rec["path"]
+    if path is None or not Path(path).exists():
+        sys.exit("run.py: [host] read_ahead_kb set but the filesystem "
+                 f"bdi file for {prm.path_of('work')} cannot be resolved")
+    p = Path(path)
+    orig = rec["original_kb"]
+    try:
+        p.write_text(f"{target}\n")
+    except OSError as e:
+        sys.exit(f"run.py: cannot write {p}: {e}")
+
+    def _term(signum, frame):
+        raise SystemExit(143)
+
+    prev = signal.signal(signal.SIGTERM, _term)
+    try:
+        yield rec
+    finally:
+        signal.signal(signal.SIGTERM, prev)
+        try:
+            p.write_text(f"{orig}\n")
+        except OSError as e:
+            print(f"run.py: restoring {p} failed: {e}", file=sys.stderr)
+
+
 def set_sysctls():
     values = {"net.ipv4.ip_local_port_range": "1024 65535",
               "net.ipv4.tcp_tw_reuse": "1"}
@@ -489,7 +559,8 @@ def db_dir(prm, unit):
     if unit["db"] == "import:w6":
         base = "db-w6"
     else:
-        base = SCRATCH_DBS.get(unit["workload"], "db")
+        base = "db-w5" if unit["db"] == "copy" else SCRATCH_DBS.get(
+            unit["workload"], "db")
     return prm.path_of("work") / base / bin_of(unit["label"])
 
 
@@ -597,6 +668,31 @@ def prepare_db(prm, unit):
                                  prm.path_of("regular"), log)
         marker.touch()
         return {"import": stats}
+    if mode == "copy":
+        src = prm.path_of("work") / "db" / bin_of(unit["label"])
+        src_bytes = du_bytes(src)
+        if src_bytes is None:
+            sys.exit(f"run.py: db-copy source {src} missing — run `run.py prep`")
+        free = shutil.disk_usage(prm.path_of("work")).free
+        if free < src_bytes + 10 * (1 << 30):
+            sys.exit(f"run.py: {free} bytes free on {prm.path_of('work')}, "
+                     f"need {src_bytes} for the db copy plus 10 GiB")
+        if d.exists():
+            shutil.rmtree(d)
+        d.mkdir(parents=True)
+        t0 = time.monotonic()
+        rc = subprocess.call(["cp", "-a", "--reflink=never",
+                              str(src) + "/.", str(d)])
+        wall = time.monotonic() - t0
+        copied = du_bytes(d)
+        if rc != 0 or copied != src_bytes:
+            shutil.rmtree(d, ignore_errors=True)
+            sys.exit(f"run.py: db copy {src} -> {d} failed "
+                     f"(rc={rc}, {copied} of {src_bytes} bytes)")
+        drop_caches()
+        return {"db_copy": {"source": str(src), "source_bytes": src_bytes,
+                            "bytes": copied, "wall_secs": round(wall, 2),
+                            "rc": rc}}
     sys.exit(f"run.py: unknown db mode {mode}")
 
 
@@ -757,7 +853,7 @@ def require_main_dbs(prm, units):
     run when it is missing or holds less than prep stored."""
     records = prep_records(prm)
     for b in sorted({bin_of(u["label"]) for u in units
-                     if u["db"] == "main" and u["kind"] != "relaybench"}):
+                     if u["db"] in ("main", "copy") and u["kind"] != "relaybench"}):
         rec = records.get(b)
         expected = rec["stored"] if rec else None
         db = prm.path_of("work") / "db" / b
@@ -825,25 +921,29 @@ def run_w5ingest_unit(prm, unit, unit_dir):
     run_dir = run_dir_for(prm, unit, unit_dir)
     rep_json = unit_dir / f"rep{unit['rep']}.json"
     rep_log = unit_dir / f"rep{unit['rep']}.log"
-    prepare_db(prm, unit)
-    events_before = count_events(prm, entry, db)
-    proc = start_relay(prm, unit, entry, run_dir)
-    port_up = wait_port(prm.p("net", "port"), proc)
-    warm = port_up and rtt_probe(prm)
-    if port_up:
-        codes, outputs = run_cmds(with_pid(unit["cmds"], proc.pid),
-                                  rep_json, rep_log)
-    else:
-        codes, outputs = [-1], []
-    stop_relay(proc)
-    copy_generated(entry, run_dir, unit_dir)
+    db_copy = (prepare_db(prm, unit) or {}).get("db_copy")
+    try:
+        proc = start_relay(prm, unit, entry, run_dir)
+        port_up = wait_port(prm.p("net", "port"), proc)
+        warm = port_up and rtt_probe(prm)
+        if port_up:
+            codes, outputs = run_cmds(with_pid(unit["cmds"], proc.pid),
+                                      rep_json, rep_log)
+        else:
+            codes, outputs = [-1], []
+        stop_relay(proc)
+        copy_generated(entry, run_dir, unit_dir)
+        db_bytes = du_bytes(db)
+    finally:
+        if db.exists():
+            shutil.rmtree(db)
     valid = port_up and warm and all(c == 0 for c in codes)
     for o in outputs:
         if isinstance(o, dict) and "valid" in o:
             valid = valid and bool(o["valid"])
     return {"cmds_rc": codes, "relay_rc": proc.returncode, "port_up": port_up,
-            "warmup_req": warm, "events_before": events_before,
-            "db_bytes": du_bytes(db), "valid": valid}
+            "warmup_req": warm, "db_copy": db_copy, "db_bytes": db_bytes,
+            "valid": valid}
 
 
 def run_w8_unit(prm, unit, unit_dir):
@@ -901,7 +1001,7 @@ RUNNERS = {"harness": run_harness_unit, "relaybench": run_relaybench_unit,
 # prep / manifest / metadata / status
 # ------------------------------------------------------------------
 
-def write_run_meta(prm):
+def write_run_meta(prm, read_ahead=None):
     bi = prm.path_of("build_info")
     meta = {
         "build_info": bi.read_text() if bi.exists() else None,
@@ -914,6 +1014,7 @@ def write_run_meta(prm):
                          "harness": prm.p("cores", "harness")},
         "params_toml": prm.raw,
         "params_sha256": prm.sha256,
+        "read_ahead": read_ahead,
     }
     results = prm.path_of("results")
     results.mkdir(parents=True, exist_ok=True)
@@ -932,7 +1033,6 @@ def manifest_line(prm, unit, result, t0, t1, unit_dir):
         "exit_codes": result.get("cmds_rc"),
         "relay_rc": result.get("relay_rc"),
         "db_bytes": result.get("db_bytes"),
-        "events_before": result.get("events_before"),
         "restart_ms": result.get("restart_ms"),
         "valid": result.get("valid"),
         "note": unit["note"],
@@ -943,7 +1043,12 @@ def manifest_line(prm, unit, result, t0, t1, unit_dir):
 
 
 def cmd_prep(prm):
-    write_run_meta(prm)
+    with read_ahead_ctx(prm) as rec:
+        write_run_meta(prm, rec)
+        prep_body(prm)
+
+
+def prep_body(prm):
     d2 = prm.path_of("d2")
     events = d2 / "events.jsonl"
     if not events.exists():
@@ -954,26 +1059,29 @@ def cmd_prep(prm):
     # regular.jsonl = exactly the first w6.n regular events each w6
     # rep imports into its own dir. holdout-regular.jsonl = the next
     # slice, sized for w6's additions plus w8's worst-case ingest.
-    n = int(prm.p("w6", "n"))
-    w8 = prm.p("w8")
-    max_diff = max(prm.p("w6", "diff")) / 100.0
-    holdout_need = (int(n * max_diff / 2)
-                    + int(w8["cycles"] * w8["kill_max"] * w8["rate"]))
-    for argv in (
-        [harness, "corpus-filter", "--regular", "--first", str(n),
-         "--in", str(events), "--out", str(prm.path_of("regular"))],
-        [harness, "corpus-filter", "--regular", "--skip", str(n),
-         "--first", str(holdout_need),
-         "--in", str(events), "--out", str(prm.path_of("holdout_regular"))],
-    ):
-        r = subprocess.run(argv)
-        if r.returncode != 0:
-            sys.exit("run.py: corpus-filter failed")
+    if "w6" in prm.cfg and "w8" in prm.cfg:
+        n = int(prm.p("w6", "n"))
+        w8 = prm.p("w8")
+        max_diff = max(prm.p("w6", "diff")) / 100.0
+        holdout_need = (int(n * max_diff / 2)
+                        + int(w8["cycles"] * w8["kill_max"] * w8["rate"]))
+        for argv in (
+            [harness, "corpus-filter", "--regular", "--first", str(n),
+             "--in", str(events), "--out", str(prm.path_of("regular"))],
+            [harness, "corpus-filter", "--regular", "--skip", str(n),
+             "--first", str(holdout_need),
+             "--in", str(events), "--out", str(prm.path_of("holdout_regular"))],
+        ):
+            r = subprocess.run(argv)
+            if r.returncode != 0:
+                sys.exit("run.py: corpus-filter failed")
+    else:
+        print("prep: no [w6]/[w8] in params — skipping corpus-filter")
 
     # One events.jsonl import per relay into work/db/<bin> — the
     # shared db every read-only unit uses; there are no snapshots.
     # A populated db is left in place and only counted.
-    bins = sorted({bin_of(l) for wl in ("w2", "w5", "w6") for l in prm.p(wl, "relays")
+    bins = sorted({bin_of(l) for wl in ("w2", "w5", "w6") for l in prm.cfg.get(wl, {}).get("relays", [])
                    if not bin_of(l).startswith("nostr-rs")})
     import_log = prm.path_of("results") / "prep-imports.jsonl"
     import_log.parent.mkdir(parents=True, exist_ok=True)
@@ -1026,9 +1134,23 @@ def cmd_status(prm):
 
 
 def run_schedule(prm, units, dry_run):
-    if not dry_run:
-        write_run_meta(prm)
+    if dry_run:
+        rec = read_ahead_record(prm)
+        if rec["applied_kb"] is not None:
+            print(f"[dry] read_ahead_kb: would set {rec['path']} "
+                  f"to {rec['applied_kb']} (recorded {rec['original_kb']})")
+        else:
+            print(f"[dry] read_ahead_kb: {rec['path']} "
+                  f"(recorded {rec['original_kb']}, no [host] pin)")
+        run_units(prm, units, dry_run=True)
+        return
+    with read_ahead_ctx(prm) as rec:
+        write_run_meta(prm, rec)
         require_main_dbs(prm, units)
+        run_units(prm, units)
+
+
+def run_units(prm, units, dry_run=False):
     results = prm.path_of("results")
     for u in units:
         unit_dir = results / u["workload"] / u["scenario"] / u["label"]

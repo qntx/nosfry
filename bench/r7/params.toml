@@ -81,6 +81,7 @@ query_warm   = 15
 open_conns   = 32
 ingest_secs  = 60
 ingest_rates = [3000]
+seed         = 1
 
 [w6]
 relays           = ["nosfry-030", "strfry"]
