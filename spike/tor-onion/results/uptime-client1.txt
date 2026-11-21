@@ -1,0 +1,7 @@
+ 1:39  up 6 days, 13:50, 1 user, load averages: 156.45 240.57 234.93
+ 1:40  up 6 days, 13:51, 1 user, load averages: 160.27 232.80 232.36
+ 1:41  up 6 days, 13:51, 1 user, load averages: 135.17 219.95 227.72
+ 1:43  up 6 days, 13:54, 1 user, load averages: 80.65 166.07 204.78
+ 1:52  up 6 days, 14:03, 1 user, load averages: 65.82 85.88 142.75
+ 1:53  up 6 days, 14:04, 1 user, load averages: 54.24 77.94 134.06
+ 1:57  up 6 days, 14:08, 1 user, load averages: 74.74 69.57 114.95

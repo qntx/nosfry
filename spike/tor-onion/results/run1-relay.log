@@ -1,0 +1,7 @@
+READY tcp=127.0.0.1:17890
+PID=81949
+MARK before_arti
+TIMING arti_bootstrap_secs=9.795
+MARK arti_bootstrapped
+ONION_ADDRESS=z6wfl72s6jjy25hosj2nrpjzkdxpspjwegsmurwxpjq5kwhbts43t4ad.onion
+TIMING launch_to_running_secs=9.669

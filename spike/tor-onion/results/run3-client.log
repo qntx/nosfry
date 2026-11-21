@@ -1,0 +1,6 @@
+TIMING arti_bootstrap_secs=0.976
+TIMING first_connect_secs=9.504
+error: read nip11 response
+
+Caused by:
+    Received an END cell with reason MISC

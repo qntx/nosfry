@@ -1,0 +1,7 @@
+ 2:07  up 6 days, 14:18, 1 user, load averages: 84.62 138.33 142.33
+   Compiling yawc v0.5.0
+   Compiling nosfry-lmdb v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/p2p/crates/nosfry-lmdb)
+   Compiling nosfry v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/p2p/crates/nosfry)
+   Compiling tor-onion-spike v0.0.0 (/Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/tor-onion)
+    Finished `release` profile [optimized] target(s) in 3m 22s
+ 2:10  up 6 days, 14:21, 1 user, load averages: 45.62 98.60 124.99

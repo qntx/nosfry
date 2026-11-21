@@ -1,0 +1,38 @@
+[2m2026-11-21T17:52:47.369792Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m TCP listener up [3maddr[0m[2m=[0m127.0.0.1:17890
+READY tcp=127.0.0.1:17890
+PID=18015
+MARK before_arti
+[2m2026-11-21T17:52:47.376352Z[0m [32m INFO[0m [2mtor_memquota::mtracker[0m[2m:[0m Memory quota tracking initialised [3mmax[0m[2m=[0m8.00 GiB [3mlow_water[0m[2m=[0m6.00 GiB
+[2m2026-11-21T17:52:48.256475Z[0m [32m INFO[0m [2mtor_dirmgr[0m[2m:[0m Marked consensus usable.
+[2m2026-11-21T17:52:48.264333Z[0m [32m INFO[0m [2mtor_dirmgr[0m[2m:[0m Loaded a good directory from cache.
+TIMING arti_bootstrap_secs=0.889
+MARK arti_bootstrapped
+[2m2026-11-21T17:52:48.265934Z[0m [32m INFO[0m [2mtor_hsservice[0m[2m:[0m Using existing identity for service nosfry: […]4ad.onion
+[2m2026-11-21T17:52:48.268291Z[0m [32m INFO[0m [2mtor_hsservice[0m[2m:[0m Launching onion service [3mnickname[0m[2m=[0mnosfry
+ONION_ADDRESS=z6wfl72s6jjy25hosj2nrpjzkdxpspjwegsmurwxpjq5kwhbts43t4ad.onion
+[2m2026-11-21T17:52:48.282068Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service launched [3maddress[0m[2m=[0mz6wfl72s6jjy25hosj2nrpjzkdxpspjwegsmurwxpjq5kwhbts43t4ad.onion
+[2m2026-11-21T17:52:48.283643Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mShutdown [3melapsed[0m[2m=[0m0.01922575
+[2m2026-11-21T17:52:48.284501Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mBootstrapping [3melapsed[0m[2m=[0m0.020084542
+[2m2026-11-21T17:52:48.286590Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mBootstrapping [3melapsed[0m[2m=[0m0.022172542
+[2m2026-11-21T17:52:48.288949Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mBootstrapping [3melapsed[0m[2m=[0m0.024530958
+[2m2026-11-21T17:52:48.291763Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mBootstrapping [3melapsed[0m[2m=[0m0.027329875
+[2m2026-11-21T17:52:48.362830Z[0m [32m INFO[0m [2mtor_dirmgr[0m[2m:[0m Marked consensus usable.
+[2m2026-11-21T17:52:48.364694Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mBootstrapping [3melapsed[0m[2m=[0m0.100275667
+[2m2026-11-21T17:52:48.379229Z[0m [32m INFO[0m [2mtor_dirmgr[0m[2m:[0m Directory is complete. [3mattempt[0m[2m=[0m1
+[2m2026-11-21T17:52:50.365698Z[0m [32m INFO[0m [2mtor_guardmgr::guard[0m[2m:[0m We have found that guard [scrubbed] is usable.
+[2m2026-11-21T17:52:50.457530Z[0m [32m INFO[0m [2mtor_guardmgr::guard[0m[2m:[0m We have found that guard [scrubbed] is usable.
+[2m2026-11-21T17:52:51.145094Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mBootstrapping [3melapsed[0m[2m=[0m2.880664125
+[2m2026-11-21T17:52:51.145508Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mBootstrapping [3melapsed[0m[2m=[0m2.881079042
+[2m2026-11-21T17:52:51.272772Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mBootstrapping [3melapsed[0m[2m=[0m3.008341
+[2m2026-11-21T17:52:51.273482Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mBootstrapping [3melapsed[0m[2m=[0m3.009051667
+[2m2026-11-21T17:52:51.935051Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mBootstrapping [3melapsed[0m[2m=[0m3.670616167
+[2m2026-11-21T17:52:54.912503Z[0m [32m INFO[0m [2mtor_hsservice::publish::reactor[0m[2m:[0m reuploading descriptor in 1h 45m [3mtime_period[0m[2m=[0mTimePeriod { interval_num: 20778, length: IntegerMinutes { value: 1440 }, epoch_offset_in_sec: 43200 }
+[2m2026-11-21T17:52:55.566458Z[0m [32m INFO[0m [2mtor_hsservice::publish::reactor[0m[2m:[0m reuploading descriptor in 1h 26m [3mtime_period[0m[2m=[0mTimePeriod { interval_num: 20777, length: IntegerMinutes { value: 1440 }, epoch_offset_in_sec: 43200 }
+[2m2026-11-21T17:52:55.566542Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion service status [3mstate[0m[2m=[0mRunning [3melapsed[0m[2m=[0m7.302093208
+TIMING launch_to_running_secs=7.302
+[2m2026-11-21T17:53:50.063413Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion stream accepted (peer is a rendezvous circuit)
+[2m2026-11-21T17:53:50.935752Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion stream accepted (peer is a rendezvous circuit)
+[2m2026-11-21T17:54:00.064078Z[0m [34mDEBUG[0m [2mtor_onion_spike[0m[2m:[0m connection error [3merr[0m[2m=[0mread header from client timeout
+[2m2026-11-21T17:54:00.938924Z[0m [34mDEBUG[0m [2mtor_onion_spike[0m[2m:[0m connection error [3merr[0m[2m=[0mread header from client timeout
+[2m2026-11-21T17:58:06.077712Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion stream accepted (peer is a rendezvous circuit)
+[2m2026-11-21T17:58:06.785446Z[0m [32m INFO[0m [2monion_relay[0m[2m:[0m onion stream accepted (peer is a rendezvous circuit)

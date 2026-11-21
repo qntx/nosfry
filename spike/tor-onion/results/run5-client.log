@@ -1,0 +1,23 @@
+TIMING arti_bootstrap_secs=0.922
+TIMING first_connect_secs=7.565
+NIP11_STATUS=HTTP/1.1 200 OK
+NIP11_BODY={"limitation":{"auth_required":false,"created_at_lower_limit":94608000,"created_at_upper_limit":900,"default_limit":500,"max_event_tags":2000,"max_limit":500,"max_message_length":131072,"max_subid_length":64,"max_subscriptions":200,"payment_required":false,"restricted_writes":false},"name":"nosfry","software":"https://github.com/qntx/nosfry","supported_nips":[1,9,11,40,42,45,62,70,77],"version":"0.3.0"}
+TIMING first_ws_handshake_secs=9.609
+PUBLISH_OK=["OK","ebdc457f2348f25e11c5e5ff9ba604df50b962fccec0aa4f7b4f2b170643fae2",true,""]
+RESP=["EVENT","spike",{"id":"ebdc457f2348f25e11c5e5ff9ba604df50b962fccec0aa4f7b4f2b170643fae2","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1795283918,"kind":1,"tags":[],"content":"hello over tor","sig":"cbcb323bf4e6d264776578e69c3e2dd57a56a5b549df6ead809b58c182ce1cfe7bec46606a8be4bc38d3dc5a179614fa22d9c0c82fd9fea664572c9f6ae73b28"}]
+RESP=["EOSE","spike"]
+REQ_RESULT=event+eose
+RTT_SAMPLE 0 652.9ms
+RTT_SAMPLE 1 632.4ms
+RTT_SAMPLE 2 631.9ms
+RTT_SAMPLE 3 625.4ms
+RTT_SAMPLE 4 630.6ms
+RTT_SAMPLE 5 638.9ms
+RTT_SAMPLE 6 652.2ms
+RTT_SAMPLE 7 653.8ms
+RTT_SAMPLE 8 724.0ms
+RTT_SAMPLE 9 635.8ms
+RTT_SAMPLE 10 635.0ms
+RTT_SAMPLE 11 900.0ms
+TIMING publish_ok_p50_ms=638.9
+TIMING publish_ok_max_ms=900.0

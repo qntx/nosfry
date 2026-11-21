@@ -1,0 +1,58 @@
+ 2:54  up 6 days, 15:05, 1 user, load averages: 32.14 56.17 70.48
+=== (a) baseline feature-off, CARGO_TARGET_DIR=../target/cold-baseline ===
+   Compiling hyper-util v0.1.21
+   Compiling axum v0.8.9
+   Compiling yawc v0.5.0
+   Compiling nosfry-lmdb v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/p2p/crates/nosfry-lmdb)
+   Compiling nosfry v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/p2p/crates/nosfry)
+   Compiling tor-onion-spike v0.0.0 (/Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/tor-onion)
+    Finished `release` profile [optimized] target(s) in 1m 33s
+       93.55 real       183.00 user        16.82 sys
+           606044160  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             2722299  page reclaims
+               26232  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                 206  signals received
+                5679  voluntary context switches
+              953544  involuntary context switches
+          6177811198  instructions retired
+          3019015977  cycles elapsed
+            92947224  peak memory footprint
+ 2:56  up 6 days, 15:07, 1 user, load averages: 26.13 47.38 65.54
+binary_bytes=4069184
+ 2:56  up 6 days, 15:07, 1 user, load averages: 26.44 47.09 65.33
+=== (b) tor feature-on, CARGO_TARGET_DIR=../target/cold-tor ===
+   Compiling tor-dirclient v0.48.0
+   Compiling tor-hsservice v0.48.0
+   Compiling tor-hsclient v0.48.0
+   Compiling tor-dirmgr v0.48.0
+   Compiling arti-client v0.48.0
+   Compiling tor-onion-spike v0.0.0 (/Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/tor-onion)
+    Finished `release` profile [optimized] target(s) in 5m 24s
+      324.82 real       570.31 user        50.90 sys
+          1423835136  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             7530880  page reclaims
+               56439  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                 542  signals received
+               14688  voluntary context switches
+             3189485  involuntary context switches
+         10344759692  instructions retired
+          6618372741  cycles elapsed
+           132842264  peak memory footprint
+ 3:01  up 6 days, 15:12, 1 user, load averages: 27.21 38.71 56.07
+binary_bytes=12137152

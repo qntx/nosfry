@@ -1,0 +1,11 @@
+TIMING arti_bootstrap_secs=9.039
+error: Received an END cell with reason MISC
+TIMING arti_bootstrap_secs=0.769
+TIMING first_connect_secs=6.138
+error: Received an END cell with reason MISC
+TIMING arti_bootstrap_secs=0.768
+TIMING first_connect_secs=8.581
+error: Received an END cell with reason MISC
+TIMING arti_bootstrap_secs=4.161
+TIMING first_connect_secs=7.274
+error: Received an END cell with reason MISC

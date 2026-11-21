@@ -1,0 +1,7 @@
+[db]
+path = "./db"
+
+[relay]
+bind = "127.0.0.1"
+port = 17890
+service_url = "ws://127.0.0.1:17890"

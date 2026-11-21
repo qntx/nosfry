@@ -1,0 +1,83 @@
+[package]
+name         = "tor-onion-spike"
+version      = "0.0.0"
+edition      = "2024"
+license      = "MIT OR Apache-2.0"
+publish      = false
+rust-version = "1.92"
+
+# Standalone spike: not part of the root workspace.
+[workspace]
+
+[features]
+default = []
+# Pulls in the Arti p2p stack. The `baseline` binary builds without it;
+# `onion-relay` and `onion-client` require it.
+tor = [
+    "dep:anyhow",
+    "dep:arti-client",
+    "dep:rustls",
+    "dep:safelog",
+    "dep:tor-cell",
+    "dep:tor-hsservice",
+    "dep:tor-proto",
+    "dep:tor-rtcompat",
+    "dep:tokio-tungstenite",
+]
+
+[dependencies]
+nosfry      = { path = "../../crates/nosfry" }
+nosfry-core = { path = "../../crates/nosfry-core", features = ["test-util"] }
+
+axum         = "0.8.9"
+clap         = { version = "4.6", features = ["derive"] }
+futures      = "0.3"
+hyper        = { version = "1.12", default-features = false, features = ["http1", "server"] }
+hyper-util   = { version = "0.1.21", default-features = false, features = ["service", "tokio"] }
+serde_json   = "1"
+socket2      = "0.6"
+tokio        = { version = "1.53", features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+tokio-util         = { version = "0.7.20", features = ["rt"] }
+tower              = { version = "0.5.3", features = ["util"] }
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+anyhow            = { version = "1", optional = true }
+safelog           = { version = "0.10", optional = true }
+arti-client       = { version = "=0.48.0", default-features = false, features = [
+    "tokio",
+    "rustls",
+    "onion-service-service",
+    "onion-service-client",
+], optional = true }
+tor-cell          = { version = "=0.48.0", optional = true }
+tor-hsservice     = { version = "=0.48.0", optional = true }
+tor-proto         = { version = "=0.48.0", features = ["tokio"], optional = true }
+tor-rtcompat      = { version = "=0.48.0", optional = true }
+tokio-tungstenite = { version = "=0.30.0", optional = true }
+# Arti's `rustls` feature deliberately pulls rustls with no crypto
+# provider; the application must pick and install one. `ring` keeps the
+# build light vs `aws-lc-rs`. `default-features = false` so that `ring`
+# is the ONLY provider compiled in (otherwise `CryptoProvider` cannot
+# auto-select and `TorClient` panics at bootstrap).
+rustls            = { version = "=0.23.46", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+    "logging",
+], optional = true }
+
+[profile.release]
+codegen-units = 1
+lto           = "thin"
+panic         = "abort"
+strip         = true
