@@ -1,0 +1,394 @@
+[
+  {
+    "name": "search filter",
+    "a": {
+      "end": "EOSE",
+      "n": 5
+    },
+    "b": {
+      "end": "CLOSED",
+      "reason": "unsupported: search (NIP-50) is not supported",
+      "n": 0
+    }
+  },
+  {
+    "name": "kinds:[1] no limit",
+    "a": {
+      "end": "EOSE",
+      "n": 1153
+    },
+    "b": {
+      "end": "EOSE",
+      "n": 500
+    }
+  },
+  {
+    "name": "kinds:[1] limit 1000",
+    "a": {
+      "end": "EOSE",
+      "n": 1000
+    },
+    "b": {
+      "end": "EOSE",
+      "n": 500
+    }
+  },
+  {
+    "name": "empty filter {} no limit",
+    "a": {
+      "end": "EOSE",
+      "n": 1219
+    },
+    "b": {
+      "end": "EOSE",
+      "n": 500
+    }
+  },
+  {
+    "name": "4 tag conditions",
+    "a": {
+      "end": "EOSE",
+      "n": 0
+    },
+    "b": {
+      "end": "CLOSED",
+      "reason": "invalid: filter has too many tag conditions",
+      "n": 0
+    }
+  },
+  {
+    "name": "uppercase hex author",
+    "a": {
+      "end": "EOSE",
+      "n": 1
+    },
+    "b": {
+      "end": "EOSE",
+      "n": 1
+    }
+  },
+  {
+    "name": "hex prefix author",
+    "a": {
+      "end": "NOTICE",
+      "reason": "error: filter authors values must be 64-char hex",
+      "n": 0
+    },
+    "aNotices": [
+      "error: filter authors values must be 64-char hex"
+    ],
+    "b": {
+      "end": "CLOSED",
+      "reason": "invalid: `authors` values must be 64 hex chars",
+      "n": 0
+    }
+  },
+  {
+    "name": "empty authors list",
+    "a": {
+      "end": "NOTICE",
+      "reason": "error: filter authors must not be empty",
+      "n": 0
+    },
+    "aNotices": [
+      "error: filter authors must not be empty"
+    ],
+    "b": {
+      "end": "EOSE",
+      "n": 0
+    }
+  },
+  {
+    "name": "unknown key",
+    "a": {
+      "end": "EOSE",
+      "n": 1
+    },
+    "b": {
+      "end": "CLOSED",
+      "reason": "unsupported: unrecognised filter item: foo",
+      "n": 0
+    }
+  },
+  {
+    "name": "kinds 1059 only (restricted)",
+    "a": {
+      "end": "EOSE",
+      "n": 1
+    },
+    "b": {
+      "end": "EOSE",
+      "n": 0
+    }
+  },
+  {
+    "name": "kinds 4 only (restricted)",
+    "a": {
+      "end": "EOSE",
+      "n": 0
+    },
+    "b": {
+      "end": "EOSE",
+      "n": 0
+    }
+  },
+  {
+    "name": "201 filters",
+    "a": {
+      "end": "EOSE",
+      "n": 0
+    },
+    "b": {
+      "end": "CLOSED",
+      "reason": "invalid: too many filters in request",
+      "n": 0
+    }
+  },
+  {
+    "name": "sub id 65 chars",
+    "a": {
+      "end": "EOSE",
+      "ids": [
+        "964edb51c530555354b997b727f28b41025ba6609dc0b4a6bc0fcf7ebc81d056"
+      ],
+      "ms": 3
+    },
+    "b": {
+      "end": "NOTICE",
+      "reason": "invalid: subscription id must be 1..=64 chars",
+      "ids": [],
+      "ms": 0
+    },
+    "bNotices": [
+      "invalid: subscription id must be 1..=64 chars"
+    ]
+  },
+  {
+    "name": "COUNT kinds:[1]",
+    "a": {
+      "end": "COUNT",
+      "count": {
+        "count": 1153
+      }
+    },
+    "b": {
+      "end": "COUNT",
+      "count": {
+        "count": 1148
+      }
+    }
+  },
+  {
+    "name": "COUNT #p hll-eligible",
+    "a": {
+      "end": "COUNT",
+      "count": {
+        "count": 1
+      }
+    },
+    "b": {
+      "end": "COUNT",
+      "count": {
+        "count": 1,
+        "hll": "00000000000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      }
+    }
+  },
+  {
+    "name": "EVENT created_at 1700000000 (fixture era)",
+    "a": {
+      "ok": true,
+      "reason": ""
+    },
+    "b": {
+      "ok": false,
+      "reason": "invalid: created_at is too far in the past"
+    }
+  },
+  {
+    "name": "EVENT created_at now+3600",
+    "a": {
+      "ok": true,
+      "reason": ""
+    },
+    "b": {
+      "ok": false,
+      "reason": "invalid: created_at is too far in the future"
+    }
+  },
+  {
+    "name": "EVENT fresh kind 1",
+    "a": {
+      "ok": true,
+      "reason": ""
+    },
+    "b": {
+      "ok": true,
+      "reason": ""
+    }
+  },
+  {
+    "name": "EVENT duplicate",
+    "a": {
+      "ok": true,
+      "reason": "duplicate: already have this event"
+    },
+    "b": {
+      "ok": true,
+      "reason": "duplicate: have this event"
+    }
+  },
+  {
+    "name": "replaceable: newer then older kind 0",
+    "a": [
+      {
+        "ok": true,
+        "reason": ""
+      },
+      {
+        "ok": false,
+        "reason": "invalid: a newer version of this event exists"
+      }
+    ],
+    "b": [
+      {
+        "ok": true,
+        "reason": ""
+      },
+      {
+        "ok": false,
+        "reason": "duplicate: have a newer version"
+      }
+    ]
+  },
+  {
+    "name": "EVENT kind 22242",
+    "a": {
+      "ok": true,
+      "reason": ""
+    },
+    "b": {
+      "ok": false,
+      "reason": "invalid: kind 22242 events are only accepted in AUTH"
+    }
+  },
+  {
+    "name": "EVENT p tag not hex",
+    "a": {
+      "ok": true,
+      "reason": ""
+    },
+    "b": {
+      "ok": false,
+      "reason": "invalid: field `tags` must be e/p first values of 64 lowercase hex chars"
+    }
+  },
+  {
+    "name": "EVENT protected (NIP-70) unauthenticated",
+    "a": {
+      "ok": true,
+      "reason": ""
+    },
+    "b": {
+      "ok": false,
+      "reason": "blocked: event marked as protected"
+    }
+  },
+  {
+    "name": "EVENT kind 1059 then REQ it",
+    "a": [
+      {
+        "ok": true,
+        "reason": ""
+      },
+      {
+        "end": "EOSE",
+        "ids": [
+          "440dd67278893448f8841702fdda285b5f3ffe16a7de5538a93cc767454e36c0"
+        ],
+        "ms": 0
+      }
+    ],
+    "b": [
+      {
+        "ok": true,
+        "reason": ""
+      },
+      {
+        "end": "EOSE",
+        "ids": [
+          "440dd67278893448f8841702fdda285b5f3ffe16a7de5538a93cc767454e36c0"
+        ],
+        "ms": 0
+      }
+    ]
+  },
+  {
+    "name": "NIP-09: delete then REQ then republish",
+    "a": {
+      "publish": {
+        "ok": true,
+        "reason": ""
+      },
+      "delete": {
+        "ok": true,
+        "reason": ""
+      },
+      "reqAfter": 0,
+      "republish": {
+        "ok": true,
+        "reason": "duplicate: already have this event"
+      }
+    },
+    "b": {
+      "publish": {
+        "ok": true,
+        "reason": ""
+      },
+      "delete": {
+        "ok": true,
+        "reason": ""
+      },
+      "reqAfter": 0,
+      "republish": {
+        "ok": false,
+        "reason": "blocked: deleted by its author"
+      }
+    }
+  },
+  {
+    "name": "ephemeral: publish then REQ",
+    "a": {
+      "ok": {
+        "ok": true,
+        "reason": ""
+      },
+      "stored": 0
+    },
+    "b": {
+      "ok": {
+        "ok": true,
+        "reason": ""
+      },
+      "stored": 0
+    }
+  },
+  {
+    "name": "AUTH challenge on connect",
+    "a": "none",
+    "b": "none"
+  },
+  {
+    "name": "NIP-11 GET /",
+    "a": {
+      "status": 426,
+      "type": "text/plain; charset=utf-8",
+      "body": "WebSocket endpoint — connect with the `ws:` scheme."
+    },
+    "b": {
+      "status": 200,
+      "type": "application/nostr+json",
+      "body": "{\"limitation\":{\"auth_required\":false,\"created_at_lower_limit\":94608000,\"created_at_upper_limit\":900,\"default_limit\":500,\"max_event_tags\":2000,\"max_limit\":500,\"max_message_length\":131072,\"max_subid_length\":64,\"max_subscriptions\":200,\"payment_required\":false,\"restricted_writes\":false},\"name\":\"nosfry\",\"software\":\"https://github.com/qntx/nosfry\",\"supported_nips\":[1,9,11,40,45,62,70,77],\"version\":\"0.3.0\"}"
+    }
+  }
+]

@@ -1,0 +1,88 @@
+{
+  "tally": {
+    "same": 167,
+    "order": 1,
+    "outcome": 1266
+  },
+  "distinct": 1434,
+  "closedReasons": [
+    {
+      "reason": null,
+      "n": 1
+    },
+    {
+      "reason": "rate-limited: slow down",
+      "n": 1266
+    }
+  ],
+  "otherDifferences": [
+    {
+      "verb": "REQ",
+      "path": "/",
+      "occurrences": 29,
+      "filters": [
+        {
+          "#e": [
+            "00000f94fdf8c3c4cefc0cb7316c049340b05a2bb1f175db6789a84c15ca1ab7",
+            "26a77aaec251b1bd4095044308f2c2019c084d5276695395213436ebff747985",
+            "522407680778233c6f6bd5521955ca1af7e5f0ba0f641869215a546accb112f9",
+            "5333defb12284eb6c63fabc996fbc9e092b64a3d6d9630c0c9e0177b28aa4dad",
+            "8f3f13de64fa623b96d1b051bd7242d3c9bd006926386c17653da83c8f450d84",
+            "8f67528dd883be11b805c3bf7dd90967a0cfc933fc522d11f2a64b201b9bcd21",
+            "a1dc3d9922100d0c48e4381d3daedff84edb7e1413d9a9c82dbc8ab4815ca892"
+          ],
+          "kinds": [
+            1,
+            1111
+          ],
+          "limit": 700
+        },
+        {
+          "#e": [
+            "00000f94fdf8c3c4cefc0cb7316c049340b05a2bb1f175db6789a84c15ca1ab7",
+            "26a77aaec251b1bd4095044308f2c2019c084d5276695395213436ebff747985",
+            "522407680778233c6f6bd5521955ca1af7e5f0ba0f641869215a546accb112f9",
+            "5333defb12284eb6c63fabc996fbc9e092b64a3d6d9630c0c9e0177b28aa4dad",
+            "8f3f13de64fa623b96d1b051bd7242d3c9bd006926386c17653da83c8f450d84",
+            "8f67528dd883be11b805c3bf7dd90967a0cfc933fc522d11f2a64b201b9bcd21",
+            "a1dc3d9922100d0c48e4381d3daedff84edb7e1413d9a9c82dbc8ab4815ca892"
+          ],
+          "kinds": [
+            6,
+            16
+          ],
+          "limit": 700
+        },
+        {
+          "#e": [
+            "00000f94fdf8c3c4cefc0cb7316c049340b05a2bb1f175db6789a84c15ca1ab7",
+            "26a77aaec251b1bd4095044308f2c2019c084d5276695395213436ebff747985",
+            "522407680778233c6f6bd5521955ca1af7e5f0ba0f641869215a546accb112f9",
+            "5333defb12284eb6c63fabc996fbc9e092b64a3d6d9630c0c9e0177b28aa4dad",
+            "8f3f13de64fa623b96d1b051bd7242d3c9bd006926386c17653da83c8f450d84",
+            "8f67528dd883be11b805c3bf7dd90967a0cfc933fc522d11f2a64b201b9bcd21",
+            "a1dc3d9922100d0c48e4381d3daedff84edb7e1413d9a9c82dbc8ab4815ca892"
+          ],
+          "kinds": [
+            7
+          ],
+          "limit": 700
+        }
+      ],
+      "verdict": "order",
+      "a": {
+        "end": "EOSE",
+        "n": 22,
+        "ms": 0
+      },
+      "b": {
+        "end": "EOSE",
+        "n": 22,
+        "ms": 1
+      },
+      "onlyA": [],
+      "onlyB": [],
+      "firstOrderDiff": 0
+    }
+  ]
+}
