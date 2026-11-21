@@ -1,0 +1,4 @@
+conformance suite: crates/nosfry-conformance/run.sh remote (30 tests)
+control: plain TCP ws://127.0.0.1:17891            -> 30 passed; 0 failed; finished in 3.13s
+gateway direct (127.0.0.1:17892 -> QUIC stream)    -> 30 passed; 0 failed; finished in 3.13s
+gateway local-relay-only (127.0.0.1:17892 -> iroh-relay :3340) -> 30 passed; 0 failed; finished in 3.13s

@@ -1,0 +1,79 @@
+TIMING endpoint_bind_ms=38.6
+ENDPOINT_ID=02fa93c06e19ccbfb289c966d4dd3ed2e66f3e3a978c1ce65f6f71a28edf650f
+CONNECT 0 25.0ms
+PATH 0 remote=relay:http://127.0.0.1:3340/ kind=relay selected=true
+WS_HANDSHAKE 0 5.0ms
+TOTAL_CONNECT 0 30.0ms
+PUBLISH_OK=["OK","519045c37554a8a54ac2b8d1aeee4023352eaefe3b0c254befa16cef354a0415",true,""]
+RESP=["EVENT","spike",{"id":"519045c37554a8a54ac2b8d1aeee4023352eaefe3b0c254befa16cef354a0415","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1795285942,"kind":1,"tags":[],"content":"hello over iroh","sig":"2d7aedfbfa1e36825dd0af5848cd2e1b98a2a52e07a9cffc14954fedafff5e7873bba7074997a45c802a6b6e6a1e4e2122110caeaf63690b7971f49384d55bd5"}]
+RESP=["EOSE","spike"]
+REQ_RESULT=event+eose
+CONNECT 1 27.8ms
+PATH 1 remote=relay:http://127.0.0.1:3340/ kind=relay selected=true
+WS_HANDSHAKE 1 2.2ms
+TOTAL_CONNECT 1 30.0ms
+CONNECT 2 6.5ms
+PATH 2 remote=relay:http://127.0.0.1:3340/ kind=relay selected=true
+WS_HANDSHAKE 2 1.0ms
+TOTAL_CONNECT 2 7.5ms
+CONNECT 3 2.5ms
+PATH 3 remote=relay:http://127.0.0.1:3340/ kind=relay selected=true
+WS_HANDSHAKE 3 0.6ms
+TOTAL_CONNECT 3 3.1ms
+CONNECT 4 1.4ms
+PATH 4 remote=relay:http://127.0.0.1:3340/ kind=relay selected=true
+WS_HANDSHAKE 4 0.4ms
+TOTAL_CONNECT 4 1.7ms
+RTT_SAMPLE 0 52.3ms
+RTT_SAMPLE 1 10.2ms
+RTT_SAMPLE 2 10.3ms
+RTT_SAMPLE 3 10.4ms
+RTT_SAMPLE 4 5.2ms
+RTT_SAMPLE 5 4.8ms
+RTT_SAMPLE 6 5.5ms
+RTT_SAMPLE 7 4.9ms
+RTT_SAMPLE 8 8.8ms
+RTT_SAMPLE 9 7.9ms
+TIMING publish_ok_p50_ms=8.8
+TIMING publish_ok_max_ms=52.3
+[2m2026-11-21T18:32:22.785000Z[0m [31mERROR[0m [2miroh::socket[0m[2m:[0m Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+TIMING endpoint_bind_ms=4.1
+ENDPOINT_ID=02fa93c06e19ccbfb289c966d4dd3ed2e66f3e3a978c1ce65f6f71a28edf650f
+CONNECT 0 3.4ms
+PATH 0 remote=relay:http://127.0.0.1:3340/ kind=relay selected=true
+WS_HANDSHAKE 0 0.8ms
+TOTAL_CONNECT 0 4.2ms
+PUBLISH_OK=["OK","519045c37554a8a54ac2b8d1aeee4023352eaefe3b0c254befa16cef354a0415",true,"duplicate: have this event"]
+RESP=["EVENT","spike",{"id":"519045c37554a8a54ac2b8d1aeee4023352eaefe3b0c254befa16cef354a0415","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1795285942,"kind":1,"tags":[],"content":"hello over iroh","sig":"2d7aedfbfa1e36825dd0af5848cd2e1b98a2a52e07a9cffc14954fedafff5e7873bba7074997a45c802a6b6e6a1e4e2122110caeaf63690b7971f49384d55bd5"}]
+RESP=["EOSE","spike"]
+REQ_RESULT=event+eose
+CONNECT 1 1.0ms
+PATH 1 remote=relay:http://127.0.0.1:3340/ kind=relay selected=true
+WS_HANDSHAKE 1 0.4ms
+TOTAL_CONNECT 1 1.4ms
+CONNECT 2 0.7ms
+PATH 2 remote=relay:http://127.0.0.1:3340/ kind=relay selected=true
+WS_HANDSHAKE 2 0.5ms
+TOTAL_CONNECT 2 1.2ms
+CONNECT 3 1.3ms
+PATH 3 remote=relay:http://127.0.0.1:3340/ kind=relay selected=true
+WS_HANDSHAKE 3 0.5ms
+TOTAL_CONNECT 3 1.8ms
+CONNECT 4 0.9ms
+PATH 4 remote=relay:http://127.0.0.1:3340/ kind=relay selected=true
+WS_HANDSHAKE 4 0.4ms
+TOTAL_CONNECT 4 1.3ms
+RTT_SAMPLE 0 60.0ms
+RTT_SAMPLE 1 16.0ms
+RTT_SAMPLE 2 13.6ms
+RTT_SAMPLE 3 8.5ms
+RTT_SAMPLE 4 17.9ms
+RTT_SAMPLE 5 10.8ms
+RTT_SAMPLE 6 8.2ms
+RTT_SAMPLE 7 6.6ms
+RTT_SAMPLE 8 4.6ms
+RTT_SAMPLE 9 6.1ms
+TIMING publish_ok_p50_ms=10.8
+TIMING publish_ok_max_ms=60.0
+[2m2026-11-21T18:32:23.033204Z[0m [31mERROR[0m [2miroh::socket[0m[2m:[0m Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+[2m2026-11-21T18:32:23.033252Z[0m [31mERROR[0m [2mnoq::connection[0m[2m:[0m I/O error: connection closed

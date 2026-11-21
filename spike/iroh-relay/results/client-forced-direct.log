@@ -1,0 +1,35 @@
+TIMING endpoint_bind_ms=9.3
+ENDPOINT_ID=02fa93c06e19ccbfb289c966d4dd3ed2e66f3e3a978c1ce65f6f71a28edf650f
+[2m2026-11-21T18:27:41.314626Z[0m [31mERROR[0m [2miroh::socket[0m[2m:[0m Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+error: iroh connect
+
+Caused by:
+    0: timed out
+    1: timed out
+    2: timed out
+CONNECT 0 1.3ms
+PATH 0 remote=ip:127.0.0.1:57690 kind=ip selected=true
+TOTAL_CONNECT 0 7.1ms
+CONNECT 1 1.0ms
+TOTAL_CONNECT 1 1.4ms
+CONNECT 2 0.8ms
+TOTAL_CONNECT 2 1.3ms
+CONNECT 3 1.2ms
+TOTAL_CONNECT 3 2.4ms
+CONNECT 4 0.7ms
+TOTAL_CONNECT 4 1.0ms
+TIMING publish_ok_p50_ms=6.8
+TIMING publish_ok_max_ms=13.2
+CONNECT 0 4.3ms
+PATH 0 remote=ip:127.0.0.1:57690 kind=ip selected=true
+TOTAL_CONNECT 0 5.1ms
+CONNECT 1 1.0ms
+TOTAL_CONNECT 1 2.6ms
+CONNECT 2 1.3ms
+TOTAL_CONNECT 2 1.7ms
+CONNECT 3 4.8ms
+TOTAL_CONNECT 3 5.0ms
+CONNECT 4 1.2ms
+TOTAL_CONNECT 4 1.6ms
+TIMING publish_ok_p50_ms=4.9
+TIMING publish_ok_max_ms=9.5

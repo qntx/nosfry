@@ -1,0 +1,9 @@
+TIMING endpoint_bind_ms=6.1
+ENDPOINT_ID=95c4ce861bf80b18d93fbf4fc7823c4269e5ec60408bb0c528b8923ef1dda66f
+[2m2026-11-21T18:34:44.764690Z[0m [31mERROR[0m [2miroh::socket[0m[2m:[0m Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+error: iroh connect
+
+Caused by:
+    0: timed out
+    1: timed out
+    2: timed out

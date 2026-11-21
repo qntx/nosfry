@@ -1,0 +1,78 @@
+TIMING endpoint_bind_ms=6.4
+ENDPOINT_ID=02fa93c06e19ccbfb289c966d4dd3ed2e66f3e3a978c1ce65f6f71a28edf650f
+[2m2026-11-21T18:21:22.121230Z[0m [31mERROR[0m [2miroh::socket[0m[2m:[0m Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+error: iroh connect
+
+Caused by:
+    0: timed out
+    1: timed out
+    2: timed out
+TIMING endpoint_bind_ms=6.9
+ENDPOINT_ID=02fa93c06e19ccbfb289c966d4dd3ed2e66f3e3a978c1ce65f6f71a28edf650f
+CONNECT 0 1401.7ms
+PATH 0 remote=relay:https://euc1-1.relay.n0.iroh.link./ kind=relay selected=true
+WS_HANDSHAKE 0 726.3ms
+TOTAL_CONNECT 0 2128.1ms
+PUBLISH_OK=["OK","8ff4074cb2d88534cd499c22f4b61d230b4085798723b22cc050450902e41305",true,""]
+RESP=["EVENT","spike",{"id":"8ff4074cb2d88534cd499c22f4b61d230b4085798723b22cc050450902e41305","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1795285284,"kind":1,"tags":[],"content":"hello over iroh","sig":"83cbc2c811c220b5d4f009080d16bd38c6870ca6b9b48243927467558429e4650fffe0997d84ba35d0899abe636a2fa0db515ed29f42f49eddefea8ec4dcd7cb"}]
+RESP=["EOSE","spike"]
+REQ_RESULT=event+eose
+[2m2026-11-21T18:21:55.454526Z[0m [31mERROR[0m [2miroh::socket[0m[2m:[0m Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+error: iroh connect
+
+Caused by:
+    0: timed out
+    1: timed out
+    2: timed out
+TIMING endpoint_bind_ms=6.6
+ENDPOINT_ID=02fa93c06e19ccbfb289c966d4dd3ed2e66f3e3a978c1ce65f6f71a28edf650f
+CONNECT 0 1476.2ms
+PATH 0 remote=relay:https://euc1-1.relay.n0.iroh.link./ kind=relay selected=true
+WS_HANDSHAKE 0 757.9ms
+TOTAL_CONNECT 0 2234.1ms
+PUBLISH_OK=["OK","97bdff370cfd09e431d405c7336de8adc4961d1309faaf4f7df7ce0971ea55c0",true,""]
+RESP=["EVENT","spike",{"id":"97bdff370cfd09e431d405c7336de8adc4961d1309faaf4f7df7ce0971ea55c0","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1795285317,"kind":1,"tags":[],"content":"hello over iroh","sig":"e46368fac4e766796dbc054462482d23668b08d2b4b48a90cff01d089c749c9f358bb447432fed3e391b3243a2425d81b8bc0308538b4fc63681b70e9bb33841"}]
+RESP=["EOSE","spike"]
+REQ_RESULT=event+eose
+[2m2026-11-21T18:22:28.860561Z[0m [31mERROR[0m [2miroh::socket[0m[2m:[0m Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+error: iroh connect
+
+Caused by:
+    0: timed out
+    1: timed out
+    2: timed out
+TIMING endpoint_bind_ms=4.1
+ENDPOINT_ID=02fa93c06e19ccbfb289c966d4dd3ed2e66f3e3a978c1ce65f6f71a28edf650f
+[2m2026-11-21T18:22:58.876031Z[0m [31mERROR[0m [2miroh::socket[0m[2m:[0m Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+error: iroh connect
+
+Caused by:
+    0: timed out
+    1: timed out
+    2: timed out
+TIMING endpoint_bind_ms=5.3
+ENDPOINT_ID=02fa93c06e19ccbfb289c966d4dd3ed2e66f3e3a978c1ce65f6f71a28edf650f
+CONNECT 0 1326.0ms
+PATH 0 remote=relay:https://euc1-1.relay.n0.iroh.link./ kind=relay selected=true
+WS_HANDSHAKE 0 697.5ms
+TOTAL_CONNECT 0 2023.5ms
+PUBLISH_OK=["OK","038e2d076257fa2018bee789a2c05ba0f48cb44c710eab9f115ae459e2ff2e64",true,""]
+RESP=["EVENT","spike",{"id":"038e2d076257fa2018bee789a2c05ba0f48cb44c710eab9f115ae459e2ff2e64","pubkey":"79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798","created_at":1795285380,"kind":1,"tags":[],"content":"hello over iroh","sig":"3da5c18a2f8256d68bb5feef170d478675375777561ccd748aa7f1b500569a50469f6d33eb20b420ede8c0a623a4e2b35ee92942d8b5d700762b8cf8af5c0fb5"}]
+RESP=["EOSE","spike"]
+REQ_RESULT=event+eose
+[2m2026-11-21T18:23:32.070713Z[0m [31mERROR[0m [2miroh::socket[0m[2m:[0m Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+error: iroh connect
+
+Caused by:
+    0: timed out
+    1: timed out
+    2: timed out
+TIMING endpoint_bind_ms=14.0
+ENDPOINT_ID=02fa93c06e19ccbfb289c966d4dd3ed2e66f3e3a978c1ce65f6f71a28edf650f
+[2m2026-11-21T18:24:02.099964Z[0m [31mERROR[0m [2miroh::socket[0m[2m:[0m Endpoint dropped without calling `Endpoint::close`. Aborting ungracefully.
+error: iroh connect
+
+Caused by:
+    0: timed out
+    1: timed out
+    2: timed out

@@ -1,0 +1,29 @@
+ 3:01  up 6 days, 15:12, 1 user, load averages: 25.91 38.25 55.80
+=== (c) iroh feature-on, CARGO_TARGET_DIR=../target/cold-iroh ===
+   Compiling nosfry-lmdb v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/p2p/crates/nosfry-lmdb)
+   Compiling yawc v0.5.0
+   Compiling backon v1.6.0
+   Compiling tokio-tungstenite v0.30.0
+   Compiling nosfry v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/p2p/crates/nosfry)
+   Compiling iroh-relay-spike v0.0.0 (/Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay)
+    Finished `release` profile [optimized] target(s) in 8m 07s
+      487.95 real       482.98 user        30.90 sys
+          1144684544  maximum resident set size
+                   0  average shared memory size
+                   0  average unshared data size
+                   0  average unshared stack size
+             5732449  page reclaims
+               68199  page faults
+                   0  swaps
+                   0  block input operations
+                   0  block output operations
+                   0  messages sent
+                   0  messages received
+                 382  signals received
+                9596  voluntary context switches
+             1677959  involuntary context switches
+          9271494686  instructions retired
+          5083012114  cycles elapsed
+            98599680  peak memory footprint
+ 3:09  up 6 days, 15:20, 1 user, load averages: 57.45 44.33 49.89
+binary_bytes=11635680

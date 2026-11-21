@@ -1,0 +1,2 @@
+ 2:32  up 6 days, 14:43, 1 user, load averages: 46.20 46.84 72.24
+ 2:33  up 6 days, 14:44, 1 user, load averages: 44.03 46.29 71.30

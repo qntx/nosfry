@@ -1,0 +1,2498 @@
+error[rejected]: failed to satisfy license requirements
+   ┌─ /Users/xu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/async_io_stream-0.3.3/Cargo.toml:23:12
+   │
+23 │ license = "Unlicense"
+   │            ━━━━━━━━━
+   │            │
+   │            rejected: license is not explicitly allowed
+   │
+   ├ Unlicense - The Unlicense:
+   ├   - OSI approved
+   ├   - FSF Free/Libre
+   ├ async_io_stream v0.3.3
+     └── ws_stream_wasm v0.7.5
+         └── iroh-relay v1.4.1
+             ├── iroh v1.4.1
+             │   └── iroh-relay-spike v0.0.0
+             └── iroh-relay-spike v0.0.0 (*)
+
+warning[no-license-field]: license expression was not specified in manifest for crate 'iroh-relay-spike = 0.0.0'
+ ├ iroh-relay-spike v0.0.0
+
+warning[unlicensed]: a valid license expression could not be retrieved for the crate
+  ┌─ path+file:///Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay#iroh-relay-spike@0.0.0-synthesized.toml:2:9
+  │
+2 │ name = "iroh-relay-spike"
+  │         ━━━━━━━━━━━━━━━━
+  │
+  ├ iroh-relay-spike v0.0.0 (*)
+
+error[unlicensed]: iroh-relay-spike = 0.0.0 is unlicensed
+ ├ iroh-relay-spike v0.0.0 (*)
+
+error[rejected]: failed to satisfy license requirements
+   ┌─ /Users/xu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/pharos-0.5.3/Cargo.toml:23:12
+   │
+23 │ license = "Unlicense"
+   │            ━━━━━━━━━
+   │            │
+   │            rejected: license is not explicitly allowed
+   │
+   ├ Unlicense - The Unlicense:
+   ├   - OSI approved
+   ├   - FSF Free/Libre
+   ├ pharos v0.5.3
+     ├── async_io_stream v0.3.3
+     │   └── ws_stream_wasm v0.7.5
+     │       └── iroh-relay v1.4.1
+     │           ├── iroh v1.4.1
+     │           │   └── iroh-relay-spike v0.0.0
+     │           └── iroh-relay-spike v0.0.0 (*)
+     └── ws_stream_wasm v0.7.5 (*)
+
+error[rejected]: failed to satisfy license requirements
+   ┌─ /Users/xu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ws_stream_wasm-0.7.5/Cargo.toml:45:12
+   │
+45 │ license = "Unlicense"
+   │            ━━━━━━━━━
+   │            │
+   │            rejected: license is not explicitly allowed
+   │
+   ├ Unlicense - The Unlicense:
+   ├   - OSI approved
+   ├   - FSF Free/Libre
+   ├ ws_stream_wasm v0.7.5
+     └── iroh-relay v1.4.1
+         ├── iroh v1.4.1
+         │   └── iroh-relay-spike v0.0.0
+         └── iroh-relay-spike v0.0.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'base64'
+   ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:22:1
+   │  
+22 │ ╭ base64 0.22.1 registry+https://github.com/rust-lang/crates.io-index
+23 │ │ base64 0.23.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ base64 v0.22.1
+     ├── attohttpc v0.30.1
+     │   └── igd-next v0.17.1
+     │       └── portmapper v0.19.3
+     │           └── iroh v1.4.1
+     │               └── iroh-relay-spike v0.0.0
+     ├── portmapper v0.19.3 (*)
+     ├── tokio-websockets v0.13.3
+     │   └── iroh-relay v1.4.1
+     │       ├── iroh v1.4.1 (*)
+     │       └── iroh-relay-spike v0.0.0 (*)
+     └── yawc v0.5.0
+         └── nosfry v0.3.0
+             └── iroh-relay-spike v0.0.0 (*)
+   ├ base64 v0.23.1
+     ├── hyper-util v0.1.21
+     │   ├── axum v0.8.9
+     │   │   ├── iroh-relay-spike v0.0.0
+     │   │   └── nosfry v0.3.0
+     │   │       └── iroh-relay-spike v0.0.0 (*)
+     │   ├── hyper-rustls v0.27.10
+     │   │   └── reqwest v0.13.5
+     │   │       ├── iroh v1.4.1
+     │   │       │   └── iroh-relay-spike v0.0.0 (*)
+     │   │       ├── iroh-relay v1.4.1
+     │   │       │   ├── iroh v1.4.1 (*)
+     │   │       │   └── iroh-relay-spike v0.0.0 (*)
+     │   │       └── n0-dns-resolver v0.1.1
+     │   │           └── iroh-dns v1.4.1
+     │   │               ├── iroh v1.4.1 (*)
+     │   │               ├── iroh-relay v1.4.1 (*)
+     │   │               └── iroh-relay-spike v0.0.0 (*)
+     │   ├── igd-next v0.17.1
+     │   │   └── portmapper v0.19.3
+     │   │       └── iroh v1.4.1 (*)
+     │   ├── iroh-relay v1.4.1 (*)
+     │   ├── iroh-relay-spike v0.0.0 (*)
+     │   ├── nosfry v0.3.0 (*)
+     │   ├── portmapper v0.19.3 (*)
+     │   ├── reqwest v0.13.5 (*)
+     │   └── yawc v0.5.0
+     │       └── nosfry v0.3.0 (*)
+     ├── nosfry-core v0.3.0
+     │   ├── iroh-relay-spike v0.0.0 (*)
+     │   ├── nosfry v0.3.0 (*)
+     │   └── nosfry-lmdb v0.3.0
+     │       └── nosfry v0.3.0 (*)
+     ├── plist v1.10.4
+     │   ├── netdev v0.45.1
+     │   │   └── netwatch v0.19.3
+     │   │       ├── iroh v1.4.1 (*)
+     │   │       └── portmapper v0.19.3 (*)
+     │   └── netdev v0.46.3
+     │       └── netwatch v0.19.3 (*)
+     └── reqwest v0.13.5 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'block-buffer'
+   ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:27:1
+   │  
+27 │ ╭ block-buffer 0.10.4 registry+https://github.com/rust-lang/crates.io-index
+28 │ │ block-buffer 0.12.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰─────────────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ block-buffer v0.10.4
+     └── digest v0.10.7
+         └── sha1 v0.10.7
+             └── yawc v0.5.0
+                 └── nosfry v0.3.0
+                     └── iroh-relay-spike v0.0.0
+   ├ block-buffer v0.12.1
+     └── digest v0.11.3
+         ├── curve25519-dalek v5.0.0
+         │   ├── ed25519-dalek v3.0.0
+         │   │   ├── iroh v1.4.1
+         │   │   │   └── iroh-relay-spike v0.0.0
+         │   │   └── iroh-base v1.4.1
+         │   │       ├── iroh v1.4.1 (*)
+         │   │       ├── iroh-dns v1.4.1
+         │   │       │   ├── iroh v1.4.1 (*)
+         │   │       │   ├── iroh-relay v1.4.1
+         │   │       │   │   ├── iroh v1.4.1 (*)
+         │   │       │   │   └── iroh-relay-spike v0.0.0 (*)
+         │   │       │   └── iroh-relay-spike v0.0.0 (*)
+         │   │       ├── iroh-relay v1.4.1 (*)
+         │   │       └── iroh-relay-spike v0.0.0 (*)
+         │   └── iroh-base v1.4.1 (*)
+         ├── sha1 v0.11.0
+         │   └── tungstenite v0.30.0
+         │       └── tokio-tungstenite v0.30.0
+         │           └── iroh-relay-spike v0.0.0 (*)
+         └── sha2 v0.11.1
+             ├── ed25519-dalek v3.0.0 (*)
+             └── nosfry-core v0.3.0
+                 ├── iroh-relay-spike v0.0.0 (*)
+                 ├── nosfry v0.3.0
+                 │   └── iroh-relay-spike v0.0.0 (*)
+                 └── nosfry-lmdb v0.3.0
+                     └── nosfry v0.3.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'cpufeatures'
+   ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:54:1
+   │  
+54 │ ╭ cpufeatures 0.2.17 registry+https://github.com/rust-lang/crates.io-index
+55 │ │ cpufeatures 0.3.1 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ cpufeatures v0.2.17
+     ├── aes v0.8.4
+     │   └── aes-gcm v0.10.3
+     │       └── noq-proto v1.4.0
+     │           ├── iroh v1.4.1
+     │           │   └── iroh-relay-spike v0.0.0
+     │           ├── iroh-relay v1.4.1
+     │           │   ├── iroh v1.4.1 (*)
+     │           │   └── iroh-relay-spike v0.0.0 (*)
+     │           ├── iroh-relay-spike v0.0.0 (*)
+     │           └── noq v1.4.0
+     │               ├── iroh v1.4.1 (*)
+     │               ├── iroh-relay v1.4.1 (*)
+     │               └── iroh-relay-spike v0.0.0 (*)
+     ├── polyval v0.6.2
+     │   └── ghash v0.5.1
+     │       └── aes-gcm v0.10.3 (*)
+     └── sha1 v0.10.7
+         └── yawc v0.5.0
+             └── nosfry v0.3.0
+                 └── iroh-relay-spike v0.0.0 (*)
+   ├ cpufeatures v0.3.1
+     ├── blake3 v1.8.7
+     │   ├── iroh v1.4.1
+     │   │   └── iroh-relay-spike v0.0.0
+     │   └── iroh-relay v1.4.1
+     │       ├── iroh v1.4.1 (*)
+     │       └── iroh-relay-spike v0.0.0 (*)
+     ├── chacha20 v0.10.2
+     │   └── rand v0.10.4
+     │       ├── igd-next v0.17.1
+     │       │   └── portmapper v0.19.3
+     │       │       └── iroh v1.4.1 (*)
+     │       ├── iroh v1.4.1 (*)
+     │       ├── iroh-base v1.4.1
+     │       │   ├── iroh v1.4.1 (*)
+     │       │   ├── iroh-dns v1.4.1
+     │       │   │   ├── iroh v1.4.1 (*)
+     │       │   │   ├── iroh-relay v1.4.1 (*)
+     │       │   │   └── iroh-relay-spike v0.0.0 (*)
+     │       │   ├── iroh-relay v1.4.1 (*)
+     │       │   └── iroh-relay-spike v0.0.0 (*)
+     │       ├── iroh-dns v1.4.1 (*)
+     │       ├── iroh-relay v1.4.1 (*)
+     │       ├── n0-dns-resolver v0.1.1
+     │       │   └── iroh-dns v1.4.1 (*)
+     │       ├── noq-proto v1.4.0
+     │       │   ├── iroh v1.4.1 (*)
+     │       │   ├── iroh-relay v1.4.1 (*)
+     │       │   ├── iroh-relay-spike v0.0.0 (*)
+     │       │   └── noq v1.4.0
+     │       │       ├── iroh v1.4.1 (*)
+     │       │       ├── iroh-relay v1.4.1 (*)
+     │       │       └── iroh-relay-spike v0.0.0 (*)
+     │       ├── portmapper v0.19.3 (*)
+     │       ├── tokio-websockets v0.13.3
+     │       │   └── iroh-relay v1.4.1 (*)
+     │       └── tungstenite v0.30.0
+     │           └── tokio-tungstenite v0.30.0
+     │               └── iroh-relay-spike v0.0.0 (*)
+     ├── curve25519-dalek v5.0.0
+     │   ├── ed25519-dalek v3.0.0
+     │   │   ├── iroh v1.4.1 (*)
+     │   │   └── iroh-base v1.4.1 (*)
+     │   └── iroh-base v1.4.1 (*)
+     ├── sha1 v0.11.0
+     │   └── tungstenite v0.30.0 (*)
+     └── sha2 v0.11.1
+         ├── ed25519-dalek v3.0.0 (*)
+         └── nosfry-core v0.3.0
+             ├── iroh-relay-spike v0.0.0 (*)
+             ├── nosfry v0.3.0
+             │   └── iroh-relay-spike v0.0.0 (*)
+             └── nosfry-lmdb v0.3.0
+                 └── nosfry v0.3.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'crypto-common'
+   ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:59:1
+   │  
+59 │ ╭ crypto-common 0.1.7 registry+https://github.com/rust-lang/crates.io-index
+60 │ │ crypto-common 0.2.2 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰─────────────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ crypto-common v0.1.7
+     ├── aead v0.5.2
+     │   └── aes-gcm v0.10.3
+     │       └── noq-proto v1.4.0
+     │           ├── iroh v1.4.1
+     │           │   └── iroh-relay-spike v0.0.0
+     │           ├── iroh-relay v1.4.1
+     │           │   ├── iroh v1.4.1 (*)
+     │           │   └── iroh-relay-spike v0.0.0 (*)
+     │           ├── iroh-relay-spike v0.0.0 (*)
+     │           └── noq v1.4.0
+     │               ├── iroh v1.4.1 (*)
+     │               ├── iroh-relay v1.4.1 (*)
+     │               └── iroh-relay-spike v0.0.0 (*)
+     ├── cipher v0.4.4
+     │   ├── aes v0.8.4
+     │   │   └── aes-gcm v0.10.3 (*)
+     │   ├── aes-gcm v0.10.3 (*)
+     │   └── ctr v0.9.2
+     │       └── aes-gcm v0.10.3 (*)
+     ├── digest v0.10.7
+     │   └── sha1 v0.10.7
+     │       └── yawc v0.5.0
+     │           └── nosfry v0.3.0
+     │               └── iroh-relay-spike v0.0.0 (*)
+     └── universal-hash v0.5.1
+         └── polyval v0.6.2
+             └── ghash v0.5.1
+                 └── aes-gcm v0.10.3 (*)
+   ├ crypto-common v0.2.2
+     └── digest v0.11.3
+         ├── curve25519-dalek v5.0.0
+         │   ├── ed25519-dalek v3.0.0
+         │   │   ├── iroh v1.4.1
+         │   │   │   └── iroh-relay-spike v0.0.0
+         │   │   └── iroh-base v1.4.1
+         │   │       ├── iroh v1.4.1 (*)
+         │   │       ├── iroh-dns v1.4.1
+         │   │       │   ├── iroh v1.4.1 (*)
+         │   │       │   ├── iroh-relay v1.4.1
+         │   │       │   │   ├── iroh v1.4.1 (*)
+         │   │       │   │   └── iroh-relay-spike v0.0.0 (*)
+         │   │       │   └── iroh-relay-spike v0.0.0 (*)
+         │   │       ├── iroh-relay v1.4.1 (*)
+         │   │       └── iroh-relay-spike v0.0.0 (*)
+         │   └── iroh-base v1.4.1 (*)
+         ├── sha1 v0.11.0
+         │   └── tungstenite v0.30.0
+         │       └── tokio-tungstenite v0.30.0
+         │           └── iroh-relay-spike v0.0.0 (*)
+         └── sha2 v0.11.1
+             ├── ed25519-dalek v3.0.0 (*)
+             └── nosfry-core v0.3.0
+                 ├── iroh-relay-spike v0.0.0 (*)
+                 ├── nosfry v0.3.0
+                 │   └── iroh-relay-spike v0.0.0 (*)
+                 └── nosfry-lmdb v0.3.0
+                     └── nosfry v0.3.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'digest'
+   ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:73:1
+   │  
+73 │ ╭ digest 0.10.7 registry+https://github.com/rust-lang/crates.io-index
+74 │ │ digest 0.11.3 registry+https://github.com/rust-lang/crates.io-index
+   │ ╰───────────────────────────────────────────────────────────────────┘ lock entries
+   │  
+   ├ digest v0.10.7
+     └── sha1 v0.10.7
+         └── yawc v0.5.0
+             └── nosfry v0.3.0
+                 └── iroh-relay-spike v0.0.0
+   ├ digest v0.11.3
+     ├── curve25519-dalek v5.0.0
+     │   ├── ed25519-dalek v3.0.0
+     │   │   ├── iroh v1.4.1
+     │   │   │   └── iroh-relay-spike v0.0.0
+     │   │   └── iroh-base v1.4.1
+     │   │       ├── iroh v1.4.1 (*)
+     │   │       ├── iroh-dns v1.4.1
+     │   │       │   ├── iroh v1.4.1 (*)
+     │   │       │   ├── iroh-relay v1.4.1
+     │   │       │   │   ├── iroh v1.4.1 (*)
+     │   │       │   │   └── iroh-relay-spike v0.0.0 (*)
+     │   │       │   └── iroh-relay-spike v0.0.0 (*)
+     │   │       ├── iroh-relay v1.4.1 (*)
+     │   │       └── iroh-relay-spike v0.0.0 (*)
+     │   └── iroh-base v1.4.1 (*)
+     ├── sha1 v0.11.0
+     │   └── tungstenite v0.30.0
+     │       └── tokio-tungstenite v0.30.0
+     │           └── iroh-relay-spike v0.0.0 (*)
+     └── sha2 v0.11.1
+         ├── ed25519-dalek v3.0.0 (*)
+         └── nosfry-core v0.3.0
+             ├── iroh-relay-spike v0.0.0 (*)
+             ├── nosfry v0.3.0
+             │   └── iroh-relay-spike v0.0.0 (*)
+             └── nosfry-lmdb v0.3.0
+                 └── nosfry v0.3.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'getrandom'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:107:1
+    │  
+107 │ ╭ getrandom 0.2.17 registry+https://github.com/rust-lang/crates.io-index
+108 │ │ getrandom 0.4.3 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ getrandom v0.2.17
+      ├── rand_core v0.6.4
+      │   ├── rand v0.8.8
+      │   │   ├── phf_generator v0.11.3
+      │   │   │   └── phf_macros v0.11.3
+      │   │   │       └── phf v0.11.3
+      │   │   │           └── doxygen-rs v0.4.2
+      │   │   │               └── (build) lmdb-master-sys v0.2.6
+      │   │   │                   └── heed v0.22.1
+      │   │   │                       └── nosfry-lmdb v0.3.0
+      │   │   │                           └── nosfry v0.3.0
+      │   │   │                               └── iroh-relay-spike v0.0.0
+      │   │   └── yawc v0.5.0
+      │   │       └── nosfry v0.3.0 (*)
+      │   └── rand_chacha v0.3.1
+      │       └── rand v0.8.8 (*)
+      ├── ring v0.17.14
+      │   ├── noq-proto v1.4.0
+      │   │   ├── iroh v1.4.1
+      │   │   │   └── iroh-relay-spike v0.0.0 (*)
+      │   │   ├── iroh-relay v1.4.1
+      │   │   │   ├── iroh v1.4.1 (*)
+      │   │   │   └── iroh-relay-spike v0.0.0 (*)
+      │   │   ├── iroh-relay-spike v0.0.0 (*)
+      │   │   └── noq v1.4.0
+      │   │       ├── iroh v1.4.1 (*)
+      │   │       ├── iroh-relay v1.4.1 (*)
+      │   │       └── iroh-relay-spike v0.0.0 (*)
+      │   ├── rustls v0.23.46
+      │   │   ├── hyper-rustls v0.27.10
+      │   │   │   └── reqwest v0.13.5
+      │   │   │       ├── iroh v1.4.1 (*)
+      │   │   │       ├── iroh-relay v1.4.1 (*)
+      │   │   │       └── n0-dns-resolver v0.1.1
+      │   │   │           └── iroh-dns v1.4.1
+      │   │   │               ├── iroh v1.4.1 (*)
+      │   │   │               ├── iroh-relay v1.4.1 (*)
+      │   │   │               └── iroh-relay-spike v0.0.0 (*)
+      │   │   ├── iroh v1.4.1 (*)
+      │   │   ├── iroh-dns v1.4.1 (*)
+      │   │   ├── iroh-relay v1.4.1 (*)
+      │   │   ├── n0-dns-resolver v0.1.1 (*)
+      │   │   ├── noq v1.4.0 (*)
+      │   │   ├── noq-proto v1.4.0 (*)
+      │   │   ├── reqwest v0.13.5 (*)
+      │   │   ├── rustls-platform-verifier v0.7.1
+      │   │   │   ├── noq-proto v1.4.0 (*)
+      │   │   │   └── reqwest v0.13.5 (*)
+      │   │   └── tokio-rustls v0.26.6
+      │   │       ├── hyper-rustls v0.27.10 (*)
+      │   │       ├── iroh-relay v1.4.1 (*)
+      │   │       ├── n0-dns-resolver v0.1.1 (*)
+      │   │       ├── reqwest v0.13.5 (*)
+      │   │       └── tokio-websockets v0.13.3
+      │   │           └── iroh-relay v1.4.1 (*)
+      │   ├── rustls-webpki v0.103.17
+      │   │   ├── rustls v0.23.46 (*)
+      │   │   └── rustls-platform-verifier v0.7.1 (*)
+      │   └── tokio-websockets v0.13.3 (*)
+      └── yawc v0.5.0 (*)
+    ├ getrandom v0.4.3
+      ├── iroh v1.4.1
+      │   └── iroh-relay-spike v0.0.0
+      ├── iroh-base v1.4.1
+      │   ├── iroh v1.4.1 (*)
+      │   ├── iroh-dns v1.4.1
+      │   │   ├── iroh v1.4.1 (*)
+      │   │   ├── iroh-relay v1.4.1
+      │   │   │   ├── iroh v1.4.1 (*)
+      │   │   │   └── iroh-relay-spike v0.0.0 (*)
+      │   │   └── iroh-relay-spike v0.0.0 (*)
+      │   ├── iroh-relay v1.4.1 (*)
+      │   └── iroh-relay-spike v0.0.0 (*)
+      ├── iroh-relay v1.4.1 (*)
+      ├── noq-proto v1.4.0
+      │   ├── iroh v1.4.1 (*)
+      │   ├── iroh-relay v1.4.1 (*)
+      │   ├── iroh-relay-spike v0.0.0 (*)
+      │   └── noq v1.4.0
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-relay v1.4.1 (*)
+      │       └── iroh-relay-spike v0.0.0 (*)
+      ├── nosfry v0.3.0
+      │   └── iroh-relay-spike v0.0.0 (*)
+      ├── rand v0.10.4
+      │   ├── igd-next v0.17.1
+      │   │   └── portmapper v0.19.3
+      │   │       └── iroh v1.4.1 (*)
+      │   ├── iroh v1.4.1 (*)
+      │   ├── iroh-base v1.4.1 (*)
+      │   ├── iroh-dns v1.4.1 (*)
+      │   ├── iroh-relay v1.4.1 (*)
+      │   ├── n0-dns-resolver v0.1.1
+      │   │   └── iroh-dns v1.4.1 (*)
+      │   ├── noq-proto v1.4.0 (*)
+      │   ├── portmapper v0.19.3 (*)
+      │   ├── tokio-websockets v0.13.3
+      │   │   └── iroh-relay v1.4.1 (*)
+      │   └── tungstenite v0.30.0
+      │       └── tokio-tungstenite v0.30.0
+      │           └── iroh-relay-spike v0.0.0 (*)
+      └── tokio-websockets v0.13.3 (*)
+
+error[wildcard]: found 2 wildcard dependencies for crate 'iroh-relay-spike'
+   ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.toml:29:15
+   │
+29 │ nosfry      = { path = "../../crates/nosfry" }
+   │               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+30 │ nosfry-core = { path = "../../crates/nosfry-core", features = ["test-util"] }
+   │               ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ wildcard dependency
+   │
+   ├ iroh-relay-spike v0.0.0
+
+warning[duplicate]: found 2 duplicate entries for crate 'jni'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:152:1
+    │  
+152 │ ╭ jni 0.21.1 registry+https://github.com/rust-lang/crates.io-index
+153 │ │ jni 0.22.4 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ jni v0.21.1
+      ├── netdev v0.45.1
+      │   └── netwatch v0.19.3
+      │       ├── iroh v1.4.1
+      │       │   └── iroh-relay-spike v0.0.0
+      │       └── portmapper v0.19.3
+      │           └── iroh v1.4.1 (*)
+      └── netdev v0.46.3
+          └── netwatch v0.19.3 (*)
+    ├ jni v0.22.4
+      ├── n0-dns-resolver v0.1.1
+      │   └── iroh-dns v1.4.1
+      │       ├── iroh v1.4.1
+      │       │   └── iroh-relay-spike v0.0.0
+      │       ├── iroh-relay v1.4.1
+      │       │   ├── iroh v1.4.1 (*)
+      │       │   └── iroh-relay-spike v0.0.0 (*)
+      │       └── iroh-relay-spike v0.0.0 (*)
+      └── rustls-platform-verifier v0.7.1
+          ├── noq-proto v1.4.0
+          │   ├── iroh v1.4.1 (*)
+          │   ├── iroh-relay v1.4.1 (*)
+          │   ├── iroh-relay-spike v0.0.0 (*)
+          │   └── noq v1.4.0
+          │       ├── iroh v1.4.1 (*)
+          │       ├── iroh-relay v1.4.1 (*)
+          │       └── iroh-relay-spike v0.0.0 (*)
+          └── reqwest v0.13.5
+              ├── iroh v1.4.1 (*)
+              ├── iroh-relay v1.4.1 (*)
+              └── n0-dns-resolver v0.1.1 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'jni-sys'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:155:1
+    │  
+155 │ ╭ jni-sys 0.3.1 registry+https://github.com/rust-lang/crates.io-index
+156 │ │ jni-sys 0.4.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ jni-sys v0.3.1
+      └── jni v0.21.1
+          ├── netdev v0.45.1
+          │   └── netwatch v0.19.3
+          │       ├── iroh v1.4.1
+          │       │   └── iroh-relay-spike v0.0.0
+          │       └── portmapper v0.19.3
+          │           └── iroh v1.4.1 (*)
+          └── netdev v0.46.3
+              └── netwatch v0.19.3 (*)
+    ├ jni-sys v0.4.1
+      ├── jni v0.22.4
+      │   ├── n0-dns-resolver v0.1.1
+      │   │   └── iroh-dns v1.4.1
+      │   │       ├── iroh v1.4.1
+      │   │       │   └── iroh-relay-spike v0.0.0
+      │   │       ├── iroh-relay v1.4.1
+      │   │       │   ├── iroh v1.4.1 (*)
+      │   │       │   └── iroh-relay-spike v0.0.0 (*)
+      │   │       └── iroh-relay-spike v0.0.0 (*)
+      │   └── rustls-platform-verifier v0.7.1
+      │       ├── noq-proto v1.4.0
+      │       │   ├── iroh v1.4.1 (*)
+      │       │   ├── iroh-relay v1.4.1 (*)
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   └── noq v1.4.0
+      │       │       ├── iroh v1.4.1 (*)
+      │       │       ├── iroh-relay v1.4.1 (*)
+      │       │       └── iroh-relay-spike v0.0.0 (*)
+      │       └── reqwest v0.13.5
+      │           ├── iroh v1.4.1 (*)
+      │           ├── iroh-relay v1.4.1 (*)
+      │           └── n0-dns-resolver v0.1.1 (*)
+      └── jni-sys v0.3.1
+          └── jni v0.21.1
+              ├── netdev v0.45.1
+              │   └── netwatch v0.19.3
+              │       ├── iroh v1.4.1 (*)
+              │       └── portmapper v0.19.3
+              │           └── iroh v1.4.1 (*)
+              └── netdev v0.46.3
+                  └── netwatch v0.19.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'netdev'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:182:1
+    │  
+182 │ ╭ netdev 0.45.1 registry+https://github.com/rust-lang/crates.io-index
+183 │ │ netdev 0.46.3 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ netdev v0.45.1
+      └── netwatch v0.19.3
+          ├── iroh v1.4.1
+          │   └── iroh-relay-spike v0.0.0
+          └── portmapper v0.19.3
+              └── iroh v1.4.1 (*)
+    ├ netdev v0.46.3
+      └── netwatch v0.19.3
+          ├── iroh v1.4.1
+          │   └── iroh-relay-spike v0.0.0
+          └── portmapper v0.19.3
+              └── iroh v1.4.1 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'netlink-packet-core'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:184:1
+    │  
+184 │ ╭ netlink-packet-core 0.8.2 registry+https://github.com/rust-lang/crates.io-index
+185 │ │ netlink-packet-core 0.9.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ netlink-packet-core v0.8.2
+      ├── netdev v0.45.1
+      │   └── netwatch v0.19.3
+      │       ├── iroh v1.4.1
+      │       │   └── iroh-relay-spike v0.0.0
+      │       └── portmapper v0.19.3
+      │           └── iroh v1.4.1 (*)
+      ├── netlink-packet-route v0.31.0
+      │   ├── netdev v0.45.1 (*)
+      │   └── netwatch v0.19.3 (*)
+      ├── netlink-proto v0.12.2
+      │   └── netwatch v0.19.3 (*)
+      └── netwatch v0.19.3 (*)
+    ├ netlink-packet-core v0.9.0
+      ├── netdev v0.46.3
+      │   └── netwatch v0.19.3
+      │       ├── iroh v1.4.1
+      │       │   └── iroh-relay-spike v0.0.0
+      │       └── portmapper v0.19.3
+      │           └── iroh v1.4.1 (*)
+      └── netlink-packet-route v0.33.0
+          └── netdev v0.46.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'netlink-packet-route'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:186:1
+    │  
+186 │ ╭ netlink-packet-route 0.31.0 registry+https://github.com/rust-lang/crates.io-index
+187 │ │ netlink-packet-route 0.33.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ netlink-packet-route v0.31.0
+      ├── netdev v0.45.1
+      │   └── netwatch v0.19.3
+      │       ├── iroh v1.4.1
+      │       │   └── iroh-relay-spike v0.0.0
+      │       └── portmapper v0.19.3
+      │           └── iroh v1.4.1 (*)
+      └── netwatch v0.19.3 (*)
+    ├ netlink-packet-route v0.33.0
+      └── netdev v0.46.3
+          └── netwatch v0.19.3
+              ├── iroh v1.4.1
+              │   └── iroh-relay-spike v0.0.0
+              └── portmapper v0.19.3
+                  └── iroh v1.4.1 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'netlink-sys'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:189:1
+    │  
+189 │ ╭ netlink-sys 0.8.8 registry+https://github.com/rust-lang/crates.io-index
+190 │ │ netlink-sys 0.9.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ netlink-sys v0.8.8
+      ├── netdev v0.45.1
+      │   └── netwatch v0.19.3
+      │       ├── iroh v1.4.1
+      │       │   └── iroh-relay-spike v0.0.0
+      │       └── portmapper v0.19.3
+      │           └── iroh v1.4.1 (*)
+      ├── netlink-proto v0.12.2
+      │   └── netwatch v0.19.3 (*)
+      └── netwatch v0.19.3 (*)
+    ├ netlink-sys v0.9.0
+      └── netdev v0.46.3
+          └── netwatch v0.19.3
+              ├── iroh v1.4.1
+              │   └── iroh-relay-spike v0.0.0
+              └── portmapper v0.19.3
+                  └── iroh v1.4.1 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'rand'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:245:1
+    │  
+245 │ ╭ rand 0.8.8 registry+https://github.com/rust-lang/crates.io-index
+246 │ │ rand 0.10.4 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ rand v0.8.8
+      ├── phf_generator v0.11.3
+      │   └── phf_macros v0.11.3
+      │       └── phf v0.11.3
+      │           └── doxygen-rs v0.4.2
+      │               └── (build) lmdb-master-sys v0.2.6
+      │                   └── heed v0.22.1
+      │                       └── nosfry-lmdb v0.3.0
+      │                           └── nosfry v0.3.0
+      │                               └── iroh-relay-spike v0.0.0
+      └── yawc v0.5.0
+          └── nosfry v0.3.0 (*)
+    ├ rand v0.10.4
+      ├── igd-next v0.17.1
+      │   └── portmapper v0.19.3
+      │       └── iroh v1.4.1
+      │           └── iroh-relay-spike v0.0.0
+      ├── iroh v1.4.1 (*)
+      ├── iroh-base v1.4.1
+      │   ├── iroh v1.4.1 (*)
+      │   ├── iroh-dns v1.4.1
+      │   │   ├── iroh v1.4.1 (*)
+      │   │   ├── iroh-relay v1.4.1
+      │   │   │   ├── iroh v1.4.1 (*)
+      │   │   │   └── iroh-relay-spike v0.0.0 (*)
+      │   │   └── iroh-relay-spike v0.0.0 (*)
+      │   ├── iroh-relay v1.4.1 (*)
+      │   └── iroh-relay-spike v0.0.0 (*)
+      ├── iroh-dns v1.4.1 (*)
+      ├── iroh-relay v1.4.1 (*)
+      ├── n0-dns-resolver v0.1.1
+      │   └── iroh-dns v1.4.1 (*)
+      ├── noq-proto v1.4.0
+      │   ├── iroh v1.4.1 (*)
+      │   ├── iroh-relay v1.4.1 (*)
+      │   ├── iroh-relay-spike v0.0.0 (*)
+      │   └── noq v1.4.0
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-relay v1.4.1 (*)
+      │       └── iroh-relay-spike v0.0.0 (*)
+      ├── portmapper v0.19.3 (*)
+      ├── tokio-websockets v0.13.3
+      │   └── iroh-relay v1.4.1 (*)
+      └── tungstenite v0.30.0
+          └── tokio-tungstenite v0.30.0
+              └── iroh-relay-spike v0.0.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'rand_core'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:248:1
+    │  
+248 │ ╭ rand_core 0.6.4 registry+https://github.com/rust-lang/crates.io-index
+249 │ │ rand_core 0.10.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ rand_core v0.6.4
+      ├── rand v0.8.8
+      │   ├── phf_generator v0.11.3
+      │   │   └── phf_macros v0.11.3
+      │   │       └── phf v0.11.3
+      │   │           └── doxygen-rs v0.4.2
+      │   │               └── (build) lmdb-master-sys v0.2.6
+      │   │                   └── heed v0.22.1
+      │   │                       └── nosfry-lmdb v0.3.0
+      │   │                           └── nosfry v0.3.0
+      │   │                               └── iroh-relay-spike v0.0.0
+      │   └── yawc v0.5.0
+      │       └── nosfry v0.3.0 (*)
+      └── rand_chacha v0.3.1
+          └── rand v0.8.8 (*)
+    ├ rand_core v0.10.1
+      ├── chacha20 v0.10.2
+      │   └── rand v0.10.4
+      │       ├── igd-next v0.17.1
+      │       │   └── portmapper v0.19.3
+      │       │       └── iroh v1.4.1
+      │       │           └── iroh-relay-spike v0.0.0
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-base v1.4.1
+      │       │   ├── iroh v1.4.1 (*)
+      │       │   ├── iroh-dns v1.4.1
+      │       │   │   ├── iroh v1.4.1 (*)
+      │       │   │   ├── iroh-relay v1.4.1
+      │       │   │   │   ├── iroh v1.4.1 (*)
+      │       │   │   │   └── iroh-relay-spike v0.0.0 (*)
+      │       │   │   └── iroh-relay-spike v0.0.0 (*)
+      │       │   ├── iroh-relay v1.4.1 (*)
+      │       │   └── iroh-relay-spike v0.0.0 (*)
+      │       ├── iroh-dns v1.4.1 (*)
+      │       ├── iroh-relay v1.4.1 (*)
+      │       ├── n0-dns-resolver v0.1.1
+      │       │   └── iroh-dns v1.4.1 (*)
+      │       ├── noq-proto v1.4.0
+      │       │   ├── iroh v1.4.1 (*)
+      │       │   ├── iroh-relay v1.4.1 (*)
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   └── noq v1.4.0
+      │       │       ├── iroh v1.4.1 (*)
+      │       │       ├── iroh-relay v1.4.1 (*)
+      │       │       └── iroh-relay-spike v0.0.0 (*)
+      │       ├── portmapper v0.19.3 (*)
+      │       ├── tokio-websockets v0.13.3
+      │       │   └── iroh-relay v1.4.1 (*)
+      │       └── tungstenite v0.30.0
+      │           └── tokio-tungstenite v0.30.0
+      │               └── iroh-relay-spike v0.0.0 (*)
+      ├── crypto-common v0.2.2
+      │   └── digest v0.11.3
+      │       ├── curve25519-dalek v5.0.0
+      │       │   ├── ed25519-dalek v3.0.0
+      │       │   │   ├── iroh v1.4.1 (*)
+      │       │   │   └── iroh-base v1.4.1 (*)
+      │       │   └── iroh-base v1.4.1 (*)
+      │       ├── sha1 v0.11.0
+      │       │   └── tungstenite v0.30.0 (*)
+      │       └── sha2 v0.11.1
+      │           ├── ed25519-dalek v3.0.0 (*)
+      │           └── nosfry-core v0.3.0
+      │               ├── iroh-relay-spike v0.0.0 (*)
+      │               ├── nosfry v0.3.0
+      │               │   └── iroh-relay-spike v0.0.0 (*)
+      │               └── nosfry-lmdb v0.3.0
+      │                   └── nosfry v0.3.0 (*)
+      ├── curve25519-dalek v5.0.0 (*)
+      ├── ed25519-dalek v3.0.0 (*)
+      ├── getrandom v0.4.3
+      │   ├── iroh v1.4.1 (*)
+      │   ├── iroh-base v1.4.1 (*)
+      │   ├── iroh-relay v1.4.1 (*)
+      │   ├── noq-proto v1.4.0 (*)
+      │   ├── nosfry v0.3.0 (*)
+      │   ├── rand v0.10.4 (*)
+      │   └── tokio-websockets v0.13.3 (*)
+      ├── rand v0.10.4 (*)
+      ├── rand_pcg v0.10.3
+      │   └── noq-proto v1.4.0 (*)
+      └── signature v3.0.0
+          ├── ed25519 v3.0.0
+          │   └── ed25519-dalek v3.0.0 (*)
+          └── ed25519-dalek v3.0.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'sha1'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:285:1
+    │  
+285 │ ╭ sha1 0.10.7 registry+https://github.com/rust-lang/crates.io-index
+286 │ │ sha1 0.11.0 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ sha1 v0.10.7
+      └── yawc v0.5.0
+          └── nosfry v0.3.0
+              └── iroh-relay-spike v0.0.0
+    ├ sha1 v0.11.0
+      └── tungstenite v0.30.0
+          └── tokio-tungstenite v0.30.0
+              └── iroh-relay-spike v0.0.0
+
+warning[duplicate]: found 2 duplicate entries for crate 'simple-dns'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:296:1
+    │  
+296 │ ╭ simple-dns 0.12.0 registry+https://github.com/rust-lang/crates.io-index
+297 │ │ simple-dns 0.13.1 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ simple-dns v0.12.0
+      └── iroh-dns v1.4.1
+          ├── iroh v1.4.1
+          │   └── iroh-relay-spike v0.0.0
+          ├── iroh-relay v1.4.1
+          │   ├── iroh v1.4.1 (*)
+          │   └── iroh-relay-spike v0.0.0 (*)
+          └── iroh-relay-spike v0.0.0 (*)
+    ├ simple-dns v0.13.1
+      └── n0-dns-resolver v0.1.1
+          └── iroh-dns v1.4.1
+              ├── iroh v1.4.1
+              │   └── iroh-relay-spike v0.0.0
+              ├── iroh-relay v1.4.1
+              │   ├── iroh v1.4.1 (*)
+              │   └── iroh-relay-spike v0.0.0 (*)
+              └── iroh-relay-spike v0.0.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'syn'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:312:1
+    │  
+312 │ ╭ syn 2.0.119 registry+https://github.com/rust-lang/crates.io-index
+313 │ │ syn 3.0.10 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ syn v2.0.119
+      ├── curve25519-dalek-derive v0.1.1
+      │   └── curve25519-dalek v5.0.0
+      │       ├── ed25519-dalek v3.0.0
+      │       │   ├── iroh v1.4.1
+      │       │   │   └── iroh-relay-spike v0.0.0
+      │       │   └── iroh-base v1.4.1
+      │       │       ├── iroh v1.4.1 (*)
+      │       │       ├── iroh-dns v1.4.1
+      │       │       │   ├── iroh v1.4.1 (*)
+      │       │       │   ├── iroh-relay v1.4.1
+      │       │       │   │   ├── iroh v1.4.1 (*)
+      │       │       │   │   └── iroh-relay-spike v0.0.0 (*)
+      │       │       │   └── iroh-relay-spike v0.0.0 (*)
+      │       │       ├── iroh-relay v1.4.1 (*)
+      │       │       └── iroh-relay-spike v0.0.0 (*)
+      │       └── iroh-base v1.4.1 (*)
+      ├── derive_more-impl v2.1.1
+      │   └── derive_more v2.1.1
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-base v1.4.1 (*)
+      │       ├── iroh-dns v1.4.1 (*)
+      │       ├── iroh-relay v1.4.1 (*)
+      │       ├── n0-dns-resolver v0.1.1
+      │       │   └── iroh-dns v1.4.1 (*)
+      │       ├── n0-future v0.3.2
+      │       │   ├── iroh v1.4.1 (*)
+      │       │   ├── iroh-dns v1.4.1 (*)
+      │       │   ├── iroh-relay v1.4.1 (*)
+      │       │   ├── n0-dns-resolver v0.1.1 (*)
+      │       │   ├── n0-watcher v1.0.1
+      │       │   │   ├── iroh v1.4.1 (*)
+      │       │   │   └── netwatch v0.19.3
+      │       │   │       ├── iroh v1.4.1 (*)
+      │       │   │       └── portmapper v0.19.3
+      │       │   │           └── iroh v1.4.1 (*)
+      │       │   ├── netwatch v0.19.3 (*)
+      │       │   └── portmapper v0.19.3 (*)
+      │       ├── n0-watcher v1.0.1 (*)
+      │       ├── netwatch v0.19.3 (*)
+      │       ├── noq v1.4.0
+      │       │   ├── iroh v1.4.1 (*)
+      │       │   ├── iroh-relay v1.4.1 (*)
+      │       │   └── iroh-relay-spike v0.0.0 (*)
+      │       ├── noq-proto v1.4.0
+      │       │   ├── iroh v1.4.1 (*)
+      │       │   ├── iroh-relay v1.4.1 (*)
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   └── noq v1.4.0 (*)
+      │       └── portmapper v0.19.3 (*)
+      ├── iroh-metrics-derive v1.0.1
+      │   └── iroh-metrics v1.0.3
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-relay v1.4.1 (*)
+      │       └── portmapper v0.19.3 (*)
+      ├── jni-macros v0.22.4
+      │   └── jni v0.22.4
+      │       ├── n0-dns-resolver v0.1.1 (*)
+      │       └── rustls-platform-verifier v0.7.1
+      │           ├── noq-proto v1.4.0 (*)
+      │           └── reqwest v0.13.5
+      │               ├── iroh v1.4.1 (*)
+      │               ├── iroh-relay v1.4.1 (*)
+      │               └── n0-dns-resolver v0.1.1 (*)
+      ├── jni-sys-macros v0.4.1
+      │   └── jni-sys v0.4.1
+      │       ├── jni v0.22.4 (*)
+      │       └── jni-sys v0.3.1
+      │           └── jni v0.21.1
+      │               ├── netdev v0.45.1
+      │               │   └── netwatch v0.19.3 (*)
+      │               └── netdev v0.46.3
+      │                   └── netwatch v0.19.3 (*)
+      ├── n0-error-macros v1.0.3
+      │   └── n0-error v1.0.3
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-base v1.4.1 (*)
+      │       ├── iroh-dns v1.4.1 (*)
+      │       ├── iroh-metrics v1.0.3 (*)
+      │       ├── iroh-relay v1.4.1 (*)
+      │       ├── n0-dns-resolver v0.1.1 (*)
+      │       ├── n0-watcher v1.0.1 (*)
+      │       ├── netwatch v0.19.3 (*)
+      │       └── portmapper v0.19.3 (*)
+      ├── num_enum_derive v0.7.6
+      │   └── num_enum v0.7.6
+      │       ├── iroh-relay v1.4.1 (*)
+      │       └── portmapper v0.19.3 (*)
+      ├── phf_macros v0.11.3
+      │   └── phf v0.11.3
+      │       └── doxygen-rs v0.4.2
+      │           └── (build) lmdb-master-sys v0.2.6
+      │               └── heed v0.22.1
+      │                   └── nosfry-lmdb v0.3.0
+      │                       └── nosfry v0.3.0
+      │                           └── iroh-relay-spike v0.0.0 (*)
+      ├── postcard-derive v0.2.3
+      │   └── postcard v1.2.0
+      │       └── iroh-relay v1.4.1 (*)
+      ├── spez v0.1.2
+      │   └── n0-error v1.0.3 (*)
+      ├── strum_macros v0.28.0
+      │   └── strum v0.28.0
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-dns v1.4.1 (*)
+      │       └── iroh-relay v1.4.1 (*)
+      ├── thiserror-impl v1.0.69
+      │   └── thiserror v1.0.69
+      │       └── jni v0.21.1 (*)
+      ├── tracing-attributes v0.1.31
+      │   └── tracing v0.1.44
+      │       ├── axum v0.8.9
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   └── nosfry v0.3.0 (*)
+      │       ├── axum-core v0.5.6
+      │       │   ├── axum v0.8.9 (*)
+      │       │   └── yawc v0.5.0
+      │       │       └── nosfry v0.3.0 (*)
+      │       ├── cordyceps v0.3.5
+      │       │   └── futures-buffered v0.2.14
+      │       │       └── n0-future v0.3.2 (*)
+      │       ├── h2 v0.4.20
+      │       │   └── hyper v1.12.0
+      │       │       ├── axum v0.8.9 (*)
+      │       │       ├── hyper-rustls v0.27.10
+      │       │       │   └── reqwest v0.13.5 (*)
+      │       │       ├── hyper-util v0.1.21
+      │       │       │   ├── axum v0.8.9 (*)
+      │       │       │   ├── hyper-rustls v0.27.10 (*)
+      │       │       │   ├── igd-next v0.17.1
+      │       │       │   │   └── portmapper v0.19.3 (*)
+      │       │       │   ├── iroh-relay v1.4.1 (*)
+      │       │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │       │   ├── nosfry v0.3.0 (*)
+      │       │       │   ├── portmapper v0.19.3 (*)
+      │       │       │   ├── reqwest v0.13.5 (*)
+      │       │       │   └── yawc v0.5.0 (*)
+      │       │       ├── igd-next v0.17.1 (*)
+      │       │       ├── iroh-relay v1.4.1 (*)
+      │       │       ├── iroh-relay-spike v0.0.0 (*)
+      │       │       ├── nosfry v0.3.0 (*)
+      │       │       ├── reqwest v0.13.5 (*)
+      │       │       └── yawc v0.5.0 (*)
+      │       ├── hyper-util v0.1.21 (*)
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-dns v1.4.1 (*)
+      │       ├── iroh-metrics v1.0.3 (*)
+      │       ├── iroh-relay v1.4.1 (*)
+      │       ├── iroh-relay-spike v0.0.0 (*)
+      │       ├── loom v0.7.3
+      │       │   └── cordyceps v0.3.5 (*)
+      │       ├── n0-dns-resolver v0.1.1 (*)
+      │       ├── netwatch v0.19.3 (*)
+      │       ├── noq v1.4.0 (*)
+      │       ├── noq-proto v1.4.0 (*)
+      │       ├── noq-udp v1.4.0
+      │       │   ├── iroh v1.4.1 (*)
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   ├── netwatch v0.19.3 (*)
+      │       │   └── noq v1.4.0 (*)
+      │       ├── nosfry v0.3.0 (*)
+      │       ├── portmapper v0.19.3 (*)
+      │       ├── tower v0.5.3
+      │       │   ├── axum v0.8.9 (*)
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   ├── nosfry v0.3.0 (*)
+      │       │   ├── reqwest v0.13.5 (*)
+      │       │   └── tower-http v0.6.11
+      │       │       └── reqwest v0.13.5 (*)
+      │       └── tracing-subscriber v0.3.23
+      │           ├── iroh-relay-spike v0.0.0 (*)
+      │           ├── loom v0.7.3 (*)
+      │           └── nosfry v0.3.0 (*)
+      ├── windows-implement v0.60.2
+      │   └── windows-core v0.62.2
+      │       ├── iana-time-zone v0.1.65
+      │       │   └── chrono v0.4.45
+      │       │       └── wmi v0.18.4
+      │       │           └── netwatch v0.19.3 (*)
+      │       ├── windows v0.62.2
+      │       │   ├── netwatch v0.19.3 (*)
+      │       │   └── wmi v0.18.4 (*)
+      │       ├── windows-collections v0.3.2
+      │       │   └── windows v0.62.2 (*)
+      │       ├── windows-future v0.3.2
+      │       │   └── windows v0.62.2 (*)
+      │       ├── windows-numerics v0.3.1
+      │       │   └── windows v0.62.2 (*)
+      │       └── wmi v0.18.4 (*)
+      ├── windows-interface v0.59.3
+      │   └── windows-core v0.62.2 (*)
+      ├── zerocopy-derive v0.8.64
+      │   └── zerocopy v0.8.64
+      │       ├── netlink-packet-route v0.33.0
+      │       │   └── netdev v0.46.3 (*)
+      │       └── ppv-lite86 v0.2.21
+      │           └── rand_chacha v0.3.1
+      │               └── rand v0.8.8
+      │                   ├── phf_generator v0.11.3
+      │                   │   └── phf_macros v0.11.3 (*)
+      │                   └── yawc v0.5.0 (*)
+      └── zeroize_derive v1.5.0
+          └── zeroize v1.9.2
+              ├── curve25519-dalek v5.0.0 (*)
+              ├── der v0.8.3
+              │   ├── pkcs8 v0.11.0
+              │   │   └── ed25519 v3.0.0
+              │   │       └── ed25519-dalek v3.0.0 (*)
+              │   └── spki v0.8.1
+              │       └── pkcs8 v0.11.0 (*)
+              ├── ed25519-dalek v3.0.0 (*)
+              ├── iroh-base v1.4.1 (*)
+              ├── rustls v0.23.46
+              │   ├── hyper-rustls v0.27.10 (*)
+              │   ├── iroh v1.4.1 (*)
+              │   ├── iroh-dns v1.4.1 (*)
+              │   ├── iroh-relay v1.4.1 (*)
+              │   ├── n0-dns-resolver v0.1.1 (*)
+              │   ├── noq v1.4.0 (*)
+              │   ├── noq-proto v1.4.0 (*)
+              │   ├── reqwest v0.13.5 (*)
+              │   ├── rustls-platform-verifier v0.7.1 (*)
+              │   └── tokio-rustls v0.26.6
+              │       ├── hyper-rustls v0.27.10 (*)
+              │       ├── iroh-relay v1.4.1 (*)
+              │       ├── n0-dns-resolver v0.1.1 (*)
+              │       ├── reqwest v0.13.5 (*)
+              │       └── tokio-websockets v0.13.3
+              │           └── iroh-relay v1.4.1 (*)
+              └── rustls-pki-types v1.16.0
+                  ├── iroh v1.4.1 (*)
+                  ├── iroh-relay v1.4.1 (*)
+                  ├── noq-proto v1.4.0 (*)
+                  ├── reqwest v0.13.5 (*)
+                  ├── rustls v0.23.46 (*)
+                  ├── rustls-native-certs v0.8.5
+                  │   └── rustls-platform-verifier v0.7.1 (*)
+                  ├── rustls-webpki v0.103.17
+                  │   ├── rustls v0.23.46 (*)
+                  │   └── rustls-platform-verifier v0.7.1 (*)
+                  ├── tokio-websockets v0.13.3 (*)
+                  ├── webpki-root-certs v1.0.12
+                  │   └── rustls-platform-verifier v0.7.1 (*)
+                  └── webpki-roots v1.0.12
+                      ├── iroh-relay v1.4.1 (*)
+                      └── n0-dns-resolver v0.1.1 (*)
+    ├ syn v3.0.10
+      ├── clap_derive v4.6.9
+      │   └── clap v4.6.9
+      │       ├── iroh-relay-spike v0.0.0
+      │       └── nosfry v0.3.0
+      │           └── iroh-relay-spike v0.0.0 (*)
+      ├── data-encoding-macro-internal v0.1.19
+      │   └── data-encoding-macro v0.1.21
+      │       └── iroh-base v1.4.1
+      │           ├── iroh v1.4.1
+      │           │   └── iroh-relay-spike v0.0.0 (*)
+      │           ├── iroh-dns v1.4.1
+      │           │   ├── iroh v1.4.1 (*)
+      │           │   ├── iroh-relay v1.4.1
+      │           │   │   ├── iroh v1.4.1 (*)
+      │           │   │   └── iroh-relay-spike v0.0.0 (*)
+      │           │   └── iroh-relay-spike v0.0.0 (*)
+      │           ├── iroh-relay v1.4.1 (*)
+      │           └── iroh-relay-spike v0.0.0 (*)
+      ├── displaydoc v0.2.7
+      │   ├── icu_collections v2.4.0
+      │   │   ├── icu_normalizer v2.4.0
+      │   │   │   └── idna_adapter v1.2.2
+      │   │   │       └── idna v1.1.0
+      │   │   │           └── url v2.5.9
+      │   │   │               ├── attohttpc v0.30.1
+      │   │   │               │   └── igd-next v0.17.1
+      │   │   │               │       └── portmapper v0.19.3
+      │   │   │               │           └── iroh v1.4.1 (*)
+      │   │   │               ├── heed v0.22.1
+      │   │   │               │   └── nosfry-lmdb v0.3.0
+      │   │   │               │       └── nosfry v0.3.0 (*)
+      │   │   │               ├── igd-next v0.17.1 (*)
+      │   │   │               ├── iroh v1.4.1 (*)
+      │   │   │               ├── iroh-base v1.4.1 (*)
+      │   │   │               ├── iroh-dns v1.4.1 (*)
+      │   │   │               ├── iroh-relay v1.4.1 (*)
+      │   │   │               ├── portmapper v0.19.3 (*)
+      │   │   │               ├── reqwest v0.13.5
+      │   │   │               │   ├── iroh v1.4.1 (*)
+      │   │   │               │   ├── iroh-relay v1.4.1 (*)
+      │   │   │               │   └── n0-dns-resolver v0.1.1
+      │   │   │               │       └── iroh-dns v1.4.1 (*)
+      │   │   │               ├── tower-http v0.6.11
+      │   │   │               │   └── reqwest v0.13.5 (*)
+      │   │   │               └── yawc v0.5.0
+      │   │   │                   └── nosfry v0.3.0 (*)
+      │   │   └── icu_properties v2.4.0
+      │   │       └── idna_adapter v1.2.2 (*)
+      │   ├── icu_locale_core v2.4.0
+      │   │   ├── icu_properties v2.4.0 (*)
+      │   │   └── icu_provider v2.4.0
+      │   │       ├── icu_normalizer v2.4.0 (*)
+      │   │       └── icu_properties v2.4.0 (*)
+      │   ├── icu_properties v2.4.0 (*)
+      │   ├── icu_provider v2.4.0 (*)
+      │   ├── tinystr v0.8.5
+      │   │   └── icu_locale_core v2.4.0 (*)
+      │   └── zerotrie v0.2.5
+      │       ├── icu_properties v2.4.0 (*)
+      │       └── icu_provider v2.4.0 (*)
+      ├── enum-assoc v1.4.2
+      │   └── noq-proto v1.4.0
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-relay v1.4.1 (*)
+      │       ├── iroh-relay-spike v0.0.0 (*)
+      │       └── noq v1.4.0
+      │           ├── iroh v1.4.1 (*)
+      │           ├── iroh-relay v1.4.1 (*)
+      │           └── iroh-relay-spike v0.0.0 (*)
+      ├── futures-macro v0.3.34
+      │   └── futures-util v0.3.34
+      │       ├── axum v0.8.9
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   └── nosfry v0.3.0 (*)
+      │       ├── futures v0.3.34
+      │       │   ├── async_io_stream v0.3.3
+      │       │   │   └── ws_stream_wasm v0.7.5
+      │       │   │       └── iroh-relay v1.4.1 (*)
+      │       │   ├── igd-next v0.17.1 (*)
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   ├── pharos v0.5.3
+      │       │   │   ├── async_io_stream v0.3.3 (*)
+      │       │   │   └── ws_stream_wasm v0.7.5 (*)
+      │       │   ├── wmi v0.18.4
+      │       │   │   └── netwatch v0.19.3
+      │       │   │       ├── iroh v1.4.1 (*)
+      │       │   │       └── portmapper v0.19.3 (*)
+      │       │   ├── ws_stream_wasm v0.7.5 (*)
+      │       │   └── yawc v0.5.0 (*)
+      │       ├── futures-executor v0.3.34
+      │       │   └── futures v0.3.34 (*)
+      │       ├── hyper-util v0.1.21
+      │       │   ├── axum v0.8.9 (*)
+      │       │   ├── hyper-rustls v0.27.10
+      │       │   │   └── reqwest v0.13.5 (*)
+      │       │   ├── igd-next v0.17.1 (*)
+      │       │   ├── iroh-relay v1.4.1 (*)
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   ├── nosfry v0.3.0 (*)
+      │       │   ├── portmapper v0.19.3 (*)
+      │       │   ├── reqwest v0.13.5 (*)
+      │       │   └── yawc v0.5.0 (*)
+      │       ├── iroh v1.4.1 (*)
+      │       ├── js-sys v0.3.107
+      │       │   ├── getrandom v0.2.17
+      │       │   │   ├── rand_core v0.6.4
+      │       │   │   │   ├── rand v0.8.8
+      │       │   │   │   │   ├── phf_generator v0.11.3
+      │       │   │   │   │   │   └── phf_macros v0.11.3
+      │       │   │   │   │   │       └── phf v0.11.3
+      │       │   │   │   │   │           └── doxygen-rs v0.4.2
+      │       │   │   │   │   │               └── (build) lmdb-master-sys v0.2.6
+      │       │   │   │   │   │                   └── heed v0.22.1 (*)
+      │       │   │   │   │   └── yawc v0.5.0 (*)
+      │       │   │   │   └── rand_chacha v0.3.1
+      │       │   │   │       └── rand v0.8.8 (*)
+      │       │   │   ├── ring v0.17.14
+      │       │   │   │   ├── noq-proto v1.4.0 (*)
+      │       │   │   │   ├── rustls v0.23.46
+      │       │   │   │   │   ├── hyper-rustls v0.27.10 (*)
+      │       │   │   │   │   ├── iroh v1.4.1 (*)
+      │       │   │   │   │   ├── iroh-dns v1.4.1 (*)
+      │       │   │   │   │   ├── iroh-relay v1.4.1 (*)
+      │       │   │   │   │   ├── n0-dns-resolver v0.1.1 (*)
+      │       │   │   │   │   ├── noq v1.4.0 (*)
+      │       │   │   │   │   ├── noq-proto v1.4.0 (*)
+      │       │   │   │   │   ├── reqwest v0.13.5 (*)
+      │       │   │   │   │   ├── rustls-platform-verifier v0.7.1
+      │       │   │   │   │   │   ├── noq-proto v1.4.0 (*)
+      │       │   │   │   │   │   └── reqwest v0.13.5 (*)
+      │       │   │   │   │   └── tokio-rustls v0.26.6
+      │       │   │   │   │       ├── hyper-rustls v0.27.10 (*)
+      │       │   │   │   │       ├── iroh-relay v1.4.1 (*)
+      │       │   │   │   │       ├── n0-dns-resolver v0.1.1 (*)
+      │       │   │   │   │       ├── reqwest v0.13.5 (*)
+      │       │   │   │   │       └── tokio-websockets v0.13.3
+      │       │   │   │   │           └── iroh-relay v1.4.1 (*)
+      │       │   │   │   ├── rustls-webpki v0.103.17
+      │       │   │   │   │   ├── rustls v0.23.46 (*)
+      │       │   │   │   │   └── rustls-platform-verifier v0.7.1 (*)
+      │       │   │   │   └── tokio-websockets v0.13.3 (*)
+      │       │   │   └── yawc v0.5.0 (*)
+      │       │   ├── getrandom v0.4.3
+      │       │   │   ├── iroh v1.4.1 (*)
+      │       │   │   ├── iroh-base v1.4.1 (*)
+      │       │   │   ├── iroh-relay v1.4.1 (*)
+      │       │   │   ├── noq-proto v1.4.0 (*)
+      │       │   │   ├── nosfry v0.3.0 (*)
+      │       │   │   ├── rand v0.10.4
+      │       │   │   │   ├── igd-next v0.17.1 (*)
+      │       │   │   │   ├── iroh v1.4.1 (*)
+      │       │   │   │   ├── iroh-base v1.4.1 (*)
+      │       │   │   │   ├── iroh-dns v1.4.1 (*)
+      │       │   │   │   ├── iroh-relay v1.4.1 (*)
+      │       │   │   │   ├── n0-dns-resolver v0.1.1 (*)
+      │       │   │   │   ├── noq-proto v1.4.0 (*)
+      │       │   │   │   ├── portmapper v0.19.3 (*)
+      │       │   │   │   ├── tokio-websockets v0.13.3 (*)
+      │       │   │   │   └── tungstenite v0.30.0
+      │       │   │   │       └── tokio-tungstenite v0.30.0
+      │       │   │   │           └── iroh-relay-spike v0.0.0 (*)
+      │       │   │   └── tokio-websockets v0.13.3 (*)
+      │       │   ├── gloo-timers v0.3.0
+      │       │   │   └── backon v1.6.0
+      │       │   │       └── iroh v1.4.1 (*)
+      │       │   ├── iana-time-zone v0.1.65
+      │       │   │   └── chrono v0.4.45
+      │       │   │       └── wmi v0.18.4 (*)
+      │       │   ├── n0-future v0.3.2
+      │       │   │   ├── iroh v1.4.1 (*)
+      │       │   │   ├── iroh-dns v1.4.1 (*)
+      │       │   │   ├── iroh-relay v1.4.1 (*)
+      │       │   │   ├── n0-dns-resolver v0.1.1 (*)
+      │       │   │   ├── n0-watcher v1.0.1
+      │       │   │   │   ├── iroh v1.4.1 (*)
+      │       │   │   │   └── netwatch v0.19.3 (*)
+      │       │   │   ├── netwatch v0.19.3 (*)
+      │       │   │   └── portmapper v0.19.3 (*)
+      │       │   ├── netwatch v0.19.3 (*)
+      │       │   ├── reqwest v0.13.5 (*)
+      │       │   ├── time v0.3.55
+      │       │   │   ├── iroh v1.4.1 (*)
+      │       │   │   ├── netwatch v0.19.3 (*)
+      │       │   │   ├── plist v1.10.4
+      │       │   │   │   ├── netdev v0.45.1
+      │       │   │   │   │   └── netwatch v0.19.3 (*)
+      │       │   │   │   └── netdev v0.46.3
+      │       │   │   │       └── netwatch v0.19.3 (*)
+      │       │   │   └── portmapper v0.19.3 (*)
+      │       │   ├── wasm-bindgen-futures v0.4.80
+      │       │   │   ├── iroh v1.4.1 (*)
+      │       │   │   ├── n0-future v0.3.2 (*)
+      │       │   │   ├── reqwest v0.13.5 (*)
+      │       │   │   ├── wasm-streams v0.5.0
+      │       │   │   │   └── reqwest v0.13.5 (*)
+      │       │   │   ├── ws_stream_wasm v0.7.5 (*)
+      │       │   │   └── yawc v0.5.0 (*)
+      │       │   ├── wasm-streams v0.5.0 (*)
+      │       │   ├── web-sys v0.3.107
+      │       │   │   ├── netwatch v0.19.3 (*)
+      │       │   │   ├── reqwest v0.13.5 (*)
+      │       │   │   ├── wasm-streams v0.5.0 (*)
+      │       │   │   ├── ws_stream_wasm v0.7.5 (*)
+      │       │   │   └── yawc v0.5.0 (*)
+      │       │   ├── web-time v1.1.0
+      │       │   │   ├── n0-future v0.3.2 (*)
+      │       │   │   ├── noq v1.4.0 (*)
+      │       │   │   ├── noq-proto v1.4.0 (*)
+      │       │   │   └── rustls-pki-types v1.16.0
+      │       │   │       ├── iroh v1.4.1 (*)
+      │       │   │       ├── iroh-relay v1.4.1 (*)
+      │       │   │       ├── noq-proto v1.4.0 (*)
+      │       │   │       ├── reqwest v0.13.5 (*)
+      │       │   │       ├── rustls v0.23.46 (*)
+      │       │   │       ├── rustls-native-certs v0.8.5
+      │       │   │       │   └── rustls-platform-verifier v0.7.1 (*)
+      │       │   │       ├── rustls-webpki v0.103.17 (*)
+      │       │   │       ├── tokio-websockets v0.13.3 (*)
+      │       │   │       ├── webpki-root-certs v1.0.12
+      │       │   │       │   └── rustls-platform-verifier v0.7.1 (*)
+      │       │   │       └── webpki-roots v1.0.12
+      │       │   │           ├── iroh-relay v1.4.1 (*)
+      │       │   │           └── n0-dns-resolver v0.1.1 (*)
+      │       │   ├── ws_stream_wasm v0.7.5 (*)
+      │       │   └── yawc v0.5.0 (*)
+      │       ├── n0-future v0.3.2 (*)
+      │       ├── netlink-proto v0.12.2
+      │       │   └── netwatch v0.19.3 (*)
+      │       ├── netlink-sys v0.8.8
+      │       │   ├── netdev v0.45.1 (*)
+      │       │   ├── netlink-proto v0.12.2 (*)
+      │       │   └── netwatch v0.19.3 (*)
+      │       ├── nosfry v0.3.0 (*)
+      │       ├── reqwest v0.13.5 (*)
+      │       ├── tokio-tungstenite v0.30.0 (*)
+      │       ├── tokio-util v0.7.20
+      │       │   ├── h2 v0.4.20
+      │       │   │   └── hyper v1.12.0
+      │       │   │       ├── axum v0.8.9 (*)
+      │       │   │       ├── hyper-rustls v0.27.10 (*)
+      │       │   │       ├── hyper-util v0.1.21 (*)
+      │       │   │       ├── igd-next v0.17.1 (*)
+      │       │   │       ├── iroh-relay v1.4.1 (*)
+      │       │   │       ├── iroh-relay-spike v0.0.0 (*)
+      │       │   │       ├── nosfry v0.3.0 (*)
+      │       │   │       ├── reqwest v0.13.5 (*)
+      │       │   │       └── yawc v0.5.0 (*)
+      │       │   ├── iroh v1.4.1 (*)
+      │       │   ├── iroh-relay v1.4.1 (*)
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   ├── n0-future v0.3.2 (*)
+      │       │   ├── netwatch v0.19.3 (*)
+      │       │   ├── nosfry v0.3.0 (*)
+      │       │   ├── portmapper v0.19.3 (*)
+      │       │   ├── reqwest v0.13.5 (*)
+      │       │   ├── tokio-stream v0.1.19
+      │       │   │   ├── iroh v1.4.1 (*)
+      │       │   │   └── noq v1.4.0 (*)
+      │       │   ├── tokio-websockets v0.13.3 (*)
+      │       │   └── yawc v0.5.0 (*)
+      │       ├── tower v0.5.3
+      │       │   ├── axum v0.8.9 (*)
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   ├── nosfry v0.3.0 (*)
+      │       │   ├── reqwest v0.13.5 (*)
+      │       │   └── tower-http v0.6.11 (*)
+      │       ├── tower-http v0.6.11 (*)
+      │       └── wasm-streams v0.5.0 (*)
+      ├── pin-project-internal v1.2.0
+      │   └── pin-project v1.2.0
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-relay v1.4.1 (*)
+      │       ├── n0-future v0.3.2 (*)
+      │       └── yawc v0.5.0 (*)
+      ├── serde_derive v1.0.229
+      │   ├── serde v1.0.229
+      │   │   ├── chrono v0.4.45 (*)
+      │   │   ├── curve25519-dalek v5.0.0
+      │   │   │   ├── ed25519-dalek v3.0.0
+      │   │   │   │   ├── iroh v1.4.1 (*)
+      │   │   │   │   └── iroh-base v1.4.1 (*)
+      │   │   │   └── iroh-base v1.4.1 (*)
+      │   │   ├── ed25519-dalek v3.0.0 (*)
+      │   │   ├── faster-hex v1.0.0
+      │   │   │   ├── iroh-relay-spike v0.0.0 (*)
+      │   │   │   ├── nosfry v0.3.0 (*)
+      │   │   │   └── nosfry-core v0.3.0
+      │   │   │       ├── iroh-relay-spike v0.0.0 (*)
+      │   │   │       ├── nosfry v0.3.0 (*)
+      │   │   │       └── nosfry-lmdb v0.3.0 (*)
+      │   │   ├── iroh v1.4.1 (*)
+      │   │   ├── iroh-base v1.4.1 (*)
+      │   │   ├── iroh-metrics v1.0.3
+      │   │   │   ├── iroh v1.4.1 (*)
+      │   │   │   ├── iroh-relay v1.4.1 (*)
+      │   │   │   └── portmapper v0.19.3 (*)
+      │   │   ├── iroh-relay v1.4.1 (*)
+      │   │   ├── netwatch v0.19.3 (*)
+      │   │   ├── nosfry v0.3.0 (*)
+      │   │   ├── nosfry-core v0.3.0 (*)
+      │   │   ├── plist v1.10.4 (*)
+      │   │   ├── portable-atomic v1.15.0
+      │   │   │   ├── fastbloom v0.17.0
+      │   │   │   │   └── noq-proto v1.4.0 (*)
+      │   │   │   ├── iroh v1.4.1 (*)
+      │   │   │   ├── iroh-dns v1.4.1 (*)
+      │   │   │   └── iroh-metrics v1.0.3 (*)
+      │   │   ├── portmapper v0.19.3 (*)
+      │   │   ├── postcard v1.2.0
+      │   │   │   └── iroh-relay v1.4.1 (*)
+      │   │   ├── serde_urlencoded v0.7.1
+      │   │   │   └── axum v0.8.9 (*)
+      │   │   ├── serdect v0.4.3
+      │   │   │   └── ed25519 v3.0.0
+      │   │   │       └── ed25519-dalek v3.0.0 (*)
+      │   │   ├── tracing-serde v0.2.0
+      │   │   │   └── tracing-subscriber v0.3.23
+      │   │   │       ├── iroh-relay-spike v0.0.0 (*)
+      │   │   │       ├── loom v0.7.3
+      │   │   │       │   └── cordyceps v0.3.5
+      │   │   │       │       └── futures-buffered v0.2.14
+      │   │   │       │           └── n0-future v0.3.2 (*)
+      │   │   │       └── nosfry v0.3.0 (*)
+      │   │   ├── tracing-subscriber v0.3.23 (*)
+      │   │   ├── url v2.5.9 (*)
+      │   │   └── wmi v0.18.4 (*)
+      │   └── url v2.5.9 (*)
+      ├── synstructure v0.14.0
+      │   ├── yoke-derive v0.8.4
+      │   │   └── yoke v0.8.4
+      │   │       ├── icu_collections v2.4.0 (*)
+      │   │       ├── icu_provider v2.4.0 (*)
+      │   │       ├── zerotrie v0.2.5 (*)
+      │   │       └── zerovec v0.11.9
+      │   │           ├── icu_collections v2.4.0 (*)
+      │   │           ├── icu_locale_core v2.4.0 (*)
+      │   │           ├── icu_normalizer v2.4.0 (*)
+      │   │           ├── icu_properties v2.4.0 (*)
+      │   │           ├── icu_provider v2.4.0 (*)
+      │   │           ├── potential_utf v0.1.6
+      │   │           │   └── icu_collections v2.4.0 (*)
+      │   │           └── tinystr v0.8.5 (*)
+      │   └── zerofrom-derive v0.1.8
+      │       └── zerofrom v0.1.8
+      │           ├── icu_collections v2.4.0 (*)
+      │           ├── icu_provider v2.4.0 (*)
+      │           ├── yoke v0.8.4 (*)
+      │           ├── zerotrie v0.2.5 (*)
+      │           └── zerovec v0.11.9 (*)
+      ├── thiserror-impl v2.0.21
+      │   └── thiserror v2.0.21
+      │       ├── cobs v0.3.0
+      │       │   └── postcard v1.2.0 (*)
+      │       ├── jni v0.22.4
+      │       │   ├── n0-dns-resolver v0.1.1 (*)
+      │       │   └── rustls-platform-verifier v0.7.1 (*)
+      │       ├── netlink-proto v0.12.2 (*)
+      │       ├── noq v1.4.0 (*)
+      │       ├── noq-proto v1.4.0 (*)
+      │       ├── nosfry v0.3.0 (*)
+      │       ├── nosfry-core v0.3.0 (*)
+      │       ├── nosfry-lmdb v0.3.0 (*)
+      │       ├── tungstenite v0.30.0 (*)
+      │       ├── wmi v0.18.4 (*)
+      │       ├── ws_stream_wasm v0.7.5 (*)
+      │       └── yawc v0.5.0 (*)
+      ├── tokio-macros v2.7.2
+      │   └── tokio v1.54.1
+      │       ├── axum v0.8.9 (*)
+      │       ├── backon v1.6.0 (*)
+      │       ├── h2 v0.4.20 (*)
+      │       ├── hyper v1.12.0 (*)
+      │       ├── hyper-rustls v0.27.10 (*)
+      │       ├── hyper-util v0.1.21 (*)
+      │       ├── igd-next v0.17.1 (*)
+      │       ├── iroh v1.4.1 (*)
+      │       ├── iroh-dns v1.4.1 (*)
+      │       ├── iroh-relay v1.4.1 (*)
+      │       ├── iroh-relay-spike v0.0.0 (*)
+      │       ├── n0-dns-resolver v0.1.1 (*)
+      │       ├── n0-future v0.3.2 (*)
+      │       ├── netlink-sys v0.8.8 (*)
+      │       ├── netwatch v0.19.3 (*)
+      │       ├── noq v1.4.0 (*)
+      │       ├── nosfry v0.3.0 (*)
+      │       ├── portmapper v0.19.3 (*)
+      │       ├── reqwest v0.13.5 (*)
+      │       ├── tokio-rustls v0.26.6 (*)
+      │       ├── tokio-stream v0.1.19 (*)
+      │       ├── tokio-tungstenite v0.30.0 (*)
+      │       ├── tokio-util v0.7.20 (*)
+      │       ├── tokio-websockets v0.13.3 (*)
+      │       ├── tower v0.5.3 (*)
+      │       ├── wasm-bindgen-futures v0.4.80 (*)
+      │       └── yawc v0.5.0 (*)
+      ├── wasm-bindgen-macro-support v0.2.130
+      │   └── wasm-bindgen-macro v0.2.130
+      │       └── wasm-bindgen v0.2.130
+      │           ├── getrandom v0.2.17 (*)
+      │           ├── getrandom v0.4.3 (*)
+      │           ├── gloo-timers v0.3.0 (*)
+      │           ├── iana-time-zone v0.1.65 (*)
+      │           ├── js-sys v0.3.107 (*)
+      │           ├── n0-future v0.3.2 (*)
+      │           ├── reqwest v0.13.5 (*)
+      │           ├── wasm-bindgen-futures v0.4.80 (*)
+      │           ├── wasm-streams v0.5.0 (*)
+      │           ├── web-sys v0.3.107 (*)
+      │           ├── web-time v1.1.0 (*)
+      │           ├── ws_stream_wasm v0.7.5 (*)
+      │           └── yawc v0.5.0 (*)
+      ├── yoke-derive v0.8.4 (*)
+      ├── zerofrom-derive v0.1.8 (*)
+      └── zerovec-derive v0.11.7
+          └── zerovec v0.11.9 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'thiserror'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:319:1
+    │  
+319 │ ╭ thiserror 1.0.69 registry+https://github.com/rust-lang/crates.io-index
+320 │ │ thiserror 2.0.21 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ thiserror v1.0.69
+      └── jni v0.21.1
+          ├── netdev v0.45.1
+          │   └── netwatch v0.19.3
+          │       ├── iroh v1.4.1
+          │       │   └── iroh-relay-spike v0.0.0
+          │       └── portmapper v0.19.3
+          │           └── iroh v1.4.1 (*)
+          └── netdev v0.46.3
+              └── netwatch v0.19.3 (*)
+    ├ thiserror v2.0.21
+      ├── cobs v0.3.0
+      │   └── postcard v1.2.0
+      │       └── iroh-relay v1.4.1
+      │           ├── iroh v1.4.1
+      │           │   └── iroh-relay-spike v0.0.0
+      │           └── iroh-relay-spike v0.0.0 (*)
+      ├── jni v0.22.4
+      │   ├── n0-dns-resolver v0.1.1
+      │   │   └── iroh-dns v1.4.1
+      │   │       ├── iroh v1.4.1 (*)
+      │   │       ├── iroh-relay v1.4.1 (*)
+      │   │       └── iroh-relay-spike v0.0.0 (*)
+      │   └── rustls-platform-verifier v0.7.1
+      │       ├── noq-proto v1.4.0
+      │       │   ├── iroh v1.4.1 (*)
+      │       │   ├── iroh-relay v1.4.1 (*)
+      │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │       │   └── noq v1.4.0
+      │       │       ├── iroh v1.4.1 (*)
+      │       │       ├── iroh-relay v1.4.1 (*)
+      │       │       └── iroh-relay-spike v0.0.0 (*)
+      │       └── reqwest v0.13.5
+      │           ├── iroh v1.4.1 (*)
+      │           ├── iroh-relay v1.4.1 (*)
+      │           └── n0-dns-resolver v0.1.1 (*)
+      ├── netlink-proto v0.12.2
+      │   └── netwatch v0.19.3
+      │       ├── iroh v1.4.1 (*)
+      │       └── portmapper v0.19.3
+      │           └── iroh v1.4.1 (*)
+      ├── noq v1.4.0 (*)
+      ├── noq-proto v1.4.0 (*)
+      ├── nosfry v0.3.0
+      │   └── iroh-relay-spike v0.0.0 (*)
+      ├── nosfry-core v0.3.0
+      │   ├── iroh-relay-spike v0.0.0 (*)
+      │   ├── nosfry v0.3.0 (*)
+      │   └── nosfry-lmdb v0.3.0
+      │       └── nosfry v0.3.0 (*)
+      ├── nosfry-lmdb v0.3.0 (*)
+      ├── tungstenite v0.30.0
+      │   └── tokio-tungstenite v0.30.0
+      │       └── iroh-relay-spike v0.0.0 (*)
+      ├── wmi v0.18.4
+      │   └── netwatch v0.19.3 (*)
+      ├── ws_stream_wasm v0.7.5
+      │   └── iroh-relay v1.4.1 (*)
+      └── yawc v0.5.0
+          └── nosfry v0.3.0 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'thiserror-impl'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:321:1
+    │  
+321 │ ╭ thiserror-impl 1.0.69 registry+https://github.com/rust-lang/crates.io-index
+322 │ │ thiserror-impl 2.0.21 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ thiserror-impl v1.0.69
+      └── thiserror v1.0.69
+          └── jni v0.21.1
+              ├── netdev v0.45.1
+              │   └── netwatch v0.19.3
+              │       ├── iroh v1.4.1
+              │       │   └── iroh-relay-spike v0.0.0
+              │       └── portmapper v0.19.3
+              │           └── iroh v1.4.1 (*)
+              └── netdev v0.46.3
+                  └── netwatch v0.19.3 (*)
+    ├ thiserror-impl v2.0.21
+      └── thiserror v2.0.21
+          ├── cobs v0.3.0
+          │   └── postcard v1.2.0
+          │       └── iroh-relay v1.4.1
+          │           ├── iroh v1.4.1
+          │           │   └── iroh-relay-spike v0.0.0
+          │           └── iroh-relay-spike v0.0.0 (*)
+          ├── jni v0.22.4
+          │   ├── n0-dns-resolver v0.1.1
+          │   │   └── iroh-dns v1.4.1
+          │   │       ├── iroh v1.4.1 (*)
+          │   │       ├── iroh-relay v1.4.1 (*)
+          │   │       └── iroh-relay-spike v0.0.0 (*)
+          │   └── rustls-platform-verifier v0.7.1
+          │       ├── noq-proto v1.4.0
+          │       │   ├── iroh v1.4.1 (*)
+          │       │   ├── iroh-relay v1.4.1 (*)
+          │       │   ├── iroh-relay-spike v0.0.0 (*)
+          │       │   └── noq v1.4.0
+          │       │       ├── iroh v1.4.1 (*)
+          │       │       ├── iroh-relay v1.4.1 (*)
+          │       │       └── iroh-relay-spike v0.0.0 (*)
+          │       └── reqwest v0.13.5
+          │           ├── iroh v1.4.1 (*)
+          │           ├── iroh-relay v1.4.1 (*)
+          │           └── n0-dns-resolver v0.1.1 (*)
+          ├── netlink-proto v0.12.2
+          │   └── netwatch v0.19.3
+          │       ├── iroh v1.4.1 (*)
+          │       └── portmapper v0.19.3
+          │           └── iroh v1.4.1 (*)
+          ├── noq v1.4.0 (*)
+          ├── noq-proto v1.4.0 (*)
+          ├── nosfry v0.3.0
+          │   └── iroh-relay-spike v0.0.0 (*)
+          ├── nosfry-core v0.3.0
+          │   ├── iroh-relay-spike v0.0.0 (*)
+          │   ├── nosfry v0.3.0 (*)
+          │   └── nosfry-lmdb v0.3.0
+          │       └── nosfry v0.3.0 (*)
+          ├── nosfry-lmdb v0.3.0 (*)
+          ├── tungstenite v0.30.0
+          │   └── tokio-tungstenite v0.30.0
+          │       └── iroh-relay-spike v0.0.0 (*)
+          ├── wmi v0.18.4
+          │   └── netwatch v0.19.3 (*)
+          ├── ws_stream_wasm v0.7.5
+          │   └── iroh-relay v1.4.1 (*)
+          └── yawc v0.5.0
+              └── nosfry v0.3.0 (*)
+
+warning[duplicate]: found 3 duplicate entries for crate 'windows-sys'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:392:1
+    │  
+392 │ ╭ windows-sys 0.45.0 registry+https://github.com/rust-lang/crates.io-index
+393 │ │ windows-sys 0.52.0 registry+https://github.com/rust-lang/crates.io-index
+394 │ │ windows-sys 0.61.2 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ windows-sys v0.45.0
+      └── jni v0.21.1
+          ├── netdev v0.45.1
+          │   └── netwatch v0.19.3
+          │       ├── iroh v1.4.1
+          │       │   └── iroh-relay-spike v0.0.0
+          │       └── portmapper v0.19.3
+          │           └── iroh v1.4.1 (*)
+          └── netdev v0.46.3
+              └── netwatch v0.19.3 (*)
+    ├ windows-sys v0.52.0
+      └── ring v0.17.14
+          ├── noq-proto v1.4.0
+          │   ├── iroh v1.4.1
+          │   │   └── iroh-relay-spike v0.0.0
+          │   ├── iroh-relay v1.4.1
+          │   │   ├── iroh v1.4.1 (*)
+          │   │   └── iroh-relay-spike v0.0.0 (*)
+          │   ├── iroh-relay-spike v0.0.0 (*)
+          │   └── noq v1.4.0
+          │       ├── iroh v1.4.1 (*)
+          │       ├── iroh-relay v1.4.1 (*)
+          │       └── iroh-relay-spike v0.0.0 (*)
+          ├── rustls v0.23.46
+          │   ├── hyper-rustls v0.27.10
+          │   │   └── reqwest v0.13.5
+          │   │       ├── iroh v1.4.1 (*)
+          │   │       ├── iroh-relay v1.4.1 (*)
+          │   │       └── n0-dns-resolver v0.1.1
+          │   │           └── iroh-dns v1.4.1
+          │   │               ├── iroh v1.4.1 (*)
+          │   │               ├── iroh-relay v1.4.1 (*)
+          │   │               └── iroh-relay-spike v0.0.0 (*)
+          │   ├── iroh v1.4.1 (*)
+          │   ├── iroh-dns v1.4.1 (*)
+          │   ├── iroh-relay v1.4.1 (*)
+          │   ├── n0-dns-resolver v0.1.1 (*)
+          │   ├── noq v1.4.0 (*)
+          │   ├── noq-proto v1.4.0 (*)
+          │   ├── reqwest v0.13.5 (*)
+          │   ├── rustls-platform-verifier v0.7.1
+          │   │   ├── noq-proto v1.4.0 (*)
+          │   │   └── reqwest v0.13.5 (*)
+          │   └── tokio-rustls v0.26.6
+          │       ├── hyper-rustls v0.27.10 (*)
+          │       ├── iroh-relay v1.4.1 (*)
+          │       ├── n0-dns-resolver v0.1.1 (*)
+          │       ├── reqwest v0.13.5 (*)
+          │       └── tokio-websockets v0.13.3
+          │           └── iroh-relay v1.4.1 (*)
+          ├── rustls-webpki v0.103.17
+          │   ├── rustls v0.23.46 (*)
+          │   └── rustls-platform-verifier v0.7.1 (*)
+          └── tokio-websockets v0.13.3 (*)
+    ├ windows-sys v0.61.2
+      ├── anstyle-query v1.1.5
+      │   └── anstream v1.0.0
+      │       └── clap_builder v4.6.7
+      │           └── clap v4.6.9
+      │               ├── iroh-relay-spike v0.0.0
+      │               └── nosfry v0.3.0
+      │                   └── iroh-relay-spike v0.0.0 (*)
+      ├── anstyle-wincon v3.0.11
+      │   └── anstream v1.0.0 (*)
+      ├── errno v0.3.15
+      │   └── signal-hook-registry v1.4.8
+      │       └── tokio v1.54.1
+      │           ├── axum v0.8.9
+      │           │   ├── iroh-relay-spike v0.0.0 (*)
+      │           │   └── nosfry v0.3.0 (*)
+      │           ├── backon v1.6.0
+      │           │   └── iroh v1.4.1
+      │           │       └── iroh-relay-spike v0.0.0 (*)
+      │           ├── h2 v0.4.20
+      │           │   └── hyper v1.12.0
+      │           │       ├── axum v0.8.9 (*)
+      │           │       ├── hyper-rustls v0.27.10
+      │           │       │   └── reqwest v0.13.5
+      │           │       │       ├── iroh v1.4.1 (*)
+      │           │       │       ├── iroh-relay v1.4.1
+      │           │       │       │   ├── iroh v1.4.1 (*)
+      │           │       │       │   └── iroh-relay-spike v0.0.0 (*)
+      │           │       │       └── n0-dns-resolver v0.1.1
+      │           │       │           └── iroh-dns v1.4.1
+      │           │       │               ├── iroh v1.4.1 (*)
+      │           │       │               ├── iroh-relay v1.4.1 (*)
+      │           │       │               └── iroh-relay-spike v0.0.0 (*)
+      │           │       ├── hyper-util v0.1.21
+      │           │       │   ├── axum v0.8.9 (*)
+      │           │       │   ├── hyper-rustls v0.27.10 (*)
+      │           │       │   ├── igd-next v0.17.1
+      │           │       │   │   └── portmapper v0.19.3
+      │           │       │   │       └── iroh v1.4.1 (*)
+      │           │       │   ├── iroh-relay v1.4.1 (*)
+      │           │       │   ├── iroh-relay-spike v0.0.0 (*)
+      │           │       │   ├── nosfry v0.3.0 (*)
+      │           │       │   ├── portmapper v0.19.3 (*)
+      │           │       │   ├── reqwest v0.13.5 (*)
+      │           │       │   └── yawc v0.5.0
+      │           │       │       └── nosfry v0.3.0 (*)
+      │           │       ├── igd-next v0.17.1 (*)
+      │           │       ├── iroh-relay v1.4.1 (*)
+      │           │       ├── iroh-relay-spike v0.0.0 (*)
+      │           │       ├── nosfry v0.3.0 (*)
+      │           │       ├── reqwest v0.13.5 (*)
+      │           │       └── yawc v0.5.0 (*)
+      │           ├── hyper v1.12.0 (*)
+      │           ├── hyper-rustls v0.27.10 (*)
+      │           ├── hyper-util v0.1.21 (*)
+      │           ├── igd-next v0.17.1 (*)
+      │           ├── iroh v1.4.1 (*)
+      │           ├── iroh-dns v1.4.1 (*)
+      │           ├── iroh-relay v1.4.1 (*)
+      │           ├── iroh-relay-spike v0.0.0 (*)
+      │           ├── n0-dns-resolver v0.1.1 (*)
+      │           ├── n0-future v0.3.2
+      │           │   ├── iroh v1.4.1 (*)
+      │           │   ├── iroh-dns v1.4.1 (*)
+      │           │   ├── iroh-relay v1.4.1 (*)
+      │           │   ├── n0-dns-resolver v0.1.1 (*)
+      │           │   ├── n0-watcher v1.0.1
+      │           │   │   ├── iroh v1.4.1 (*)
+      │           │   │   └── netwatch v0.19.3
+      │           │   │       ├── iroh v1.4.1 (*)
+      │           │   │       └── portmapper v0.19.3 (*)
+      │           │   ├── netwatch v0.19.3 (*)
+      │           │   └── portmapper v0.19.3 (*)
+      │           ├── netlink-sys v0.8.8
+      │           │   ├── netdev v0.45.1
+      │           │   │   └── netwatch v0.19.3 (*)
+      │           │   ├── netlink-proto v0.12.2
+      │           │   │   └── netwatch v0.19.3 (*)
+      │           │   └── netwatch v0.19.3 (*)
+      │           ├── netwatch v0.19.3 (*)
+      │           ├── noq v1.4.0
+      │           │   ├── iroh v1.4.1 (*)
+      │           │   ├── iroh-relay v1.4.1 (*)
+      │           │   └── iroh-relay-spike v0.0.0 (*)
+      │           ├── nosfry v0.3.0 (*)
+      │           ├── portmapper v0.19.3 (*)
+      │           ├── reqwest v0.13.5 (*)
+      │           ├── tokio-rustls v0.26.6
+      │           │   ├── hyper-rustls v0.27.10 (*)
+      │           │   ├── iroh-relay v1.4.1 (*)
+      │           │   ├── n0-dns-resolver v0.1.1 (*)
+      │           │   ├── reqwest v0.13.5 (*)
+      │           │   └── tokio-websockets v0.13.3
+      │           │       └── iroh-relay v1.4.1 (*)
+      │           ├── tokio-stream v0.1.19
+      │           │   ├── iroh v1.4.1 (*)
+      │           │   └── noq v1.4.0 (*)
+      │           ├── tokio-tungstenite v0.30.0
+      │           │   └── iroh-relay-spike v0.0.0 (*)
+      │           ├── tokio-util v0.7.20
+      │           │   ├── h2 v0.4.20 (*)
+      │           │   ├── iroh v1.4.1 (*)
+      │           │   ├── iroh-relay v1.4.1 (*)
+      │           │   ├── iroh-relay-spike v0.0.0 (*)
+      │           │   ├── n0-future v0.3.2 (*)
+      │           │   ├── netwatch v0.19.3 (*)
+      │           │   ├── nosfry v0.3.0 (*)
+      │           │   ├── portmapper v0.19.3 (*)
+      │           │   ├── reqwest v0.13.5 (*)
+      │           │   ├── tokio-stream v0.1.19 (*)
+      │           │   ├── tokio-websockets v0.13.3 (*)
+      │           │   └── yawc v0.5.0 (*)
+      │           ├── tokio-websockets v0.13.3 (*)
+      │           ├── tower v0.5.3
+      │           │   ├── axum v0.8.9 (*)
+      │           │   ├── iroh-relay-spike v0.0.0 (*)
+      │           │   ├── nosfry v0.3.0 (*)
+      │           │   ├── reqwest v0.13.5 (*)
+      │           │   └── tower-http v0.6.11
+      │           │       └── reqwest v0.13.5 (*)
+      │           ├── wasm-bindgen-futures v0.4.80
+      │           │   ├── iroh v1.4.1 (*)
+      │           │   ├── n0-future v0.3.2 (*)
+      │           │   ├── reqwest v0.13.5 (*)
+      │           │   ├── wasm-streams v0.5.0
+      │           │   │   └── reqwest v0.13.5 (*)
+      │           │   ├── ws_stream_wasm v0.7.5
+      │           │   │   └── iroh-relay v1.4.1 (*)
+      │           │   └── yawc v0.5.0 (*)
+      │           └── yawc v0.5.0 (*)
+      ├── ipconfig v0.3.4
+      │   └── n0-dns-resolver v0.1.1 (*)
+      ├── mio v1.2.5
+      │   └── tokio v1.54.1 (*)
+      ├── netdev v0.45.1 (*)
+      ├── netdev v0.46.3
+      │   └── netwatch v0.19.3 (*)
+      ├── noq-udp v1.4.0
+      │   ├── iroh v1.4.1 (*)
+      │   ├── iroh-relay-spike v0.0.0 (*)
+      │   ├── netwatch v0.19.3 (*)
+      │   └── noq v1.4.0 (*)
+      ├── nu-ansi-term v0.50.3
+      │   └── tracing-subscriber v0.3.23
+      │       ├── iroh-relay-spike v0.0.0 (*)
+      │       ├── loom v0.7.3
+      │       │   └── cordyceps v0.3.5
+      │       │       └── futures-buffered v0.2.14
+      │       │           └── n0-future v0.3.2 (*)
+      │       └── nosfry v0.3.0 (*)
+      ├── rustls-platform-verifier v0.7.1
+      │   ├── noq-proto v1.4.0
+      │   │   ├── iroh v1.4.1 (*)
+      │   │   ├── iroh-relay v1.4.1 (*)
+      │   │   ├── iroh-relay-spike v0.0.0 (*)
+      │   │   └── noq v1.4.0 (*)
+      │   └── reqwest v0.13.5 (*)
+      ├── schannel v0.1.30
+      │   └── rustls-native-certs v0.8.5
+      │       └── rustls-platform-verifier v0.7.1 (*)
+      ├── socket2 v0.6.5
+      │   ├── hyper-util v0.1.21 (*)
+      │   ├── ipconfig v0.3.4 (*)
+      │   ├── iroh-relay-spike v0.0.0 (*)
+      │   ├── netwatch v0.19.3 (*)
+      │   ├── noq v1.4.0 (*)
+      │   ├── noq-udp v1.4.0 (*)
+      │   ├── nosfry v0.3.0 (*)
+      │   ├── portmapper v0.19.3 (*)
+      │   └── tokio v1.54.1 (*)
+      ├── tokio v1.54.1 (*)
+      └── winapi-util v0.1.11
+          ├── same-file v1.0.6
+          │   └── walkdir v2.5.1
+          │       ├── (build) jni v0.21.1
+          │       │   ├── netdev v0.45.1 (*)
+          │       │   └── netdev v0.46.3 (*)
+          │       └── (build) jni v0.22.4
+          │           ├── n0-dns-resolver v0.1.1 (*)
+          │           └── rustls-platform-verifier v0.7.1 (*)
+          └── walkdir v2.5.1 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows-targets'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:395:1
+    │  
+395 │ ╭ windows-targets 0.42.2 registry+https://github.com/rust-lang/crates.io-index
+396 │ │ windows-targets 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ windows-targets v0.42.2
+      └── windows-sys v0.45.0
+          └── jni v0.21.1
+              ├── netdev v0.45.1
+              │   └── netwatch v0.19.3
+              │       ├── iroh v1.4.1
+              │       │   └── iroh-relay-spike v0.0.0
+              │       └── portmapper v0.19.3
+              │           └── iroh v1.4.1 (*)
+              └── netdev v0.46.3
+                  └── netwatch v0.19.3 (*)
+    ├ windows-targets v0.52.6
+      └── windows-sys v0.52.0
+          └── ring v0.17.14
+              ├── noq-proto v1.4.0
+              │   ├── iroh v1.4.1
+              │   │   └── iroh-relay-spike v0.0.0
+              │   ├── iroh-relay v1.4.1
+              │   │   ├── iroh v1.4.1 (*)
+              │   │   └── iroh-relay-spike v0.0.0 (*)
+              │   ├── iroh-relay-spike v0.0.0 (*)
+              │   └── noq v1.4.0
+              │       ├── iroh v1.4.1 (*)
+              │       ├── iroh-relay v1.4.1 (*)
+              │       └── iroh-relay-spike v0.0.0 (*)
+              ├── rustls v0.23.46
+              │   ├── hyper-rustls v0.27.10
+              │   │   └── reqwest v0.13.5
+              │   │       ├── iroh v1.4.1 (*)
+              │   │       ├── iroh-relay v1.4.1 (*)
+              │   │       └── n0-dns-resolver v0.1.1
+              │   │           └── iroh-dns v1.4.1
+              │   │               ├── iroh v1.4.1 (*)
+              │   │               ├── iroh-relay v1.4.1 (*)
+              │   │               └── iroh-relay-spike v0.0.0 (*)
+              │   ├── iroh v1.4.1 (*)
+              │   ├── iroh-dns v1.4.1 (*)
+              │   ├── iroh-relay v1.4.1 (*)
+              │   ├── n0-dns-resolver v0.1.1 (*)
+              │   ├── noq v1.4.0 (*)
+              │   ├── noq-proto v1.4.0 (*)
+              │   ├── reqwest v0.13.5 (*)
+              │   ├── rustls-platform-verifier v0.7.1
+              │   │   ├── noq-proto v1.4.0 (*)
+              │   │   └── reqwest v0.13.5 (*)
+              │   └── tokio-rustls v0.26.6
+              │       ├── hyper-rustls v0.27.10 (*)
+              │       ├── iroh-relay v1.4.1 (*)
+              │       ├── n0-dns-resolver v0.1.1 (*)
+              │       ├── reqwest v0.13.5 (*)
+              │       └── tokio-websockets v0.13.3
+              │           └── iroh-relay v1.4.1 (*)
+              ├── rustls-webpki v0.103.17
+              │   ├── rustls v0.23.46 (*)
+              │   └── rustls-platform-verifier v0.7.1 (*)
+              └── tokio-websockets v0.13.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_aarch64_gnullvm'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:398:1
+    │  
+398 │ ╭ windows_aarch64_gnullvm 0.42.2 registry+https://github.com/rust-lang/crates.io-index
+399 │ │ windows_aarch64_gnullvm 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ windows_aarch64_gnullvm v0.42.2
+      └── windows-targets v0.42.2
+          └── windows-sys v0.45.0
+              └── jni v0.21.1
+                  ├── netdev v0.45.1
+                  │   └── netwatch v0.19.3
+                  │       ├── iroh v1.4.1
+                  │       │   └── iroh-relay-spike v0.0.0
+                  │       └── portmapper v0.19.3
+                  │           └── iroh v1.4.1 (*)
+                  └── netdev v0.46.3
+                      └── netwatch v0.19.3 (*)
+    ├ windows_aarch64_gnullvm v0.52.6
+      └── windows-targets v0.52.6
+          └── windows-sys v0.52.0
+              └── ring v0.17.14
+                  ├── noq-proto v1.4.0
+                  │   ├── iroh v1.4.1
+                  │   │   └── iroh-relay-spike v0.0.0
+                  │   ├── iroh-relay v1.4.1
+                  │   │   ├── iroh v1.4.1 (*)
+                  │   │   └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh-relay-spike v0.0.0 (*)
+                  │   └── noq v1.4.0
+                  │       ├── iroh v1.4.1 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       └── iroh-relay-spike v0.0.0 (*)
+                  ├── rustls v0.23.46
+                  │   ├── hyper-rustls v0.27.10
+                  │   │   └── reqwest v0.13.5
+                  │   │       ├── iroh v1.4.1 (*)
+                  │   │       ├── iroh-relay v1.4.1 (*)
+                  │   │       └── n0-dns-resolver v0.1.1
+                  │   │           └── iroh-dns v1.4.1
+                  │   │               ├── iroh v1.4.1 (*)
+                  │   │               ├── iroh-relay v1.4.1 (*)
+                  │   │               └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh v1.4.1 (*)
+                  │   ├── iroh-dns v1.4.1 (*)
+                  │   ├── iroh-relay v1.4.1 (*)
+                  │   ├── n0-dns-resolver v0.1.1 (*)
+                  │   ├── noq v1.4.0 (*)
+                  │   ├── noq-proto v1.4.0 (*)
+                  │   ├── reqwest v0.13.5 (*)
+                  │   ├── rustls-platform-verifier v0.7.1
+                  │   │   ├── noq-proto v1.4.0 (*)
+                  │   │   └── reqwest v0.13.5 (*)
+                  │   └── tokio-rustls v0.26.6
+                  │       ├── hyper-rustls v0.27.10 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       ├── n0-dns-resolver v0.1.1 (*)
+                  │       ├── reqwest v0.13.5 (*)
+                  │       └── tokio-websockets v0.13.3
+                  │           └── iroh-relay v1.4.1 (*)
+                  ├── rustls-webpki v0.103.17
+                  │   ├── rustls v0.23.46 (*)
+                  │   └── rustls-platform-verifier v0.7.1 (*)
+                  └── tokio-websockets v0.13.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_aarch64_msvc'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:400:1
+    │  
+400 │ ╭ windows_aarch64_msvc 0.42.2 registry+https://github.com/rust-lang/crates.io-index
+401 │ │ windows_aarch64_msvc 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ windows_aarch64_msvc v0.42.2
+      └── windows-targets v0.42.2
+          └── windows-sys v0.45.0
+              └── jni v0.21.1
+                  ├── netdev v0.45.1
+                  │   └── netwatch v0.19.3
+                  │       ├── iroh v1.4.1
+                  │       │   └── iroh-relay-spike v0.0.0
+                  │       └── portmapper v0.19.3
+                  │           └── iroh v1.4.1 (*)
+                  └── netdev v0.46.3
+                      └── netwatch v0.19.3 (*)
+    ├ windows_aarch64_msvc v0.52.6
+      └── windows-targets v0.52.6
+          └── windows-sys v0.52.0
+              └── ring v0.17.14
+                  ├── noq-proto v1.4.0
+                  │   ├── iroh v1.4.1
+                  │   │   └── iroh-relay-spike v0.0.0
+                  │   ├── iroh-relay v1.4.1
+                  │   │   ├── iroh v1.4.1 (*)
+                  │   │   └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh-relay-spike v0.0.0 (*)
+                  │   └── noq v1.4.0
+                  │       ├── iroh v1.4.1 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       └── iroh-relay-spike v0.0.0 (*)
+                  ├── rustls v0.23.46
+                  │   ├── hyper-rustls v0.27.10
+                  │   │   └── reqwest v0.13.5
+                  │   │       ├── iroh v1.4.1 (*)
+                  │   │       ├── iroh-relay v1.4.1 (*)
+                  │   │       └── n0-dns-resolver v0.1.1
+                  │   │           └── iroh-dns v1.4.1
+                  │   │               ├── iroh v1.4.1 (*)
+                  │   │               ├── iroh-relay v1.4.1 (*)
+                  │   │               └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh v1.4.1 (*)
+                  │   ├── iroh-dns v1.4.1 (*)
+                  │   ├── iroh-relay v1.4.1 (*)
+                  │   ├── n0-dns-resolver v0.1.1 (*)
+                  │   ├── noq v1.4.0 (*)
+                  │   ├── noq-proto v1.4.0 (*)
+                  │   ├── reqwest v0.13.5 (*)
+                  │   ├── rustls-platform-verifier v0.7.1
+                  │   │   ├── noq-proto v1.4.0 (*)
+                  │   │   └── reqwest v0.13.5 (*)
+                  │   └── tokio-rustls v0.26.6
+                  │       ├── hyper-rustls v0.27.10 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       ├── n0-dns-resolver v0.1.1 (*)
+                  │       ├── reqwest v0.13.5 (*)
+                  │       └── tokio-websockets v0.13.3
+                  │           └── iroh-relay v1.4.1 (*)
+                  ├── rustls-webpki v0.103.17
+                  │   ├── rustls v0.23.46 (*)
+                  │   └── rustls-platform-verifier v0.7.1 (*)
+                  └── tokio-websockets v0.13.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_i686_gnu'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:402:1
+    │  
+402 │ ╭ windows_i686_gnu 0.42.2 registry+https://github.com/rust-lang/crates.io-index
+403 │ │ windows_i686_gnu 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰─────────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ windows_i686_gnu v0.42.2
+      └── windows-targets v0.42.2
+          └── windows-sys v0.45.0
+              └── jni v0.21.1
+                  ├── netdev v0.45.1
+                  │   └── netwatch v0.19.3
+                  │       ├── iroh v1.4.1
+                  │       │   └── iroh-relay-spike v0.0.0
+                  │       └── portmapper v0.19.3
+                  │           └── iroh v1.4.1 (*)
+                  └── netdev v0.46.3
+                      └── netwatch v0.19.3 (*)
+    ├ windows_i686_gnu v0.52.6
+      └── windows-targets v0.52.6
+          └── windows-sys v0.52.0
+              └── ring v0.17.14
+                  ├── noq-proto v1.4.0
+                  │   ├── iroh v1.4.1
+                  │   │   └── iroh-relay-spike v0.0.0
+                  │   ├── iroh-relay v1.4.1
+                  │   │   ├── iroh v1.4.1 (*)
+                  │   │   └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh-relay-spike v0.0.0 (*)
+                  │   └── noq v1.4.0
+                  │       ├── iroh v1.4.1 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       └── iroh-relay-spike v0.0.0 (*)
+                  ├── rustls v0.23.46
+                  │   ├── hyper-rustls v0.27.10
+                  │   │   └── reqwest v0.13.5
+                  │   │       ├── iroh v1.4.1 (*)
+                  │   │       ├── iroh-relay v1.4.1 (*)
+                  │   │       └── n0-dns-resolver v0.1.1
+                  │   │           └── iroh-dns v1.4.1
+                  │   │               ├── iroh v1.4.1 (*)
+                  │   │               ├── iroh-relay v1.4.1 (*)
+                  │   │               └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh v1.4.1 (*)
+                  │   ├── iroh-dns v1.4.1 (*)
+                  │   ├── iroh-relay v1.4.1 (*)
+                  │   ├── n0-dns-resolver v0.1.1 (*)
+                  │   ├── noq v1.4.0 (*)
+                  │   ├── noq-proto v1.4.0 (*)
+                  │   ├── reqwest v0.13.5 (*)
+                  │   ├── rustls-platform-verifier v0.7.1
+                  │   │   ├── noq-proto v1.4.0 (*)
+                  │   │   └── reqwest v0.13.5 (*)
+                  │   └── tokio-rustls v0.26.6
+                  │       ├── hyper-rustls v0.27.10 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       ├── n0-dns-resolver v0.1.1 (*)
+                  │       ├── reqwest v0.13.5 (*)
+                  │       └── tokio-websockets v0.13.3
+                  │           └── iroh-relay v1.4.1 (*)
+                  ├── rustls-webpki v0.103.17
+                  │   ├── rustls v0.23.46 (*)
+                  │   └── rustls-platform-verifier v0.7.1 (*)
+                  └── tokio-websockets v0.13.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_i686_msvc'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:405:1
+    │  
+405 │ ╭ windows_i686_msvc 0.42.2 registry+https://github.com/rust-lang/crates.io-index
+406 │ │ windows_i686_msvc 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰──────────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ windows_i686_msvc v0.42.2
+      └── windows-targets v0.42.2
+          └── windows-sys v0.45.0
+              └── jni v0.21.1
+                  ├── netdev v0.45.1
+                  │   └── netwatch v0.19.3
+                  │       ├── iroh v1.4.1
+                  │       │   └── iroh-relay-spike v0.0.0
+                  │       └── portmapper v0.19.3
+                  │           └── iroh v1.4.1 (*)
+                  └── netdev v0.46.3
+                      └── netwatch v0.19.3 (*)
+    ├ windows_i686_msvc v0.52.6
+      └── windows-targets v0.52.6
+          └── windows-sys v0.52.0
+              └── ring v0.17.14
+                  ├── noq-proto v1.4.0
+                  │   ├── iroh v1.4.1
+                  │   │   └── iroh-relay-spike v0.0.0
+                  │   ├── iroh-relay v1.4.1
+                  │   │   ├── iroh v1.4.1 (*)
+                  │   │   └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh-relay-spike v0.0.0 (*)
+                  │   └── noq v1.4.0
+                  │       ├── iroh v1.4.1 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       └── iroh-relay-spike v0.0.0 (*)
+                  ├── rustls v0.23.46
+                  │   ├── hyper-rustls v0.27.10
+                  │   │   └── reqwest v0.13.5
+                  │   │       ├── iroh v1.4.1 (*)
+                  │   │       ├── iroh-relay v1.4.1 (*)
+                  │   │       └── n0-dns-resolver v0.1.1
+                  │   │           └── iroh-dns v1.4.1
+                  │   │               ├── iroh v1.4.1 (*)
+                  │   │               ├── iroh-relay v1.4.1 (*)
+                  │   │               └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh v1.4.1 (*)
+                  │   ├── iroh-dns v1.4.1 (*)
+                  │   ├── iroh-relay v1.4.1 (*)
+                  │   ├── n0-dns-resolver v0.1.1 (*)
+                  │   ├── noq v1.4.0 (*)
+                  │   ├── noq-proto v1.4.0 (*)
+                  │   ├── reqwest v0.13.5 (*)
+                  │   ├── rustls-platform-verifier v0.7.1
+                  │   │   ├── noq-proto v1.4.0 (*)
+                  │   │   └── reqwest v0.13.5 (*)
+                  │   └── tokio-rustls v0.26.6
+                  │       ├── hyper-rustls v0.27.10 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       ├── n0-dns-resolver v0.1.1 (*)
+                  │       ├── reqwest v0.13.5 (*)
+                  │       └── tokio-websockets v0.13.3
+                  │           └── iroh-relay v1.4.1 (*)
+                  ├── rustls-webpki v0.103.17
+                  │   ├── rustls v0.23.46 (*)
+                  │   └── rustls-platform-verifier v0.7.1 (*)
+                  └── tokio-websockets v0.13.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_x86_64_gnu'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:407:1
+    │  
+407 │ ╭ windows_x86_64_gnu 0.42.2 registry+https://github.com/rust-lang/crates.io-index
+408 │ │ windows_x86_64_gnu 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ windows_x86_64_gnu v0.42.2
+      └── windows-targets v0.42.2
+          └── windows-sys v0.45.0
+              └── jni v0.21.1
+                  ├── netdev v0.45.1
+                  │   └── netwatch v0.19.3
+                  │       ├── iroh v1.4.1
+                  │       │   └── iroh-relay-spike v0.0.0
+                  │       └── portmapper v0.19.3
+                  │           └── iroh v1.4.1 (*)
+                  └── netdev v0.46.3
+                      └── netwatch v0.19.3 (*)
+    ├ windows_x86_64_gnu v0.52.6
+      └── windows-targets v0.52.6
+          └── windows-sys v0.52.0
+              └── ring v0.17.14
+                  ├── noq-proto v1.4.0
+                  │   ├── iroh v1.4.1
+                  │   │   └── iroh-relay-spike v0.0.0
+                  │   ├── iroh-relay v1.4.1
+                  │   │   ├── iroh v1.4.1 (*)
+                  │   │   └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh-relay-spike v0.0.0 (*)
+                  │   └── noq v1.4.0
+                  │       ├── iroh v1.4.1 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       └── iroh-relay-spike v0.0.0 (*)
+                  ├── rustls v0.23.46
+                  │   ├── hyper-rustls v0.27.10
+                  │   │   └── reqwest v0.13.5
+                  │   │       ├── iroh v1.4.1 (*)
+                  │   │       ├── iroh-relay v1.4.1 (*)
+                  │   │       └── n0-dns-resolver v0.1.1
+                  │   │           └── iroh-dns v1.4.1
+                  │   │               ├── iroh v1.4.1 (*)
+                  │   │               ├── iroh-relay v1.4.1 (*)
+                  │   │               └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh v1.4.1 (*)
+                  │   ├── iroh-dns v1.4.1 (*)
+                  │   ├── iroh-relay v1.4.1 (*)
+                  │   ├── n0-dns-resolver v0.1.1 (*)
+                  │   ├── noq v1.4.0 (*)
+                  │   ├── noq-proto v1.4.0 (*)
+                  │   ├── reqwest v0.13.5 (*)
+                  │   ├── rustls-platform-verifier v0.7.1
+                  │   │   ├── noq-proto v1.4.0 (*)
+                  │   │   └── reqwest v0.13.5 (*)
+                  │   └── tokio-rustls v0.26.6
+                  │       ├── hyper-rustls v0.27.10 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       ├── n0-dns-resolver v0.1.1 (*)
+                  │       ├── reqwest v0.13.5 (*)
+                  │       └── tokio-websockets v0.13.3
+                  │           └── iroh-relay v1.4.1 (*)
+                  ├── rustls-webpki v0.103.17
+                  │   ├── rustls v0.23.46 (*)
+                  │   └── rustls-platform-verifier v0.7.1 (*)
+                  └── tokio-websockets v0.13.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_x86_64_gnullvm'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:409:1
+    │  
+409 │ ╭ windows_x86_64_gnullvm 0.42.2 registry+https://github.com/rust-lang/crates.io-index
+410 │ │ windows_x86_64_gnullvm 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰───────────────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ windows_x86_64_gnullvm v0.42.2
+      └── windows-targets v0.42.2
+          └── windows-sys v0.45.0
+              └── jni v0.21.1
+                  ├── netdev v0.45.1
+                  │   └── netwatch v0.19.3
+                  │       ├── iroh v1.4.1
+                  │       │   └── iroh-relay-spike v0.0.0
+                  │       └── portmapper v0.19.3
+                  │           └── iroh v1.4.1 (*)
+                  └── netdev v0.46.3
+                      └── netwatch v0.19.3 (*)
+    ├ windows_x86_64_gnullvm v0.52.6
+      └── windows-targets v0.52.6
+          └── windows-sys v0.52.0
+              └── ring v0.17.14
+                  ├── noq-proto v1.4.0
+                  │   ├── iroh v1.4.1
+                  │   │   └── iroh-relay-spike v0.0.0
+                  │   ├── iroh-relay v1.4.1
+                  │   │   ├── iroh v1.4.1 (*)
+                  │   │   └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh-relay-spike v0.0.0 (*)
+                  │   └── noq v1.4.0
+                  │       ├── iroh v1.4.1 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       └── iroh-relay-spike v0.0.0 (*)
+                  ├── rustls v0.23.46
+                  │   ├── hyper-rustls v0.27.10
+                  │   │   └── reqwest v0.13.5
+                  │   │       ├── iroh v1.4.1 (*)
+                  │   │       ├── iroh-relay v1.4.1 (*)
+                  │   │       └── n0-dns-resolver v0.1.1
+                  │   │           └── iroh-dns v1.4.1
+                  │   │               ├── iroh v1.4.1 (*)
+                  │   │               ├── iroh-relay v1.4.1 (*)
+                  │   │               └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh v1.4.1 (*)
+                  │   ├── iroh-dns v1.4.1 (*)
+                  │   ├── iroh-relay v1.4.1 (*)
+                  │   ├── n0-dns-resolver v0.1.1 (*)
+                  │   ├── noq v1.4.0 (*)
+                  │   ├── noq-proto v1.4.0 (*)
+                  │   ├── reqwest v0.13.5 (*)
+                  │   ├── rustls-platform-verifier v0.7.1
+                  │   │   ├── noq-proto v1.4.0 (*)
+                  │   │   └── reqwest v0.13.5 (*)
+                  │   └── tokio-rustls v0.26.6
+                  │       ├── hyper-rustls v0.27.10 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       ├── n0-dns-resolver v0.1.1 (*)
+                  │       ├── reqwest v0.13.5 (*)
+                  │       └── tokio-websockets v0.13.3
+                  │           └── iroh-relay v1.4.1 (*)
+                  ├── rustls-webpki v0.103.17
+                  │   ├── rustls v0.23.46 (*)
+                  │   └── rustls-platform-verifier v0.7.1 (*)
+                  └── tokio-websockets v0.13.3 (*)
+
+warning[duplicate]: found 2 duplicate entries for crate 'windows_x86_64_msvc'
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:411:1
+    │  
+411 │ ╭ windows_x86_64_msvc 0.42.2 registry+https://github.com/rust-lang/crates.io-index
+412 │ │ windows_x86_64_msvc 0.52.6 registry+https://github.com/rust-lang/crates.io-index
+    │ ╰────────────────────────────────────────────────────────────────────────────────┘ lock entries
+    │  
+    ├ windows_x86_64_msvc v0.42.2
+      └── windows-targets v0.42.2
+          └── windows-sys v0.45.0
+              └── jni v0.21.1
+                  ├── netdev v0.45.1
+                  │   └── netwatch v0.19.3
+                  │       ├── iroh v1.4.1
+                  │       │   └── iroh-relay-spike v0.0.0
+                  │       └── portmapper v0.19.3
+                  │           └── iroh v1.4.1 (*)
+                  └── netdev v0.46.3
+                      └── netwatch v0.19.3 (*)
+    ├ windows_x86_64_msvc v0.52.6
+      └── windows-targets v0.52.6
+          └── windows-sys v0.52.0
+              └── ring v0.17.14
+                  ├── noq-proto v1.4.0
+                  │   ├── iroh v1.4.1
+                  │   │   └── iroh-relay-spike v0.0.0
+                  │   ├── iroh-relay v1.4.1
+                  │   │   ├── iroh v1.4.1 (*)
+                  │   │   └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh-relay-spike v0.0.0 (*)
+                  │   └── noq v1.4.0
+                  │       ├── iroh v1.4.1 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       └── iroh-relay-spike v0.0.0 (*)
+                  ├── rustls v0.23.46
+                  │   ├── hyper-rustls v0.27.10
+                  │   │   └── reqwest v0.13.5
+                  │   │       ├── iroh v1.4.1 (*)
+                  │   │       ├── iroh-relay v1.4.1 (*)
+                  │   │       └── n0-dns-resolver v0.1.1
+                  │   │           └── iroh-dns v1.4.1
+                  │   │               ├── iroh v1.4.1 (*)
+                  │   │               ├── iroh-relay v1.4.1 (*)
+                  │   │               └── iroh-relay-spike v0.0.0 (*)
+                  │   ├── iroh v1.4.1 (*)
+                  │   ├── iroh-dns v1.4.1 (*)
+                  │   ├── iroh-relay v1.4.1 (*)
+                  │   ├── n0-dns-resolver v0.1.1 (*)
+                  │   ├── noq v1.4.0 (*)
+                  │   ├── noq-proto v1.4.0 (*)
+                  │   ├── reqwest v0.13.5 (*)
+                  │   ├── rustls-platform-verifier v0.7.1
+                  │   │   ├── noq-proto v1.4.0 (*)
+                  │   │   └── reqwest v0.13.5 (*)
+                  │   └── tokio-rustls v0.26.6
+                  │       ├── hyper-rustls v0.27.10 (*)
+                  │       ├── iroh-relay v1.4.1 (*)
+                  │       ├── n0-dns-resolver v0.1.1 (*)
+                  │       ├── reqwest v0.13.5 (*)
+                  │       └── tokio-websockets v0.13.3
+                  │           └── iroh-relay v1.4.1 (*)
+                  ├── rustls-webpki v0.103.17
+                  │   ├── rustls v0.23.46 (*)
+                  │   └── rustls-platform-verifier v0.7.1 (*)
+                  └── tokio-websockets v0.13.3 (*)
+
+error[unmaintained]: chrono is unmaintained
+   ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:38:1
+   │
+38 │ chrono 0.4.45 registry+https://github.com/rust-lang/crates.io-index
+   │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unmaintained advisory detected
+   │
+   ├ ID: RUSTSEC-2026-0543
+   ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2026-0543
+   ├ The chrono crate is unmaintained; all versions are affected.
+     
+     Recommended alternatives:
+     
+     - [jiff](https://crates.io/crates/jiff)
+     - [time](https://crates.io/crates/time)
+   ├ Announcement: https://github.com/chronotope/chrono/issues/1768
+   ├ Solution: No safe upgrade is available!
+   ├ chrono v0.4.45
+     └── wmi v0.18.4
+         └── netwatch v0.19.3
+             ├── iroh v1.4.1
+             │   └── iroh-relay-spike v0.0.0
+             └── portmapper v0.19.3
+                 └── iroh v1.4.1 (*)
+
+error[unmaintained]: paste - no longer maintained
+    ┌─ /Users/xu/Desktop/qntx/nosfry-wt/p2p/spike/iroh-relay/Cargo.lock:219:1
+    │
+219 │ paste 1.0.15 registry+https://github.com/rust-lang/crates.io-index
+    │ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ unmaintained advisory detected
+    │
+    ├ ID: RUSTSEC-2024-0436
+    ├ Advisory: https://rustsec.org/advisories/RUSTSEC-2024-0436
+    ├ The creator of the crate `paste` has stated in the [`README.md`](https://github.com/dtolnay/paste/blob/master/README.md) 
+      that this project is not longer maintained as well as archived the repository
+      
+      ## Possible Alternative(s)
+      
+      - [`pastey`]: a fork of paste and is aimed to be a drop-in replacement with additional features for paste crate
+      - [`with_builtin_macros`]: crate providing a [superset of `paste`'s functionality including general `macro_rules!` eager expansions](https://docs.rs/with_builtin_macros/0.1.0/with_builtin_macros/macro.with_eager_expansions.html)  and `concat!`/`concat_idents!` macros
+      
+      [`pastey`]: https://crates.io/crates/pastey
+      [`with_builtin_macros`]: https://crates.io/crates/with_builtin_macros
+    ├ Announcement: https://github.com/dtolnay/paste
+    ├ Solution: No safe upgrade is available!
+    ├ paste v1.0.15
+      └── netlink-packet-core v0.8.2
+          ├── netdev v0.45.1
+          │   └── netwatch v0.19.3
+          │       ├── iroh v1.4.1
+          │       │   └── iroh-relay-spike v0.0.0
+          │       └── portmapper v0.19.3
+          │           └── iroh v1.4.1 (*)
+          ├── netlink-packet-route v0.31.0
+          │   ├── netdev v0.45.1 (*)
+          │   └── netwatch v0.19.3 (*)
+          ├── netlink-proto v0.12.2
+          │   └── netwatch v0.19.3 (*)
+          └── netwatch v0.19.3 (*)
+
+advisories FAILED, bans FAILED, licenses FAILED, sources ok

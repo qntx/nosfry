@@ -1,0 +1,74 @@
+[package]
+name         = "iroh-relay-spike"
+version      = "0.0.0"
+edition      = "2024"
+publish      = false
+license      = "MIT OR Apache-2.0"
+rust-version = "1.91"
+
+# Standalone spike: not part of the root workspace.
+[workspace]
+
+[features]
+default = []
+# Pulls in the iroh p2p stack. The `baseline` binary builds without it;
+# `iroh-relay-node`, `iroh-gateway` and `iroh-client` require it.
+iroh = [
+    "dep:anyhow",
+    "dep:faster-hex",
+    "dep:iroh",
+    "dep:iroh-base",
+    "dep:iroh-dns",
+    "dep:iroh-relay",
+    "dep:noq",
+    "dep:noq-proto",
+    "dep:noq-udp",
+    "dep:tokio-tungstenite",
+]
+
+[dependencies]
+nosfry      = { path = "../../crates/nosfry" }
+nosfry-core = { path = "../../crates/nosfry-core", features = ["test-util"] }
+
+axum         = "0.8.9"
+clap         = { version = "4.6", features = ["derive"] }
+futures      = "0.3"
+hyper        = { version = "1.12", default-features = false, features = ["http1", "server"] }
+hyper-util   = { version = "0.1.21", default-features = false, features = ["service", "tokio"] }
+serde_json   = "1"
+socket2      = "0.6"
+tokio        = { version = "1.53", features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "rt-multi-thread",
+    "signal",
+    "sync",
+    "time",
+] }
+tokio-util         = { version = "0.7.20", features = ["rt"] }
+tower              = { version = "0.5.3", features = ["util"] }
+tracing            = "0.1"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+anyhow            = { version = "1", optional = true }
+faster-hex        = { version = "1.0", optional = true }
+iroh              = { version = "=1.4.1", optional = true }
+# iroh's ecosystem crates use caret requirements internally, so
+# `iroh = "=1.4.1"` alone lets iroh-base/noq/... float to 1.5.0
+# (published 2026-11-19, outside the allowed window). Pin the whole
+# stack to the 1.4.x line.
+iroh-base         = { version = "=1.4.1", optional = true }
+iroh-dns          = { version = "=1.4.1", optional = true }
+iroh-relay        = { version = "=1.4.1", optional = true }
+noq               = { version = "=1.4.0", optional = true }
+noq-proto         = { version = "=1.4.0", optional = true }
+noq-udp           = { version = "=1.4.0", optional = true }
+tokio-tungstenite = { version = "=0.30.0", optional = true }
+
+[profile.release]
+codegen-units = 1
+lto           = "thin"
+panic         = "abort"
+strip         = true

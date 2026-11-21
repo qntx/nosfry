@@ -1,0 +1,8 @@
+/Users/xu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-1.4.1/Cargo.toml:rust-version = "1.91"
+/Users/xu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-1.4.1/Cargo.toml.orig:rust-version = "1.91"
+/Users/xu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-base-1.4.1/Cargo.toml:rust-version = "1.91"
+/Users/xu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iroh-base-1.4.1/Cargo.toml.orig:rust-version = "1.91"
+/Users/xu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noq-1.4.0/Cargo.toml:rust-version = "1.88"
+/Users/xu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/noq-1.4.0/Cargo.toml.orig:rust-version.workspace = true
+rust-version = "1.91"
+rust-version = "1.91"
