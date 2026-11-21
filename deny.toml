@@ -11,10 +11,16 @@
 all-features = true
 
 [advisories]
-db-path = "$CARGO_HOME/advisory-dbs"
-db-urls = ["https://github.com/RustSec/advisory-db"]
-yanked  = "deny"
-ignore  = []
+db-path      = "$CARGO_HOME/advisory-dbs"
+db-urls      = ["https://github.com/RustSec/advisory-db"]
+yanked       = "deny"
+unmaintained = "all"
+unsound      = "all"
+# Each ignore names one advisory, why it cannot be fixed by an upgrade,
+# what it reaches, and the date it was last reviewed. cargo-deny 0.20
+# (the version CI runs) has no `expiry` field, so the review date lives
+# in the reason; drop the entry once the reason no longer holds.
+ignore = [{ id = "RUSTSEC-2026-0543", reason = "chrono unmaintained (informational, no patched version). Reached only through worker 0.8.7 in nosfry-worker, which builds for wasm32 only and is not published; the native nosfry binary and the published crates do not link chrono. worker 0.9.0 still requires chrono unconditionally (cloudflare/workers-rs#77). Reviewed 2026-11-22; revisit by 2027-02-22 or when worker drops chrono." }]
 
 [licenses]
 unused-allowed-license = "warn"
