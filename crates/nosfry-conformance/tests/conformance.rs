@@ -201,7 +201,7 @@ async fn nip11_document() {
         .iter()
         .map(|v| v.as_u64().unwrap())
         .collect();
-    for nip in [1, 9, 11, 40, 42, 45, 62, 70, 77, 86] {
+    for nip in [1, 9, 11, 40, 42, 45, 59, 62, 70, 77, 86] {
         assert!(nips.contains(&nip), "missing NIP-{nip}: {nips:?}");
     }
 }
@@ -520,6 +520,22 @@ async fn authenticate(ws: &mut yawc::TcpWebSocket, signer: &Keypair, req_filter:
             .any(|v| v[0] == "CLOSED" && v[2].as_str().unwrap().starts_with("auth-required:")),
         "restricted REQ not refused: {frames:?}"
     );
+    let auth = sign::event(
+        signer,
+        22242,
+        now(),
+        &json!([["relay", url()], ["challenge", challenge]]),
+        "",
+    );
+    send(ws, &format!("[\"AUTH\",{}]", auth.json())).await;
+    let ok = collect_until(ws, |v| v[0] == "OK").await;
+    assert_eq!(ok.last().unwrap()[2], true, "AUTH rejected");
+}
+
+/// Authenticate `ws` as `signer` against a challenge the relay
+/// already sent (a maybe-restricted filter stays open, so the
+/// challenge may not come with a CLOSED).
+async fn auth_as(ws: &mut yawc::TcpWebSocket, signer: &Keypair, challenge: &str) {
     let auth = sign::event(
         signer,
         22242,
@@ -1152,6 +1168,9 @@ async fn negentropy_converges_and_closes() {
     let mut need_ids = Vec::new();
     for _ in 0..16 {
         let frame = recv_json(&mut ws).await;
+        if frame[0] == "AUTH" {
+            continue; // a no-kinds filter may match restricted kinds
+        }
         assert_eq!(frame[0], "NEG-MSG", "{frame}");
         assert_eq!(frame[1], "neg", "{frame}");
         let reply = unhex(frame[2].as_str().unwrap());
@@ -1257,4 +1276,270 @@ async fn filter_validation_refuses_req() {
     );
     let frames = req(&mut ws, "fv", "{\"kinds\":[1]}").await;
     assert_eq!(frames.last().unwrap()[0], "EOSE", "{frames:?}");
+}
+
+/// NIP-59: the wrap recipient's kind-5 `e` deletion removes a stored
+/// gift wrap `p`-tagged to them (the wrap's signing key is random, so
+/// author-matching alone can never cover it), while a third party's
+/// kind 5 does nothing and re-publication stays blocked.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn nip59_wrap_recipient_deletes() {
+    let wrap_author = key();
+    let recipient = key();
+    let third = key();
+    let wrap = sign::event(
+        &wrap_author,
+        1059,
+        now() - 5,
+        &json!([["p", pubkey(&recipient)]]),
+        "wrap",
+    );
+    let other_wrap = sign::event(
+        &wrap_author,
+        1059,
+        now() - 4,
+        &json!([["p", pubkey(&recipient)]]),
+        "wrap2",
+    );
+    let mut ws = connect().await;
+    for ev in [&wrap, &other_wrap] {
+        let (ok, reason) = publish(&mut ws, ev).await;
+        assert!(ok, "wrap publish: {reason}");
+    }
+
+    // A third party's kind 5 on the other wrap deletes nothing.
+    let foreign = sign::event(
+        &third,
+        5,
+        now() - 3,
+        &json!([["e", other_wrap.id().to_string()], ["k", "1059"]]),
+        "",
+    );
+    let (ok, reason) = publish(&mut ws, &foreign).await;
+    assert!(ok, "foreign kind 5: {reason}");
+
+    // The recipient's kind 5 deletes the wrap.
+    let del = sign::event(
+        &recipient,
+        5,
+        now() - 2,
+        &json!([["e", wrap.id().to_string()], ["k", "1059"]]),
+        "",
+    );
+    let (ok, reason) = publish(&mut ws, &del).await;
+    assert!(ok, "recipient kind 5: {reason}");
+
+    // Authenticated as the recipient: the deleted wrap is gone and
+    // the foreign-targeted one is still served.
+    authenticate(&mut ws, &recipient, "{\"kinds\":[1059]}").await;
+    let frames = req(
+        &mut ws,
+        "s",
+        &format!("{{\"ids\":[\"{}\",\"{}\"]}}", wrap.id(), other_wrap.id()),
+    )
+    .await;
+    let got = events(&frames);
+    assert_eq!(got.len(), 1, "{frames:?}");
+    assert_eq!(got[0]["id"], other_wrap.id().to_string());
+
+    // Re-publication of the deleted wrap stays blocked.
+    let (ok, reason) = publish(&mut ws, &wrap).await;
+    assert!(!ok, "republished wrap accepted");
+    assert!(reason.starts_with("blocked:"), "{reason}");
+}
+
+/// NIP-59: the ephemeral wrap kind 21059 is restricted like its
+/// stored sibling — unauthenticated REQs are refused, and a live
+/// wrap reaches only its authenticated `p` recipient.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn ephemeral_wrap_restricted_to_recipient() {
+    let recipient = key();
+    let other = key();
+    let rp = pubkey(&recipient);
+
+    // An unauthenticated REQ for the restricted kind is challenged
+    // then refused.
+    let mut ws_r = connect().await;
+    let frames = req(&mut ws_r, "r", "{\"kinds\":[21059]}").await;
+    let challenge = frames
+        .iter()
+        .find(|v| v[0] == "AUTH")
+        .map(|v| v[1].as_str().unwrap().to_owned())
+        .expect("no AUTH challenge: {frames:?}");
+    assert!(
+        frames
+            .iter()
+            .any(|v| v[0] == "CLOSED" && v[2].as_str().unwrap().starts_with("auth-required:")),
+        "{frames:?}"
+    );
+    auth_as(&mut ws_r, &recipient, &challenge).await;
+    send(
+        &mut ws_r,
+        &req_wire("w", &format!("{{\"kinds\":[21059],\"#p\":[\"{rp}\"]}}")),
+    )
+    .await;
+    let eose = recv_json(&mut ws_r).await;
+    assert_eq!(eose[0], "EOSE", "{eose}");
+
+    // An uninvolved authenticated subscriber watches wraps plus a
+    // public kind, so a later marker bounds the window.
+    let mut ws_x = connect().await;
+    let frames = req(&mut ws_x, "r", "{\"kinds\":[21059]}").await;
+    let challenge = frames
+        .iter()
+        .find(|v| v[0] == "AUTH")
+        .map(|v| v[1].as_str().unwrap().to_owned())
+        .expect("no AUTH challenge: {frames:?}");
+    auth_as(&mut ws_x, &other, &challenge).await;
+    send(&mut ws_x, &req_wire("w", "{\"kinds\":[21059,1]}")).await;
+    let eose = recv_json(&mut ws_x).await;
+    assert_eq!(eose[0], "EOSE", "{eose}");
+
+    // A live wrap to the recipient plus a public marker: ws_x must
+    // see the marker but never the wrap.
+    let mut ws_pub = connect().await;
+    let wrap = sign::event(&key(), 21059, now(), &json!([["p", rp]]), "gift");
+    let (ok, reason) = publish(&mut ws_pub, &wrap).await;
+    assert!(ok, "ephemeral publish: {reason}");
+    let marker = sign::event(&key(), 1, now(), &json!([]), "marker");
+    let (ok, reason) = publish(&mut ws_pub, &marker).await;
+    assert!(ok, "marker publish: {reason}");
+
+    let live = recv_json(&mut ws_r).await;
+    assert_eq!(live[0], "EVENT", "{live}");
+    assert_eq!(live[2]["id"], wrap.id().to_string(), "{live}");
+
+    // ws_x's stream yields only the marker; a follow-up stored REQ
+    // proves delivery was settled (its EOSE is queued last).
+    send(&mut ws_x, &req_wire("barrier", "{\"kinds\":[1]}")).await;
+    let mut live_ids = Vec::new();
+    loop {
+        let frame = recv_json(&mut ws_x).await;
+        match (frame[0].as_str().unwrap(), frame[1].as_str().unwrap()) {
+            ("EVENT", "w") => live_ids.push(frame[2]["id"].as_str().unwrap().to_owned()),
+            ("EOSE", "barrier") => break,
+            _ => {}
+        }
+    }
+    assert!(
+        !live_ids.contains(&wrap.id().to_string()),
+        "uninvolved reader got the wrap: {live_ids:?}"
+    );
+    assert!(
+        live_ids.contains(&marker.id().to_string()),
+        "marker never arrived: {live_ids:?}"
+    );
+}
+
+/// Filters that may match a restricted kind earn an AUTH challenge
+/// ahead of the operation's own frames — but still proceed (the
+/// read gate hides what must stay hidden). Fully public filters get
+/// no challenge.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn maybe_restricted_filters_challenge_before_output() {
+    let recipient = key();
+    let rp = pubkey(&recipient);
+    // A stored wrap only `recipient` may read.
+    let wrap = sign::event(&key(), 1059, now() - 5, &json!([["p", rp]]), "wrap");
+    let mut ws_pub = connect().await;
+    let (ok, reason) = publish(&mut ws_pub, &wrap).await;
+    assert!(ok, "wrap publish: {reason}");
+
+    // Fresh connection per check: the challenge is once per conn.
+    let position = |frames: &[Value], verb: &str| frames.iter().position(|v| v[0] == verb);
+
+    // A mixed group may match restricted kinds.
+    let mut ws = connect().await;
+    let one = format!("{{\"kinds\":[1],\"#p\":[\"{rp}\"]}}");
+    let two = format!("{{\"kinds\":[1059],\"#p\":[\"{rp}\"]}}");
+    send(&mut ws, &format!("[\"REQ\",\"a\",{one},{two}]")).await;
+    let frames = collect_until(&mut ws, |v| v[0] == "EOSE" || v[0] == "CLOSED").await;
+    assert_eq!(position(&frames, "AUTH"), Some(0), "{frames:?}");
+    assert_eq!(
+        position(&frames, "EOSE"),
+        Some(frames.len() - 1),
+        "{frames:?}"
+    );
+    assert!(
+        !events(&frames).iter().any(|v| v["kind"] == 1059),
+        "wrap leaked unauthenticated: {frames:?}"
+    );
+
+    // A no-kinds filter may match restricted kinds.
+    let mut ws = connect().await;
+    let frames = req(&mut ws, "a", &format!("{{\"#p\":[\"{rp}\"]}}")).await;
+    assert_eq!(position(&frames, "AUTH"), Some(0), "{frames:?}");
+    assert_eq!(frames.last().unwrap()[0], "EOSE", "{frames:?}");
+
+    // A purely public filter is never challenged.
+    let mut ws = connect().await;
+    let frames = req(&mut ws, "a", "{\"kinds\":[1]}").await;
+    assert!(
+        !frames.iter().any(|v| v[0] == "AUTH"),
+        "public REQ challenged: {frames:?}"
+    );
+    assert_eq!(frames.last().unwrap()[0], "EOSE", "{frames:?}");
+
+    // COUNT gets the challenge ahead of its answer.
+    let mut ws = connect().await;
+    send(&mut ws, &count_wire("c", &format!("{{\"#p\":[\"{rp}\"]}}"))).await;
+    let frames = collect_until(&mut ws, |v| v[0] == "COUNT" || v[0] == "CLOSED").await;
+    assert_eq!(position(&frames, "AUTH"), Some(0), "{frames:?}");
+    assert_eq!(frames.last().unwrap()[0], "COUNT", "{frames:?}");
+
+    // NEG-OPEN gets the challenge ahead of the first NEG-MSG.
+    use negentropy::{Negentropy, NegentropyStorageVector};
+    let mut storage = NegentropyStorageVector::with_capacity(0);
+    storage.seal().unwrap();
+    let mut neg = Negentropy::owned(storage, 500_000).unwrap();
+    let init = neg.initiate().unwrap();
+    let mut ws = connect().await;
+    send(
+        &mut ws,
+        &neg_open_wire("n", &format!("{{\"#p\":[\"{rp}\"]}}"), &init),
+    )
+    .await;
+    let frames = collect_until(&mut ws, |v| v[0] == "NEG-MSG" || v[0] == "NEG-ERR").await;
+    assert_eq!(position(&frames, "AUTH"), Some(0), "{frames:?}");
+    assert_eq!(frames.last().unwrap()[0], "NEG-MSG", "{frames:?}");
+}
+
+/// Pass 2 (profile-alt, AUTH disabled): restricted kinds are
+/// refused on write with `restricted:`, ordinary kinds publish, and
+/// NIP-11 advertises neither AUTH nor gift wraps.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-alt relay — run.sh pass 2)"]
+async fn alt_restricted_kinds_refused_without_auth() {
+    let mut ws = connect().await;
+    for kind in [1059u16, 4] {
+        let ev = sign::event(
+            &key(),
+            kind,
+            now(),
+            &json!([["p", pubkey(&key())]]),
+            "restricted",
+        );
+        let (ok, reason) = publish(&mut ws, &ev).await;
+        assert!(!ok, "kind {kind} accepted without AUTH");
+        assert!(
+            reason.starts_with("restricted:"),
+            "kind {kind} reason: {reason}"
+        );
+    }
+    let note = sign::event(&key(), 1, now(), &json!([]), "note");
+    let (ok, reason) = publish(&mut ws, &note).await;
+    assert!(ok, "kind 1 refused: {reason}");
+
+    let doc = nip11().await;
+    let nips: Vec<u64> = doc["supported_nips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect();
+    assert!(!nips.contains(&42), "NIP-42 advertised: {nips:?}");
+    assert!(!nips.contains(&59), "NIP-59 advertised: {nips:?}");
 }

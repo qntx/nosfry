@@ -1,0 +1,5 @@
+# Alternate relay profile for the suite's second pass (see run.sh):
+# no `service_url` is injected, so AUTH is disabled — restricted
+# kinds are refused on write and never served, protected events are
+# rejected, and NIP-11 drops 42 and 59. Everything else is the
+# shipped default; only `alt_*` cases run against this profile.
