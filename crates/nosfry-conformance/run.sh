@@ -90,11 +90,23 @@ start_server() {
         cat >>"$tmpdir/config-$pass.toml" <<EOF
 [db]
 path = "$tmpdir/db-$pass"
+EOF
+        if grep -q '^\[relay\]' "$tmpdir/config-$pass.toml"; then
+            # The profile already owns a [relay] table (profile-alt's
+            # size keys): splice the bind keys into it — TOML tables
+            # may not be declared twice.
+            sed -i.bak "/^\[relay\]/a\
+bind = \"127.0.0.1\"\
+port = $port" "$tmpdir/config-$pass.toml"
+            rm -f "$tmpdir/config-$pass.toml.bak"
+        else
+            cat >>"$tmpdir/config-$pass.toml" <<EOF
 
 [relay]
 bind = "127.0.0.1"
 port = $port
 EOF
+        fi
         if [ "$pass" = "main" ]; then
             cat >>"$tmpdir/config-$pass.toml" <<EOF
 service_url = "$NOSFRY_URL"

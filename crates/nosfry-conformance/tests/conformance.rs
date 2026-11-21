@@ -24,6 +24,7 @@ use nosfry_core::event::Event;
 use nosfry_core::sign;
 use secp256k1::Keypair;
 use serde_json::{Value, json};
+use sha2::Digest as _;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const TIMEOUT: Duration = Duration::from_secs(10);
@@ -52,6 +53,27 @@ fn key() -> Keypair {
 
 fn pubkey(k: &Keypair) -> String {
     format!("{}", k.x_only_public_key().0)
+}
+
+/// A freshly signed kind-1 event with `content_len` bytes of content
+/// — `sign::event` verifies against the default 64 KiB limit, so the
+/// 2 MiB cases are signed by hand.
+fn giant_event(content_len: usize) -> Value {
+    let k = key();
+    let pubkey = pubkey(&k);
+    let content = "x".repeat(content_len);
+    let preimage = json!([0, pubkey, now(), 1, json!([]), content]).to_string();
+    let id = sha2::Sha256::digest(preimage.as_bytes());
+    let sig = secp256k1::schnorr::sign_no_aux_rand(&id, &k);
+    json!({
+        "id": faster_hex::hex_string(&id),
+        "pubkey": pubkey,
+        "created_at": now(),
+        "kind": 1,
+        "tags": [],
+        "content": content,
+        "sig": faster_hex::hex_string(&sig.to_byte_array()),
+    })
 }
 
 fn event_wire(ev: &Event) -> String {
@@ -203,6 +225,8 @@ async fn nip11_document() {
     for nip in [1, 9, 11, 40, 42, 45, 59, 62, 70, 77, 86] {
         assert!(nips.contains(&nip), "missing NIP-{nip}: {nips:?}");
     }
+    // Default 64 KiB events + 10 bytes of EVENT-frame overhead.
+    assert_eq!(doc["limitation"]["max_message_length"], 65_546);
 }
 
 #[tokio::test]
@@ -1277,6 +1301,33 @@ async fn filter_validation_refuses_req() {
     assert_eq!(frames.last().unwrap()[0], "EOSE", "{frames:?}");
 }
 
+/// NIP-01: `ids`/`authors`/`#e`/`#p` filter values must be exact
+/// 64-char lowercase hex — an uppercase value is `invalid:` on REQ
+/// and COUNT alike.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn uppercase_filter_hex_refused() {
+    let upper = "AB".repeat(32);
+    let filter = format!("{{\"ids\":[\"{upper}\"]}}");
+    let mut ws = connect().await;
+    let frames = req(&mut ws, "u", &filter).await;
+    let closed = frames.last().unwrap();
+    assert_eq!(closed[0], "CLOSED", "{frames:?}");
+    assert!(
+        closed[2].as_str().unwrap().starts_with("invalid:"),
+        "{closed}"
+    );
+    send(&mut ws, &count_wire("c", &filter)).await;
+    let frames = collect_until(&mut ws, |v| v[0] == "CLOSED").await;
+    assert!(
+        frames.last().unwrap()[2]
+            .as_str()
+            .unwrap()
+            .starts_with("invalid:"),
+        "{frames:?}"
+    );
+}
+
 /// NIP-59: the wrap recipient's kind-5 `e` deletion removes a stored
 /// gift wrap `p`-tagged to them (the wrap's signing key is random, so
 /// author-matching alone can never cover it), while a third party's
@@ -1511,6 +1562,112 @@ async fn maybe_restricted_filters_challenge_before_output() {
     let frames = collect_until(&mut ws, |v| v[0] == "NEG-MSG" || v[0] == "NEG-ERR").await;
     assert_eq!(position(&frames, "AUTH"), Some(0), "{frames:?}");
     assert_eq!(frames.last().unwrap()[0], "NEG-MSG", "{frames:?}");
+}
+
+/// Pass 2 (profile-alt, the 2 MiB profile): NIP-11's
+/// `limitation.max_message_length` is the truthful
+/// `max_event_size + 10`, not the raw payload cap.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-alt relay — run.sh pass 2)"]
+async fn alt_nip11_max_message_length_is_truthful() {
+    let doc = nip11().await;
+    assert_eq!(doc["limitation"]["max_message_length"], 2_097_162);
+}
+
+/// Pass 2: an event whose canonical JSON is exactly
+/// `max_event_size` is accepted; one byte more is `invalid:`.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-alt relay — run.sh pass 2)"]
+async fn alt_event_size_limit_is_exact() {
+    let skeleton = giant_event(0).to_string().len();
+    let at = giant_event(2_097_152 - skeleton);
+    assert_eq!(at.to_string().len(), 2_097_152, "skeleton drifted");
+    let over = giant_event(2_097_153 - skeleton);
+    assert_eq!(over.to_string().len(), 2_097_153);
+
+    let mut ws = connect().await;
+    send(&mut ws, &format!("[\"EVENT\",{at}]")).await;
+    let frames = collect_until(&mut ws, |v| v[0] == "OK").await;
+    let ok = frames.last().unwrap();
+    assert_eq!(ok[2], true, "exact-size event refused: {ok}");
+
+    send(&mut ws, &format!("[\"EVENT\",{over}]")).await;
+    let frames = collect_until(&mut ws, |v| v[0] == "OK").await;
+    let ok = frames.last().unwrap();
+    assert_eq!(ok[2], false, "{ok}");
+    assert!(ok[3].as_str().unwrap().starts_with("invalid:"), "{ok}");
+}
+
+/// Pass 2: a text frame one byte over `max_websocket_payload_size`
+/// earns a WebSocket close 1009 — the protocol's mechanism (the
+/// reason text differs between editions).
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-alt relay — run.sh pass 2)"]
+async fn alt_oversized_frame_closes_1009() {
+    let mut ws = connect().await;
+    let base_len = "[\"REQ\",\"s\",{\"kinds\":[1],\"search\":\"\"}]".len();
+    let pad = "x".repeat(2_097_169 - base_len);
+    send(
+        &mut ws,
+        &format!("[\"REQ\",\"s\",{{\"kinds\":[1],\"search\":\"{pad}\"}}]"),
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let frame = tokio::time::timeout_at(deadline, ws.next())
+            .await
+            .expect("no close frame within timeout")
+            .expect("connection dropped without a close frame");
+        if frame.opcode() == yawc::OpCode::Close {
+            assert_eq!(
+                frame.close_code(),
+                Some(yawc::close::CloseCode::Size),
+                "close code"
+            );
+            assert!(frame.payload().len() > 2, "close reason empty");
+            break;
+        }
+    }
+}
+
+/// Pass 2 (profile-alt): `events_per_second = 1` / `events_burst = 4`
+/// lets six back-to-back EVENTs trip the limiter; NIP-01 wants the
+/// `rate-limited:` OK to carry the retry hint as a positive-integer
+/// millisecond string in element [4].
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-alt relay — run.sh pass 2)"]
+async fn alt_rate_limited_carries_retry_ms() {
+    let mut ws = connect().await;
+    let mut hinted = Vec::new();
+    for i in 0..6 {
+        let ev = sign::event(&key(), 1, now(), &json!([]), &format!("rl{i}"));
+        send(&mut ws, &event_wire(&ev)).await;
+        let frames = collect_until(&mut ws, |v| v[0] == "OK").await;
+        let ok = frames.last().unwrap();
+        assert_eq!(ok[1], ev.id().to_string(), "{ok}");
+        if ok[2] == false
+            && ok[3]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("rate-limited:")
+        {
+            hinted.push(ok.clone());
+        }
+    }
+    assert!(!hinted.is_empty(), "six events earned no rate-limited OK");
+    for ok in &hinted {
+        let hint = ok[4]
+            .as_str()
+            .unwrap_or_else(|| panic!("no retry hint in {ok}"));
+        assert!(
+            hint.bytes().all(|b| b.is_ascii_digit()) && !hint.starts_with('0'),
+            "hint must match ^[1-9][0-9]*$: {hint}"
+        );
+        assert!(
+            hint.parse::<u64>().unwrap() <= 1_000,
+            "hint over bound: {hint}"
+        );
+    }
 }
 
 /// Pass 2 (profile-alt, AUTH disabled): restricted kinds are
