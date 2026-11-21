@@ -61,14 +61,15 @@ fn pubkey(k: &Keypair) -> String {
 fn giant_event(content_len: usize) -> Value {
     let k = key();
     let pubkey = pubkey(&k);
+    let created_at = now();
     let content = "x".repeat(content_len);
-    let preimage = json!([0, pubkey, now(), 1, json!([]), content]).to_string();
+    let preimage = json!([0, pubkey, created_at, 1, json!([]), content]).to_string();
     let id = sha2::Sha256::digest(preimage.as_bytes());
     let sig = secp256k1::schnorr::sign_no_aux_rand(&id, &k);
     json!({
         "id": faster_hex::hex_string(&id),
         "pubkey": pubkey,
-        "created_at": now(),
+        "created_at": created_at,
         "kind": 1,
         "tags": [],
         "content": content,
@@ -1607,11 +1608,13 @@ async fn alt_oversized_frame_closes_1009() {
     let mut ws = connect().await;
     let base_len = "[\"REQ\",\"s\",{\"kinds\":[1],\"search\":\"\"}]".len();
     let pad = "x".repeat(2_097_169 - base_len);
-    send(
-        &mut ws,
-        &format!("[\"REQ\",\"s\",{{\"kinds\":[1],\"search\":\"{pad}\"}}]"),
-    )
-    .await;
+    // The relay may close as soon as the frame header announces an
+    // oversized payload — a broken pipe on send is part of the test.
+    let _ = ws
+        .send(yawc::Frame::text(format!(
+            "[\"REQ\",\"s\",{{\"kinds\":[1],\"search\":\"{pad}\"}}]"
+        )))
+        .await;
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     loop {
         let frame = tokio::time::timeout_at(deadline, ws.next())

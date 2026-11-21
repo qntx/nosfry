@@ -95,10 +95,14 @@ EOF
             # The profile already owns a [relay] table (profile-alt's
             # size keys): splice the bind keys into it — TOML tables
             # may not be declared twice.
-            sed -i.bak "/^\[relay\]/a\
-bind = \"127.0.0.1\"\
-port = $port" "$tmpdir/config-$pass.toml"
-            rm -f "$tmpdir/config-$pass.toml.bak"
+            awk -v port="$port" '
+                { print }
+                /^\[relay\]$/ {
+                    print "bind = \"127.0.0.1\"";
+                    print "port = " port
+                }
+            ' "$tmpdir/config-$pass.toml" >"$tmpdir/config-$pass.toml.tmp"
+            mv "$tmpdir/config-$pass.toml.tmp" "$tmpdir/config-$pass.toml"
         else
             cat >>"$tmpdir/config-$pass.toml" <<EOF
 
