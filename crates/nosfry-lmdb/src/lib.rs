@@ -47,7 +47,7 @@ use std::sync::Arc;
 use heed::CompactionOption;
 use heed::types::Bytes;
 use heed::{Database, Env, EnvFlags, EnvOpenOptions, RoTxn, RwTxn, WithoutTls};
-use nosfry_core::deletion::DeletionTarget;
+use nosfry_core::deletion::{self, DeletionTarget};
 use nosfry_core::event::{Event, EventId, PublicKey, UnverifiedEvent, supersedes};
 use nosfry_core::moderation::{ModOp, Moderation};
 use nosfry_core::packed::PackedRef;
@@ -474,13 +474,12 @@ impl Store {
         if event.kind().0 == 62 && self.vanish_request_superseded(txn, event, deleted)? {
             return Ok(WriteOutcome::Superseded);
         }
-        // NIP-09: an id covered by a stored same-author kind 5 stays
-        // deleted; a kind 5 itself is never blocked, and a kind 62
-        // request to vanish is never blocked either (NIP-62).
-        if event.kind().0 != 5
-            && event.kind().0 != 62
-            && self.has_prefix(txn, Index::Deletion, &deletion_prefix(event))?
-        {
+        // NIP-09: an id covered by a stored kind 5 of any of its
+        // blockers stays deleted — the event's author, or a `p`-tagged
+        // recipient of a kind-1059 wrap (NIP-59). A kind 5 itself is
+        // never blocked, and a kind 62 request to vanish is never
+        // blocked either (NIP-62).
+        if event.kind().0 != 5 && event.kind().0 != 62 && self.deletion_blocked(txn, event)? {
             return Ok(WriteOutcome::Deleted);
         }
         // NIP-09: an `a` deletion blocks equal-or-older versions.
@@ -596,10 +595,11 @@ impl Store {
         Ok(())
     }
 
-    /// Delete the `e`-tagged event `id` when it is `author`'s own and
-    /// neither a kind 5 (NIP-09: a deletion request cannot delete a
-    /// deletion request) nor a kind 62 (NIP-62: a request to vanish
-    /// cannot be deleted).
+    /// Delete the `e`-tagged event `id` when `author` may delete it —
+    /// the event's own author, or a `p`-tagged recipient of a
+    /// kind-1059 gift wrap (NIP-59). Kinds 5 and 62 are never
+    /// deletable (NIP-09: a deletion request cannot delete a deletion
+    /// request; NIP-62: a request to vanish cannot be deleted).
     fn delete_event_target(
         &self,
         txn: &mut RwTxn<'_>,
@@ -616,12 +616,28 @@ impl Store {
                 return Ok(());
             };
             let packed = PackedRef::new(bytes).ok_or(StoreError::Corrupt("bad packed record"))?;
-            packed.pubkey() == *author && packed.kind().0 != 5 && packed.kind().0 != 62
+            deletion::deletes(packed, author)
         };
         if deletable && self.delete_seq(txn, seq)? {
             deleted.push(seq);
         }
         Ok(())
+    }
+
+    /// Whether a stored kind-5 `e` row covers `event`'s id under any
+    /// of its blocker keys — the author, plus every packed `p` value
+    /// of a kind-1059 wrap (NIP-59).
+    fn deletion_blocked(&self, txn: &RwTxn<'_>, event: &Event) -> Result<bool, StoreError> {
+        let mut prefix = Vec::with_capacity(64);
+        prefix.extend_from_slice(&event.id().0);
+        for blocker in deletion::blockers(event.packed()) {
+            prefix.truncate(32);
+            prefix.extend_from_slice(&blocker);
+            if self.has_prefix(txn, Index::Deletion, &prefix)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Delete the stored version at `address` when it is `author`'s own
@@ -1358,15 +1374,6 @@ impl Store {
         self.payloads.delete(txn, &seqb)?;
         Ok(true)
     }
-}
-
-/// The `ix_deletion` lookup prefix `id ‖ pubkey` for an incoming event.
-fn deletion_prefix(event: &Event) -> [u8; 64] {
-    let mut prefix = [0u8; 64];
-    let (id, pubkey) = prefix.split_at_mut(32);
-    id.copy_from_slice(&event.id().0);
-    pubkey.copy_from_slice(&event.pubkey().0);
-    prefix
 }
 
 /// The `('p' ‖ 32 ‖ pubkey)` `ix_tag` range prefix for gift wraps
