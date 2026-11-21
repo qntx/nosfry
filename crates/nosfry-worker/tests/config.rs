@@ -29,6 +29,24 @@ fn defaults() {
     assert!(config.worker.location_hint.is_empty());
 }
 
+/// `relay.max_websocket_payload_size` must carry the largest
+/// allowed EVENT frame (`events.max_event_size + 10`) — the same
+/// refusal native applies at load and reload.
+#[test]
+fn payload_must_fit_one_event_frame() {
+    let err = Config::parse(
+        "[events]\nmax_event_size = 100\n[relay]\nmax_websocket_payload_size = 109\n",
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("relay.max_websocket_payload_size (109) must be at least events.max_event_size + 10 (110)"),
+        "{err}"
+    );
+    Config::parse("[events]\nmax_event_size = 100\n[relay]\nmax_websocket_payload_size = 110\n")
+        .expect("boundary pair parses");
+}
+
 #[test]
 fn unknown_keys_are_rejected() {
     // A native-only key must fail rather than be ignored.

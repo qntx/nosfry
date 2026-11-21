@@ -229,8 +229,11 @@ const COMPRESSION_THRESHOLD: usize = 128;
 /// connection costs only its socket buffers; with `sliding_window`
 /// each connection keeps its own (~370 KiB once used).
 fn upgrade_options(relay: &crate::config::Relay, pool: &yawc::DeflatePool) -> Options {
+    // yawc refuses a frame of `>= max_payload_read` bytes, so pass
+    // one past the limit: `max_websocket_payload_size` stays the
+    // inclusive bound, same as the worker's `len > max` check.
     let options = Options::default()
-        .with_max_payload_read(relay.max_websocket_payload_size)
+        .with_max_payload_read(relay.max_websocket_payload_size.saturating_add(1))
         .with_read_buffer_capacity(READ_BUFFER_CAPACITY)
         .with_write_buffer_capacity(WRITE_BUFFER_CAPACITY);
     if !relay.compression.enabled {
@@ -395,9 +398,10 @@ mod tests {
         let pool = yawc::DeflatePool::new(1);
         let options = upgrade_options(&config.relay, &pool);
         assert!(options.compression.is_none());
+        // yawc's cap is exclusive: one past the configured limit.
         assert_eq!(
             options.max_payload_read,
-            Some(config.relay.max_websocket_payload_size)
+            Some(config.relay.max_websocket_payload_size + 1)
         );
         assert_eq!(options.read_buffer_capacity, Some(READ_BUFFER_CAPACITY));
         assert_eq!(options.write_buffer_capacity, Some(WRITE_BUFFER_CAPACITY));

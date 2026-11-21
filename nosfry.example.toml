@@ -27,7 +27,11 @@ max_readers = 256
 no_read_ahead = false
 
 [events]
-# Maximum canonical event size in bytes.
+# Maximum canonical event size in bytes. The WebSocket payload cap
+# must leave room for one EVENT frame around it:
+# max_websocket_payload_size >= max_event_size + 10 — a smaller cap
+# is refused at load and reload. A Marmot-ready 2 MiB profile is
+# max_event_size = 2097152 with max_websocket_payload_size = 2097168.
 max_event_size = 65536
 # Reject events this many seconds in the future.
 reject_events_newer_than_seconds = 900
@@ -57,7 +61,9 @@ nofiles = 1000000
 # last comma-separated value is trusted — set this only behind a proxy
 # that sets or appends the header.
 real_ip_header = ""
-# Maximum inbound WebSocket payload in bytes.
+# Maximum inbound WebSocket payload in bytes; inclusive — a frame of
+# exactly this size is accepted, one byte more closes with 1009.
+# Must be at least max_event_size + 10 (see [events]).
 max_websocket_payload_size = 131072
 # WebSocket ping interval in seconds; at least 1 (unlike strfry, 0
 # does not disable pings — it also bounds writes and idle closes).

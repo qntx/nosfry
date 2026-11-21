@@ -278,6 +278,11 @@ impl Config {
                 "relay.auto_ping_seconds must be at least 1".into(),
             ));
         }
+        nosfry_core::limits::check_payload_size(
+            self.relay.max_websocket_payload_size,
+            &self.events,
+        )
+        .map_err(|e| ServerError::RelayValue(e.to_string()))?;
         let service_url = if self.relay.service_url.is_empty() {
             None
         } else {
@@ -501,6 +506,34 @@ mod tests {
         )
         .unwrap();
         assert!(Config::load(&path).is_ok());
+    }
+
+    /// `relay.max_websocket_payload_size` must carry the largest
+    /// allowed EVENT frame (`max_event_size + 10`). `Config::limits`
+    /// runs at load and on every reload, so both paths refuse the
+    /// pair.
+    #[test]
+    fn load_rejects_payload_below_event_frame() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nosfry.toml");
+        std::fs::write(
+            &path,
+            "[events]\nmax_event_size = 100\n[relay]\nmax_websocket_payload_size = 109\n",
+        )
+        .unwrap();
+        let Err(ServerError::RelayValue(msg)) = Config::load(&path) else {
+            unreachable!("undersized payload must fail")
+        };
+        assert_eq!(
+            msg,
+            "relay.max_websocket_payload_size (109) must be at least events.max_event_size + 10 (110) so the largest allowed event fits in one EVENT frame"
+        );
+        std::fs::write(
+            &path,
+            "[events]\nmax_event_size = 100\n[relay]\nmax_websocket_payload_size = 110\n",
+        )
+        .unwrap();
+        Config::load(&path).expect("boundary pair loads");
     }
 
     /// `relay.auto_ping_seconds = 0` would panic every connection

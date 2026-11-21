@@ -506,10 +506,65 @@ async fn too_many_subs_and_unknown_filter_key() {
     relay.stop().await;
 }
 
+/// A text frame of exactly `max_websocket_payload_size` bytes is the
+/// inclusive limit — the worker accepts `len > max` so native must
+/// too (yawc's read cap is `>=`); one byte more closes with 1009.
+#[tokio::test]
+async fn payload_boundary_is_inclusive_then_1009() {
+    let mut config = common::config();
+    config.relay.max_websocket_payload_size = 1024;
+    config.events.max_event_size = 512;
+    let relay = Relay::start_with(config).await;
+
+    // Exactly 1024 bytes: a REQ with an unsupported key pads the
+    // frame; its CLOSED refusal proves the frame was read.
+    let mut ws = relay.connect().await;
+    let base = "[\"REQ\",\"s\",{\"kinds\":[1],\"search\":\"\"}]";
+    let pad = "x".repeat(1024 - base.len());
+    let exact = format!("[\"REQ\",\"s\",{{\"kinds\":[1],\"search\":\"{pad}\"}}]");
+    assert_eq!(exact.len(), 1024);
+    send_text(&mut ws, &exact).await;
+    let reply = recv_text(&mut ws, T).await;
+    assert!(
+        reply.contains("CLOSED"),
+        "exact-size frame got no reply: {reply}"
+    );
+
+    // One byte more: close 1009, no text reply.
+    let over = format!("[\"REQ\",\"s\",{{\"kinds\":[1],\"search\":\"{pad}x\"}}]");
+    assert_eq!(over.len(), 1025);
+    send_text(&mut ws, &over).await;
+    let deadline = Instant::now() + T;
+    loop {
+        let Some(frame) = tokio::time::timeout_at(deadline.into(), ws.next())
+            .await
+            .ok()
+            .flatten()
+        else {
+            panic!("no close frame within deadline");
+        };
+        assert_ne!(
+            frame.opcode(),
+            yawc::OpCode::Text,
+            "oversized frame must not get a reply"
+        );
+        if frame.opcode() == yawc::OpCode::Close {
+            assert_eq!(
+                frame.close_code(),
+                Some(yawc::close::CloseCode::Size),
+                "close code"
+            );
+            break;
+        }
+    }
+    relay.stop().await;
+}
+
 #[tokio::test]
 async fn oversized_frame_closes_connection() {
     let mut config = common::config();
     config.relay.max_websocket_payload_size = 1024;
+    config.events.max_event_size = 512;
     let relay = Relay::start_with(config).await;
     let mut ws = relay.connect().await;
     let big = format!(
@@ -686,6 +741,7 @@ async fn compressed_inflation_over_limit_closes_1009() {
     let mut config = common::config();
     config.relay.compression.enabled = true;
     config.relay.max_websocket_payload_size = 4096;
+    config.events.max_event_size = 1024;
     let relay = Relay::start_with(config).await;
     let mut ws = DeflateSocket::connect(relay.addr).await;
 
@@ -2330,6 +2386,31 @@ async fn reload_disabling_auth_refuses_restricted_writes() {
     let note = common::event(&key(7), 1, now(), &json!([]), "note");
     send_text(&mut fresh, &event_wire(&note)).await;
     assert_eq!(recv_ok(&mut fresh, &note).await[2], true);
+    relay.stop().await;
+}
+
+/// A reload pair whose payload cap cannot carry one EVENT frame is
+/// refused: the running config — and its connections — are kept.
+#[tokio::test]
+async fn reload_refuses_payload_below_event_frame() {
+    let relay = Relay::start().await;
+    let mut ws = relay.connect().await;
+    assert_eq!(nip11_name(relay.addr).await, "nosfry");
+
+    let mut config = reload_config("bad pair");
+    config.events.max_event_size = 100;
+    config.relay.max_websocket_payload_size = 109;
+    relay.reload(config);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    assert_eq!(
+        nip11_name(relay.addr).await,
+        "nosfry",
+        "a refused reload must not change NIP-11"
+    );
+    let ev = common::event(&key(6), 1, now(), &json!([]), "still alive");
+    send_text(&mut ws, &event_wire(&ev)).await;
+    assert_eq!(recv_ok(&mut ws, &ev).await[2], true);
     relay.stop().await;
 }
 

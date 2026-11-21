@@ -287,9 +287,13 @@ impl AddressBuckets {
         }
     }
 
-    /// Spend one shared EVENT token at `now_ms`; `Err(ms)` carries
-    /// the wait until one whole token refills. A disabled bucket
+    /// Spend one shared EVENT token at `now_ms`. A disabled bucket
     /// always passes.
+    ///
+    /// # Errors
+    ///
+    /// `Err(ms)` is the wait until one whole token refills — the
+    /// `rate-limited` retry hint.
     pub fn take_event(&self, now_ms: u64) -> Result<(), u64> {
         self.events.as_ref().map_or(Ok(()), |bucket| {
             bucket
@@ -299,9 +303,13 @@ impl AddressBuckets {
         })
     }
 
-    /// Spend one shared REQ token at `now_ms`; `Err(ms)` carries
-    /// the wait until one whole token refills. A disabled bucket
+    /// Spend one shared REQ token at `now_ms`. A disabled bucket
     /// always passes.
+    ///
+    /// # Errors
+    ///
+    /// `Err(ms)` is the wait until one whole token refills — the
+    /// `rate-limited` retry hint.
     pub fn take_req(&self, now_ms: u64) -> Result<(), u64> {
         self.reqs.as_ref().map_or(Ok(()), |bucket| {
             bucket
@@ -383,6 +391,47 @@ impl TokenBucket {
         self.tokens -= 1000;
         Ok(())
     }
+}
+
+/// Bytes the `["EVENT",` wrapper and the closing `]` add around the
+/// canonical event JSON inside a client frame — what
+/// `max_websocket_payload_size` must fit beyond `max_event_size`.
+pub const EVENT_FRAME_OVERHEAD: usize = 10;
+
+/// The `limitation.max_message_length` NIP-11 should advertise: the
+/// configured payload cap, never more than the largest allowed
+/// EVENT frame needs.
+#[must_use]
+pub fn max_message_length(max_payload: usize, event: &EventLimits) -> usize {
+    max_payload.min(event.max_event_size.saturating_add(EVENT_FRAME_OVERHEAD))
+}
+
+/// `relay.max_websocket_payload_size` cannot carry the largest
+/// allowed EVENT frame — `(configured, required)`.
+#[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
+#[error(
+    "relay.max_websocket_payload_size ({0}) must be at least events.max_event_size + {overhead} ({1}) so the largest allowed event fits in one EVENT frame",
+    overhead = EVENT_FRAME_OVERHEAD
+)]
+pub struct PayloadTooSmall(pub usize, pub usize);
+
+/// Refuse a `max_websocket_payload_size` too small to carry the
+/// largest allowed EVENT frame (`max_event_size` plus
+/// [`EVENT_FRAME_OVERHEAD`]).
+///
+/// # Errors
+///
+/// [`PayloadTooSmall`] when `max_payload` is below the minimum.
+pub const fn check_payload_size(
+    max_payload: usize,
+    event: &EventLimits,
+) -> Result<(), PayloadTooSmall> {
+    let required = event.max_event_size.saturating_add(EVENT_FRAME_OVERHEAD);
+    if max_payload < required {
+        return Err(PayloadTooSmall(max_payload, required));
+    }
+    Ok(())
 }
 
 /// The limits a session enforces: ingest ([`EventLimits`]), REQ-side
@@ -529,6 +578,32 @@ mod tests {
         // Nor does the same timestamp.
         assert!(bucket.take(5_000).is_err());
         assert!(bucket.take(6_000).is_ok());
+    }
+
+    /// `limitation.max_message_length`: the smaller of the payload
+    /// cap and the largest allowed EVENT frame.
+    #[test]
+    fn max_message_length_is_the_truthful_bound() {
+        let event = EventLimits::default(); // max_event_size 65_536
+        assert_eq!(max_message_length(131_072, &event), 65_546);
+        assert_eq!(max_message_length(65_546, &event), 65_546);
+        assert_eq!(max_message_length(65_545, &event), 65_545);
+    }
+
+    /// A payload cap below `max_event_size + EVENT_FRAME_OVERHEAD`
+    /// is refused with a message naming both keys and the minimum.
+    #[test]
+    fn payload_must_fit_one_event_frame() {
+        let event = EventLimits {
+            max_event_size: 2_097_152,
+            ..EventLimits::default()
+        };
+        assert!(check_payload_size(2_097_162, &event).is_ok());
+        let err = check_payload_size(2_097_161, &event).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "relay.max_websocket_payload_size (2097161) must be at least events.max_event_size + 10 (2097162) so the largest allowed event fits in one EVENT frame"
+        );
     }
 
     #[test]
