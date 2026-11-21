@@ -31,7 +31,9 @@ struct Cli {
 enum Cmd {
     /// Run the relay.
     Relay,
-    /// Export all events as JSON lines, oldest first.
+    /// Export all events as JSON lines, oldest first, then the
+    /// persisted management state and vanish points as
+    /// `{"nosfry_state":1,…}` lines.
     Export {
         /// Only events at or after this unix timestamp.
         #[arg(long, default_value_t = 0)]
@@ -42,6 +44,10 @@ enum Cmd {
         /// Newest first instead.
         #[arg(long)]
         reverse: bool,
+        /// Omit the `nosfry_state` lines (for piping into other
+        /// relays, e.g. `nosfry export --events-only | strfry import`).
+        #[arg(long)]
+        events_only: bool,
     },
     /// Import event JSON lines from stdin.
     Import {
@@ -188,7 +194,8 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             since,
             until,
             reverse,
-        } => export(&config, since, until, reverse),
+            events_only,
+        } => export(&config, since, until, reverse, events_only),
         Cmd::Import {
             show_rejected,
             no_verify,
@@ -241,10 +248,11 @@ fn export(
     since: u64,
     until: u64,
     reverse: bool,
+    events_only: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let store = open_existing(config)?;
     let mut out = stdout();
-    let count = nosfry::admin::export(&store, since, until, reverse, &mut out)?;
+    let count = nosfry::admin::export(&store, since, until, reverse, events_only, &mut out)?;
     out.flush()?;
     tracing::info!(count, "export done");
     Ok(())

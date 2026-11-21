@@ -34,6 +34,7 @@ pub mod session;
 #[cfg(feature = "test-util")]
 pub mod sign;
 pub mod site;
+pub mod state;
 pub mod store;
 pub mod sync;
 pub mod url;

@@ -757,23 +757,33 @@ impl Store {
 
     /// Register `event`'s NIP-62 request: raise the author's vanish
     /// point to its `created_at` and queue the pubkey for
-    /// [`Store::vanish_step`]. A raised point restarts the walk from
-    /// the beginning so rows between the old and new `T` are covered;
-    /// an equal-or-older request keeps the in-flight resume position.
-    /// Returns whether undrained work is queued.
+    /// [`Store::vanish_step`]. Returns whether undrained work is
+    /// queued.
     fn record_vanish(&self, txn: &mut RwTxn<'_>, event: &Event) -> Result<bool, StoreError> {
-        let pubkey = event.pubkey().0;
-        let t = event.created_at();
-        match self.vanished_at(txn, &pubkey)? {
+        self.raise_vanish(txn, &event.pubkey().0, event.created_at())
+    }
+
+    /// Raise `pubkey`'s vanish point to `max(stored, t)` and queue it
+    /// for [`Store::vanish_step`]. A raised point restarts the walk
+    /// from the beginning so rows between the old and new `T` are
+    /// covered; an equal-or-lower `t` keeps the in-flight resume
+    /// position. Returns whether undrained work is queued.
+    fn raise_vanish(
+        &self,
+        txn: &mut RwTxn<'_>,
+        pubkey: &[u8; 32],
+        t: u64,
+    ) -> Result<bool, StoreError> {
+        match self.vanished_at(txn, pubkey)? {
             Some(old) if old >= t => {}
             _ => {
-                self.ix_vanish.put(txn, &pubkey, &t.to_be_bytes())?;
+                self.ix_vanish.put(txn, pubkey, &t.to_be_bytes())?;
                 // Phase 0, no resume key: walk from the start.
-                self.vanish_pending.put(txn, &pubkey, &[0])?;
+                self.vanish_pending.put(txn, pubkey, &[0])?;
                 return Ok(true);
             }
         }
-        Ok(self.vanish_pending.get(txn, &pubkey)?.is_some())
+        Ok(self.vanish_pending.get(txn, pubkey)?.is_some())
     }
 
     /// The highest assigned sequence number (`0` when empty); the upper
@@ -1150,6 +1160,48 @@ impl Store {
     pub fn vanish_pending(&self) -> Result<bool, StoreError> {
         let txn = self.env.read_txn()?;
         Ok(self.vanish_pending.iter(&txn)?.next().is_some())
+    }
+
+    /// Every stored vanish point (`ix_vanish`: pubkey → `T`), sorted
+    /// by pubkey — export's `vanish` state lines. A point can outlive
+    /// its kind-62 carrier (`Store::delete`, a `banevent`), which is
+    /// why it exports separately.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Heed`] on LMDB failure, [`StoreError::Corrupt`] on
+    /// a row that cannot decode.
+    pub fn vanish_points(&self) -> Result<Vec<(PublicKey, u64)>, StoreError> {
+        let txn = self.env.read_txn()?;
+        let mut out = Vec::new();
+        for entry in self.ix_vanish.iter(&txn)? {
+            let (key, value) = entry?;
+            let pubkey: &[u8; 32] = key
+                .try_into()
+                .map_err(|_| StoreError::Corrupt("bad ix_vanish key"))?;
+            let at: [u8; 8] = value
+                .try_into()
+                .map_err(|_| StoreError::Corrupt("bad ix_vanish value"))?;
+            out.push((PublicKey(*pubkey), u64::from_be_bytes(at)));
+        }
+        Ok(out)
+    }
+
+    /// Raise `pubkey`'s vanish point to `at` in one write transaction —
+    /// the `vanish` state line on import. Same semantics as a stored
+    /// request to vanish: the point only grows, a raised point queues
+    /// the sweep from the start. Returns whether undrained work is
+    /// queued.
+    ///
+    /// # Errors
+    ///
+    /// [`StoreError::Heed`] on LMDB failure, [`StoreError::Corrupt`] on
+    /// a broken index invariant.
+    pub fn raise_vanish_point(&self, pubkey: &PublicKey, at: u64) -> Result<bool, StoreError> {
+        let mut txn = self.env.write_txn()?;
+        let pending = self.raise_vanish(&mut txn, &pubkey.0, at)?;
+        txn.commit()?;
+        Ok(pending)
     }
 
     /// Drain pending vanish work examining at most `limit` index

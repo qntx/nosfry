@@ -10,12 +10,17 @@ use std::time::Duration;
 use nosfry_core::auth::ReadGate;
 use nosfry_core::event::{Event, EventLimits, UnverifiedEvent};
 use nosfry_core::filter::{Filter, FilterError};
+use nosfry_core::state::{STATE_PREFIX, StateRecord};
 use nosfry_core::store::WriteOutcome;
 use nosfry_core::url::RelayUrl;
 use nosfry_lmdb::{Progress, Scan, Store, StoreError};
 
 /// Events per write transaction on import (strfry's import batch).
 const IMPORT_BATCH: usize = 10_000;
+
+/// Index entries per `vanish_step` while draining imported vanish
+/// work — the writer's sweep cap.
+const IMPORT_VANISH_STEP: usize = 10_000;
 
 /// Wall-clock budget per [`Scan::step`]; the read transaction is
 /// released between steps so a running relay is not blocked.
@@ -34,11 +39,21 @@ pub enum AdminError {
     /// The scan filter JSON failed strict `Filter::parse`.
     #[error("filter: {0}")]
     Filter(#[from] FilterError),
+    /// A `{"nosfry_state":…}` line that is malformed, carries an
+    /// unknown version, or names a method outside the export
+    /// vocabulary — the import aborts rather than silently drop a ban.
+    #[error("state line {line}: {reason}")]
+    State {
+        /// 1-based input line number.
+        line: u64,
+        /// Why the line was refused.
+        reason: String,
+    },
 }
 
 /// Per-line tallies of an [`import`] run. `processed` counts every
 /// non-blank line attempted, so `processed == added + duplicates +
-/// superseded + ephemeral + rejected`.
+/// superseded + ephemeral + blocked + state + rejected`.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ImportStats {
     /// Non-blank input lines attempted.
@@ -53,6 +68,8 @@ pub struct ImportStats {
     pub ephemeral: u64,
     /// Events a stored same-author kind 5 deleted or blocks.
     pub blocked: u64,
+    /// Applied `nosfry_state` records (management ops, vanish points).
+    pub state: u64,
     /// Rejected lines (too long, malformed, or failed verification).
     pub rejected: u64,
 }
@@ -60,6 +77,12 @@ pub struct ImportStats {
 /// Write every stored event's canonical JSON to `out`, one per line,
 /// ordered by `created_at` then seq (descending when `reverse`),
 /// inclusively bounded by `since`/`until`. Returns the count written.
+///
+/// Unless `events_only` is set (for piping into other relays), the
+/// event lines are followed by `{"nosfry_state":1,…}` lines carrying
+/// the persisted management state and NIP-62 vanish points — emitted
+/// regardless of `since`/`until` because re-applying them is
+/// idempotent (the two-pass delta upgrade re-applies them safely).
 ///
 /// # Errors
 ///
@@ -70,9 +93,17 @@ pub fn export(
     since: u64,
     until: u64,
     reverse: bool,
+    events_only: bool,
     out: &mut impl Write,
 ) -> Result<u64, AdminError> {
-    Ok(store.export(since, until, reverse, &mut |json| writeln!(out, "{json}"))?)
+    let count = store.export(since, until, reverse, &mut |json| writeln!(out, "{json}"))?;
+    if !events_only {
+        let moderation = store.moderation()?;
+        for line in nosfry_core::state::state_lines(&moderation, &store.vanish_points()?) {
+            writeln!(out, "{line}")?;
+        }
+    }
+    Ok(count)
 }
 
 /// Import newline-delimited event JSON from `input`.
@@ -127,6 +158,9 @@ pub fn import(
         }
     }
     importer.flush()?;
+    // Kind-62 events and `vanish` state lines queue cleanup work;
+    // drain it like the writer's sweep so the imported store is clean.
+    while store.vanish_step(IMPORT_VANISH_STEP)?.more {}
     tracing::info!(stats = ?importer.stats, signatures_verified = !no_verify, "import done");
     Ok(importer.stats)
 }
@@ -191,7 +225,8 @@ struct Importer<'a> {
 }
 
 impl Importer<'_> {
-    /// Handle one raw input line: skip blanks, reject or verify, batch.
+    /// Handle one raw input line: skip blanks, apply a state line, or
+    /// reject/verify and batch an event.
     fn line(&mut self, buf: &[u8], line_no: u64) -> Result<(), AdminError> {
         let line = buf.strip_suffix(b"\n").unwrap_or(buf);
         let text = line.strip_suffix(b"\r").unwrap_or(line);
@@ -199,11 +234,45 @@ impl Importer<'_> {
             return Ok(());
         }
         self.stats.processed += 1;
+        if text.starts_with(STATE_PREFIX.as_bytes()) {
+            return self.state(text, line_no);
+        }
         match self.check(buf, text) {
             Ok(event) => self.batch.push(event),
             Err(reason) => self.reject(line_no, &reason),
         }
         self.maybe_flush()
+    }
+
+    /// One `{"nosfry_state":…}` line: flush the pending event batch
+    /// so stream order holds, then apply the record. A malformed or
+    /// out-of-vocabulary line aborts the import — silently dropping a
+    /// ban would re-expose banned content.
+    fn state(&mut self, text: &[u8], line_no: u64) -> Result<(), AdminError> {
+        let record = std::str::from_utf8(text)
+            .map_err(|err| err.to_string())
+            .and_then(|text| match nosfry_core::state::parse_state_line(text) {
+                Ok(Some(record)) => Ok(record),
+                // The caller matched `STATE_PREFIX`, so `None` cannot
+                // happen; fail closed anyway.
+                Ok(None) => Err("not a state line".to_owned()),
+                Err(err) => Err(err.to_string()),
+            })
+            .map_err(|reason| AdminError::State {
+                line: line_no,
+                reason,
+            })?;
+        self.flush()?;
+        match record {
+            StateRecord::Moderate(op) => {
+                self.store.moderate(op)?;
+            }
+            StateRecord::Vanish { pubkey, at } => {
+                self.store.raise_vanish_point(&pubkey, at)?;
+            }
+        }
+        self.stats.state += 1;
+        Ok(())
     }
 
     /// Enforce `max_line`, then parse and verify; `Err` is the reason.
