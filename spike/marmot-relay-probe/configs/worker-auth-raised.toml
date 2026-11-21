@@ -1,0 +1,16 @@
+# Workers edition equivalent of native-auth-raised.toml.
+[relay]
+service_url = "ws://127.0.0.1:7812"
+
+[relay.rate_limits]
+events_per_second = 200
+events_burst      = 1000
+reqs_per_second   = 200
+reqs_burst        = 1000
+ip_events_per_second = 2000
+ip_events_burst      = 10000
+ip_reqs_per_second   = 2000
+ip_reqs_burst        = 10000
+
+[relay.limits]
+max_filter_limit = 10000

@@ -1,0 +1,9 @@
+# Run B: nosfry native, stock defaults except a fresh LMDB dir and port.
+# service_url stays unset (empty) => AUTH disabled; restricted kinds
+# ([4, 1059]) are stored but never served.
+[db]
+path = "/tmp/nosfry-marmot/db-default"
+
+[relay]
+bind = "127.0.0.1"
+port = 7801

@@ -1,0 +1,7 @@
+# Workers edition equivalent of native-auth-2mib.toml.
+[events]
+max_event_size = 2097152
+
+[relay]
+service_url = "ws://127.0.0.1:7813"
+max_websocket_payload_size = 2097168

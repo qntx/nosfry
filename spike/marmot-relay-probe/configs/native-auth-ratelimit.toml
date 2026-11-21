@@ -1,0 +1,21 @@
+# Run D1: run C plus ONLY the raised event rate limits (max_filter_limit
+# stays at the default 500) — isolates whether the scenario-3 bulk
+# failure was caused by rate limiting alone. In run C nosfry returned
+# 317 × OK false "rate-limited: slow down" during the 475-event burst.
+[db]
+path = "/tmp/nosfry-marmot/db-auth-ratelimit"
+
+[relay]
+bind = "127.0.0.1"
+port = 7805
+service_url = "ws://127.0.0.1:7805"
+
+[relay.rate_limits]
+events_per_second    = 200
+events_burst         = 1000
+reqs_per_second      = 200
+reqs_burst           = 1000
+ip_events_per_second = 2000
+ip_events_burst      = 10000
+ip_reqs_per_second   = 2000
+ip_reqs_burst        = 10000

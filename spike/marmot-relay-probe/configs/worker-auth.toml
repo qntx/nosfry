@@ -1,0 +1,4 @@
+# Run E: Workers edition equivalent of native-auth.toml. Native-only
+# keys ([db], bind, port, threads) are rejected by the worker config.
+[relay]
+service_url = "ws://127.0.0.1:7811"

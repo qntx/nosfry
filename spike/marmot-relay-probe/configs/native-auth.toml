@@ -1,0 +1,10 @@
+# Run C: nosfry native with AUTH enabled (service_url set). Restricted
+# kinds 4/1059 are served only to an authenticated pubkey involved in
+# the event (author or p tag) — restrict_read_to_involved is default on.
+[db]
+path = "/tmp/nosfry-marmot/db-auth"
+
+[relay]
+bind = "127.0.0.1"
+port = 7802
+service_url = "ws://127.0.0.1:7802"

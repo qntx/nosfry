@@ -1,0 +1,16 @@
+# P9 extension: AUTH + 2 MiB event allowance. Marmot spec (nostr.md
+# "NIP-44 and event size") says relays SHOULD accept >= 2 MiB serialized
+# events because gift-wrapped Welcomes carry the ratchet tree.
+[db]
+path = "/tmp/nosfry-marmot/db-2mib-boundary"
+
+[events]
+max_event_size = 2097152
+
+[relay]
+bind = "127.0.0.1"
+port = 7806
+service_url = "ws://127.0.0.1:7806"
+# The EVENT frame for a 2 MiB event is ~2 MiB + envelope; raised so the
+# frame survives the WebSocket payload cap (see RESULTS.md).
+max_websocket_payload_size = 2097152

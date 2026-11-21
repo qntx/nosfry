@@ -1,0 +1,27 @@
+# Run D candidate: run C plus the minimal raised limits needed for the
+# wn interop scenarios (filled in after B/C; see RESULTS.md).
+[db]
+path = "/tmp/nosfry-marmot/db-auth-raised"
+
+[relay]
+bind = "127.0.0.1"
+port = 7803
+service_url = "ws://127.0.0.1:7803"
+
+[relay.rate_limits]
+# Raised for the interop bulk scenario (500 kind-445 publishes in a
+# burst): defaults of 20/s burst 100 per connection and 100/s burst 500
+# per IP reject Marmot send bursts.
+events_per_second = 200
+events_burst      = 1000
+reqs_per_second   = 200
+reqs_burst        = 1000
+ip_events_per_second = 2000
+ip_events_burst      = 10000
+ip_reqs_per_second   = 2000
+ip_reqs_burst        = 10000
+
+[relay.limits]
+# mk-core's single catch-up fetch asks for the whole group backlog
+# (500+ events) in one filter; the default 500 cap truncates it.
+max_filter_limit = 10000
