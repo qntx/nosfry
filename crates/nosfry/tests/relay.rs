@@ -1115,6 +1115,9 @@ async fn req_ids(ws: &mut yawc::TcpWebSocket, sub: &str, filter: &str) -> Vec<St
     loop {
         let frame = json(&recv_text(ws, T).await);
         match frame[0].as_str().unwrap() {
+            // A filter that may match restricted kinds earns an AUTH
+            // challenge first; the REQ still answers normally.
+            "AUTH" => {}
             "EVENT" => got.push(frame[2]["id"].as_str().unwrap().to_owned()),
             "EOSE" => return got,
             other => panic!("unexpected frame {other}"),
@@ -3033,6 +3036,9 @@ async fn neg_sync(
     let mut need_ids = Vec::new();
     loop {
         let frame = json(&recv_text(ws, T).await);
+        if frame[0] == "AUTH" {
+            continue; // maybe-restricted filter: challenge precedes NEG-MSG
+        }
         assert_eq!(frame[0], "NEG-MSG", "{frame}");
         assert_eq!(frame[1], sub, "{frame}");
         let reply = unhex(frame[2].as_str().unwrap());
@@ -3690,9 +3696,9 @@ async fn nip86_pubkey_event_and_kind_moderation() {
         let frame = json(&recv_text(&mut ws, T).await);
         if frame[0] == "EVENT" {
             before.push(frame[2]["id"].as_str().unwrap().to_owned());
-        } else {
+        } else if frame[0] == "EOSE" {
             break;
-        }
+        } // AUTH challenges are skipped
     }
     assert!(before.contains(&note.id().to_string()), "{before:?}");
     let res = rpc(

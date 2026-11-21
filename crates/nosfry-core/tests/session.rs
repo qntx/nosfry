@@ -713,6 +713,106 @@ fn req_fully_restricted_auth_disabled() {
     );
 }
 
+/// A filter that may match a restricted kind earns the challenge
+/// but the REQ still subscribes — the gate keeps hiding what the
+/// unauthenticated reader must not see.
+#[test]
+fn req_maybe_restricted_challenges_and_continues() {
+    let p = "0000000000000000000000000000000000000000000000000000000000000000";
+    for filter in [
+        "{\"kinds\":[1,1059]}".to_owned(),
+        format!("{{\"#p\":[\"{p}\"]}}"),
+        "{}".to_owned(),
+    ] {
+        let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+        let out = feed(&mut s, 1, &format!("[\"REQ\",\"a\",{filter}]"));
+        assert!(
+            matches!(
+                out.as_slice(),
+                [Command::Send { .. }, Command::Subscribe { .. }]
+            ) && sends(&out) == ["[\"AUTH\",\"challenge\"]"],
+            "{filter}: {out:?}"
+        );
+    }
+}
+
+/// `kinds:[1]` can never match a restricted kind — no challenge —
+/// and a qualifying REQ challenges at most once per connection.
+#[test]
+fn req_maybe_restricted_challenges_once() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1]}]");
+    assert!(
+        sends(&out).is_empty() && matches!(out.as_slice(), [Command::Subscribe { .. }]),
+        "{out:?}"
+    );
+    let out = feed(&mut s, 1, "[\"REQ\",\"b\",{\"kinds\":[1,1059]}]");
+    assert_eq!(sends(&out), ["[\"AUTH\",\"challenge\"]"], "{out:?}");
+    assert!(
+        matches!(out.last(), Some(Command::Subscribe { .. })),
+        "{out:?}"
+    );
+    let out = feed(&mut s, 1, "[\"REQ\",\"c\",{}]");
+    assert!(
+        sends(&out).is_empty() && matches!(out.as_slice(), [Command::Subscribe { .. }]),
+        "{out:?}"
+    );
+}
+
+/// An authenticated connection gets no challenge.
+#[test]
+fn req_maybe_restricted_authed_no_challenge() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let out = feed(&mut s, 1, &auth_frame([7; 32], 1));
+    assert!(!s.authenticated().is_empty(), "{out:?}");
+    let out = feed(&mut s, 2, "[\"REQ\",\"a\",{\"kinds\":[1,1059]}]");
+    assert!(
+        sends(&out).is_empty() && matches!(out.as_slice(), [Command::Subscribe { .. }]),
+        "{out:?}"
+    );
+}
+
+/// With AUTH disabled a maybe-restricted filter is never
+/// challenged.
+#[test]
+fn req_maybe_restricted_auth_disabled_no_challenge() {
+    let mut s = session_auth("", &[4, 1059], true);
+    let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1,4]}]");
+    assert!(
+        sends(&out).is_empty() && matches!(out.as_slice(), [Command::Subscribe { .. }]),
+        "{out:?}"
+    );
+}
+
+/// `COUNT` shares `validate_read`: same challenge, then the count.
+#[test]
+fn count_maybe_restricted_challenges() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let out = feed(&mut s, 1, "[\"COUNT\",\"a\",{\"kinds\":[1,1059]}]");
+    assert!(
+        matches!(
+            out.as_slice(),
+            [Command::Send { .. }, Command::Count { .. }]
+        ) && sends(&out) == ["[\"AUTH\",\"challenge\"]"],
+        "{out:?}"
+    );
+}
+
+/// `NEG-OPEN` challenges before the `NegOpen` command, so the AUTH
+/// frame precedes any `NEG-MSG` on the wire.
+#[test]
+fn neg_open_maybe_restricted_challenges() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let out = feed(&mut s, 1, "[\"NEG-OPEN\",\"n\",{},\"aabb\"]");
+    assert!(
+        matches!(
+            out.as_slice(),
+            [Command::Send { .. }, Command::NegOpen { .. }]
+        ) && sends(&out) == ["[\"AUTH\",\"challenge\"]"],
+        "{out:?}"
+    );
+}
+
 /// With AUTH disabled a restricted kind has no reader to serve:
 /// the write is refused `restricted:` — including the ephemeral
 /// wrap kind — while ordinary kinds still publish.
@@ -1081,9 +1181,12 @@ fn repost_embedding_protected_is_blocked() {
 fn mixed_req_gate_hides_restricted() {
     let mut s = session_auth("wss://relay.example.com", &[4], true);
     let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1,4]}]");
-    let [Command::Subscribe { gate, .. }] = out.as_slice() else {
-        panic!("expected Subscribe, got {out:?}");
+    // A mixed group may match restricted kinds: AUTH challenge first,
+    // then the subscription proceeds under the read gate.
+    let [Command::Send { .. }, Command::Subscribe { gate, .. }] = out.as_slice() else {
+        panic!("expected AUTH + Subscribe, got {out:?}");
     };
+    assert_eq!(sends(&out), ["[\"AUTH\",\"challenge\"]"]);
     let ev = |kind: u16| {
         nosfry_core::packed::PackedEvent::build(
             &nosfry_core::event::EventId([1; 32]),

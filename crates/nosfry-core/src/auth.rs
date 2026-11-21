@@ -106,6 +106,21 @@ impl AuthRules {
         self.relay.as_ref().is_some_and(|relay| relay.matches(url))
     }
 
+    /// Whether any filter can match a restricted kind — restricted
+    /// kinds are configured and some possible filter has no `kinds`
+    /// list or lists at least one of them. An unauthenticated REQ,
+    /// COUNT, or NEG-OPEN matching this gets an AUTH challenge and
+    /// still proceeds.
+    pub(crate) fn may_restrict(&self, filters: &[Filter]) -> bool {
+        !self.restricted_kinds.is_empty()
+            && filters.iter().any(|filter| {
+                !filter.is_impossible()
+                    && filter
+                        .kinds()
+                        .is_none_or(|kinds| kinds.iter().any(|kind| self.is_restricted(*kind)))
+            })
+    }
+
     /// Whether every filter is fully restricted — restricted kinds are
     /// configured, there is at least one filter, and every filter lists
     /// only restricted kinds (strfry `isFilterGroupFullyRestricted`).
@@ -255,6 +270,25 @@ mod tests {
         assert!(!rules.fully_restricts(&[f(r#"{"kinds":[4]}"#), f("{}")]));
         assert!(!rules.fully_restricts(&[f(r#"{"kinds":[4,1]}"#)]));
         assert!(!AuthRules::default().fully_restricts(&[f(r#"{"kinds":[4]}"#)]));
+    }
+
+    #[test]
+    fn may_restrict() {
+        let rules = auth_rules("", &[4, 1059], true);
+        let f = |json: &str| Filter::parse(json).unwrap();
+        // No `kinds` or a listed restricted kind may match one.
+        assert!(rules.may_restrict(&[f(r#"{"kinds":[1,1059]}"#)]));
+        assert!(rules.may_restrict(&[f(
+            r##"{"#p":["0000000000000000000000000000000000000000000000000000000000000000"]}"##
+        )]));
+        assert!(rules.may_restrict(&[f("{}")]));
+        assert!(rules.may_restrict(&[f(r#"{"kinds":[4]}"#)]));
+        // Only public kinds, an impossible filter, and no restricted
+        // kinds configured can never match one.
+        assert!(!rules.may_restrict(&[f(r#"{"kinds":[1]}"#)]));
+        assert!(!rules.may_restrict(&[f(r#"{"kinds":[]}"#)]));
+        assert!(!rules.may_restrict(&[]));
+        assert!(!auth_rules("", &[], true).may_restrict(&[f("{}")]));
     }
 
     #[test]
