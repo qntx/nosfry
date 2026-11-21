@@ -53,8 +53,8 @@ pub struct Relay {
     pub port: u16,
     /// The relay's canonical `ws://`/`wss://` URL clients sign into an
     /// AUTH event's `relay` tag and name in a NIP-62 request to
-    /// vanish. Empty disables AUTH: restricted kinds are stored but
-    /// never served, and protected events are rejected.
+    /// vanish. Empty disables AUTH: restricted kinds are refused on
+    /// write and never served, and protected events are rejected.
     pub service_url: String,
     /// Soft open-file limit to raise to at startup, capped by the hard
     /// limit (0 = leave unchanged).

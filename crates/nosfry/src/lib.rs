@@ -170,7 +170,7 @@ async fn reload_loop(
                 let snapshot = moderation.borrow().clone();
                 let mut updated = (*live).clone();
                 updated.nip11 = http::nip11(&updated.config, &updated.limits, &snapshot).into();
-                updated.landing = http::landing(&updated.config, &snapshot).into();
+                updated.landing = http::landing(&updated.config, &updated.limits, &snapshot).into();
                 *current = Arc::new(updated);
             });
         }
@@ -244,6 +244,17 @@ fn log_invalid_reload(err: &ServerError) {
     tracing::error!(%err, "invalid reloaded config; keeping the running one");
 }
 
+/// One notice when restricted kinds are configured but AUTH is off:
+/// such writes are refused because there is no reader to serve.
+fn log_restricted_writes(config: &Config) {
+    if config.relay.service_url.is_empty() && !config.relay.auth.restricted_read_kinds.is_empty() {
+        tracing::info!(
+            "AUTH disabled: writes of restricted kinds {:?} are refused",
+            config.relay.auth.restricted_read_kinds
+        );
+    }
+}
+
 /// Apply a validated reload: update the connection caps, replace the
 /// write-policy task only when its command or timeout changed, and
 /// build the next [`Live`]. The cached NIP-11 document and landing
@@ -266,6 +277,7 @@ fn apply_reload(
     } else {
         start_policy(&merged.relay.write_policy)
     };
+    log_restricted_writes(&merged);
     tracing::info!("configuration reloaded");
     Live {
         nip11: live.nip11.clone(),
@@ -376,11 +388,12 @@ impl Server {
         // The live-config channel exists before the writer spawn so
         // the vanish path re-reads `service_url` on every batch.
         let limits = config.limits()?;
+        log_restricted_writes(&config);
         let admins = config.admins()?;
         let (live_tx, live_rx) = watch::channel(Arc::new(Live {
             config: Arc::clone(&config),
             nip11: http::nip11(&config, &limits, &moderation).into(),
-            landing: http::landing(&config, &moderation).into(),
+            landing: http::landing(&config, &limits, &moderation).into(),
             limits: Arc::new(limits),
             policy: start_policy(&config.relay.write_policy),
             admins,

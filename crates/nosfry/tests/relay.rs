@@ -2288,6 +2288,43 @@ async fn reload_rate_limits_apply_to_new_connections() {
 }
 
 #[tokio::test]
+async fn reload_disabling_auth_refuses_restricted_writes() {
+    // AUTH on first: a wrap publishes fine.
+    let relay = Relay::start_with(auth_config()).await;
+    let mut ws = relay.connect().await;
+    let wrap = common::event(
+        &key(7),
+        1059,
+        now(),
+        &json!([["p", "00".repeat(32)]]),
+        "wrap",
+    );
+    send_text(&mut ws, &event_wire(&wrap)).await;
+    assert_eq!(recv_ok(&mut ws, &wrap).await[2], true);
+
+    // A reload dropping `service_url` refuses restricted writes on
+    // new connections (each keeps the limits it was opened with).
+    relay.reload(reload_config("auth off"));
+    assert!(wait_until(|| async { nip11_name(relay.addr).await == "auth off" }).await);
+    let mut fresh = relay.connect().await;
+    let wrap2 = common::event(
+        &key(7),
+        1059,
+        now(),
+        &json!([["p", "00".repeat(32)]]),
+        "wrap2",
+    );
+    send_text(&mut fresh, &event_wire(&wrap2)).await;
+    let ok = recv_ok(&mut fresh, &wrap2).await;
+    assert_eq!(ok[2], false, "{ok}");
+    assert!(ok[3].as_str().unwrap().starts_with("restricted:"), "{ok}");
+    let note = common::event(&key(7), 1, now(), &json!([]), "note");
+    send_text(&mut fresh, &event_wire(&note)).await;
+    assert_eq!(recv_ok(&mut fresh, &note).await[2], true);
+    relay.stop().await;
+}
+
+#[tokio::test]
 async fn reload_port_change_is_ignored() {
     let relay = Relay::start().await;
     let mut config = reload_config("port changed");
@@ -2436,14 +2473,22 @@ fn auth_config() -> nosfry::config::Config {
 }
 
 #[tokio::test]
-async fn nip11_lists_42_only_with_auth_service_url() {
+async fn nip11_lists_42_59_only_with_auth_service_url() {
     let relay = Relay::start_with(auth_config()).await;
     let text = http_get(relay.addr, "/").await;
     let doc = nip11_body(&text);
     assert_eq!(
         doc["supported_nips"],
-        json!([1, 9, 11, 40, 42, 45, 62, 70, 77])
+        json!([1, 9, 11, 40, 42, 45, 59, 62, 70, 77])
     );
+    relay.stop().await;
+
+    // Without `service_url` the relay guards nothing: NIP-42 and
+    // NIP-59 both drop out of the document.
+    let relay = Relay::start().await;
+    let text = http_get(relay.addr, "/").await;
+    let doc = nip11_body(&text);
+    assert_eq!(doc["supported_nips"], json!([1, 9, 11, 40, 45, 62, 70, 77]));
     relay.stop().await;
 }
 
@@ -2548,7 +2593,10 @@ async fn ephemeral_wrap_restricted_to_recipient() {
     assert_eq!(json(&recv_text(&mut ws_a, T).await)[2], true);
     send_text(
         &mut ws_a,
-        &req_wire("wraps", &format!("{{\"kinds\":[21059],\"#p\":[\"{pk2}\"]}}")),
+        &req_wire(
+            "wraps",
+            &format!("{{\"kinds\":[21059],\"#p\":[\"{pk2}\"]}}"),
+        ),
     )
     .await;
     let eose = json(&recv_text(&mut ws_a, T).await);
@@ -2673,7 +2721,7 @@ async fn write_policy_receives_authed_pubkey() {
 }
 
 #[tokio::test]
-async fn restricted_kinds_stored_but_never_served_by_default() {
+async fn restricted_kinds_refused_without_auth_service() {
     let relay = Relay::start().await;
     let mut ws = relay.connect().await;
     // Fully restricted REQ: refused outright, no AUTH (disabled).
@@ -2681,14 +2729,17 @@ async fn restricted_kinds_stored_but_never_served_by_default() {
     let closed = json(&recv_text(&mut ws, T).await);
     assert_eq!(closed[0], "CLOSED");
     assert_eq!(closed[2], "restricted: requested kinds are not served");
-    // A kind-4 event is still stored.
+    // A kind-4 write is refused too — with no AUTH there is no
+    // reader to serve it to.
     let dm = common::event(&key(8), 4, now(), &json!([]), "dm");
     send_text(&mut ws, &event_wire(&dm)).await;
-    assert_eq!(recv_ok(&mut ws, &dm).await[2], true);
+    let ok = recv_ok(&mut ws, &dm).await;
+    assert_eq!(ok[2], false, "{ok}");
+    assert!(ok[3].as_str().unwrap().starts_with("restricted:"), "{ok}");
     let note = common::event(&key(8), 1, now(), &json!([]), "note");
     send_text(&mut ws, &event_wire(&note)).await;
     assert_eq!(recv_ok(&mut ws, &note).await[2], true);
-    // A mixed REQ serves kind 1 but hides the kind 4.
+    // A mixed REQ serves kind 1; nothing kind-4 exists to hide.
     let got = req_ids(&mut ws, "m", "{\"kinds\":[1,4]}").await;
     assert_eq!(got, vec![note.id().to_string()], "{got:?}");
     relay.stop().await;

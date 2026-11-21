@@ -108,6 +108,8 @@ pub struct Features {
     pub sync: bool,
     /// NIP-42 AUTH configured (`service_url` set).
     pub auth: bool,
+    /// NIP-59 gift wraps guarded (AUTH enabled, kind 1059 restricted).
+    pub gift_wrap: bool,
     /// NIP-86 management admins configured.
     pub management: bool,
 }
@@ -122,6 +124,9 @@ pub fn supported_nips(features: Features) -> Vec<u16> {
     }
     if features.sync {
         nips.push(77);
+    }
+    if features.gift_wrap {
+        nips.push(59);
     }
     if features.auth {
         nips.push(42);
@@ -269,6 +274,7 @@ mod tests {
                 count: true,
                 sync: true,
                 auth: true,
+                gift_wrap: true,
                 management: true,
             },
         );
@@ -284,12 +290,42 @@ mod tests {
                 count: true,
                 sync: true,
                 auth: true,
+                gift_wrap: true,
                 management: true,
             },
         );
         assert_eq!(
             doc["supported_nips"],
-            json!([1, 9, 11, 40, 42, 45, 62, 70, 77, 86])
+            json!([1, 9, 11, 40, 42, 45, 59, 62, 70, 77, 86])
+        );
+    }
+
+    /// NIP-59 advertises only with `gift_wrap`; AUTH alone does not.
+    #[test]
+    fn gift_wrap_flag_controls_59() {
+        let auth_only = doc(
+            &Info::default(),
+            &Moderation::default(),
+            Features {
+                auth: true,
+                ..Features::default()
+            },
+        );
+        assert_eq!(
+            auth_only["supported_nips"],
+            json!([1, 9, 11, 40, 42, 62, 70])
+        );
+        let wraps_only = doc(
+            &Info::default(),
+            &Moderation::default(),
+            Features {
+                gift_wrap: true,
+                ..Features::default()
+            },
+        );
+        assert_eq!(
+            wraps_only["supported_nips"],
+            json!([1, 9, 11, 40, 59, 62, 70])
         );
     }
 

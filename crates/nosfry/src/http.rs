@@ -312,11 +312,15 @@ fn client_ip(config: &Config, headers: &header::HeaderMap, peer: IpAddr) -> IpAd
 
 /// The optional capabilities the `[relay]` configuration advertises
 /// in the NIP-11 document and on the landing page.
-const fn features(relay: &crate::config::Relay) -> nosfry_core::info::Features {
+fn features(
+    relay: &crate::config::Relay,
+    auth: &nosfry_core::auth::AuthRules,
+) -> nosfry_core::info::Features {
     nosfry_core::info::Features {
         count: relay.limits.max_filter_limit_count > 0,
         sync: relay.limits.max_sync_events > 0,
         auth: !relay.service_url.is_empty(),
+        gift_wrap: auth.guards_gift_wraps(),
         management: !relay.management.admins.is_empty(),
     }
 }
@@ -332,7 +336,7 @@ pub(crate) fn nip11(
     nosfry_core::info::document(
         &relay.info,
         moderation,
-        features(relay),
+        features(relay, &limits.auth),
         limits,
         relay.max_websocket_payload_size,
     )
@@ -340,9 +344,18 @@ pub(crate) fn nip11(
 
 /// The HTML landing page, rendered alongside [`nip11`] (same
 /// effective info, same rebuild points).
-pub(crate) fn landing(config: &Config, moderation: &Moderation) -> String {
+pub(crate) fn landing(
+    config: &Config,
+    limits: &nosfry_core::limits::Limits,
+    moderation: &Moderation,
+) -> String {
     let relay = &config.relay;
-    nosfry_core::site::landing_page(&relay.info, moderation, features(relay), &relay.service_url)
+    nosfry_core::site::landing_page(
+        &relay.info,
+        moderation,
+        features(relay, &limits.auth),
+        &relay.service_url,
+    )
 }
 
 #[cfg(test)]

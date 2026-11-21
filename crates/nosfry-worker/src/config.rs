@@ -31,8 +31,8 @@ pub struct Config {
 pub struct Relay {
     /// The relay's canonical `ws://`/`wss://` URL clients sign into an
     /// AUTH event's `relay` tag. Empty disables AUTH: restricted
-    /// kinds are stored but never served, and protected events are
-    /// rejected.
+    /// kinds are refused on write and never served, and protected
+    /// events are rejected.
     pub service_url: String,
     /// Maximum inbound WebSocket payload in bytes.
     pub max_websocket_payload_size: usize,

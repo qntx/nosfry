@@ -46,9 +46,9 @@ bind = "127.0.0.1"
 port = 7777
 # The relay's canonical ws:// / wss:// URL. Clients echo it in the
 # AUTH event's "relay" tag and name it in a NIP-62 request to vanish.
-# Empty disables AUTH: restricted kinds are stored but never served
-# and protected events are rejected (vanish requests to ALL_RELAYS are
-# still honored).
+# Empty disables AUTH: restricted kinds are refused on write and never
+# served, and protected events are rejected (vanish requests to
+# ALL_RELAYS are still honored).
 service_url = ""
 # Raise the soft open-file limit at startup up to this value, capped by
 # the hard limit; 0 leaves it unchanged (restart-only).

@@ -713,6 +713,46 @@ fn req_fully_restricted_auth_disabled() {
     );
 }
 
+/// With AUTH disabled a restricted kind has no reader to serve:
+/// the write is refused `restricted:` — including the ephemeral
+/// wrap kind — while ordinary kinds still publish.
+#[test]
+fn restricted_writes_refused_when_auth_disabled() {
+    let mut s = session_auth("", &[4, 1059, 21059], true);
+    let out = feed(&mut s, 1, &signed_event(1, 1059, "wrap"));
+    let frames = sends(&out);
+    assert_eq!(frames.len(), 1, "{out:?}");
+    assert!(frames[0].starts_with("[\"OK\""), "{frames:?}");
+    assert!(
+        frames[0].contains(
+            "\"restricted: kind 1059 is only served to authenticated readers and AUTH is disabled on this relay\""
+        ),
+        "{frames:?}"
+    );
+    let out = feed(&mut s, 2, &signed_event(2, 21059, "eph"));
+    let frames = sends(&out);
+    assert!(
+        frames[0].contains("restricted: kind 21059 is only served to authenticated readers"),
+        "{frames:?}"
+    );
+    let out = feed(&mut s, 3, &signed_event(3, 1, "note"));
+    assert!(
+        matches!(out.as_slice(), [Command::Publish { .. }]),
+        "{out:?}"
+    );
+}
+
+/// With AUTH enabled a restricted kind publishes normally.
+#[test]
+fn restricted_writes_publish_when_auth_enabled() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059, 21059], true);
+    let out = feed(&mut s, 1, &signed_event(1, 1059, "wrap"));
+    assert!(
+        matches!(out.as_slice(), [Command::Publish { .. }]),
+        "{out:?}"
+    );
+}
+
 /// The shipped default restricts the ephemeral wrap kind too:
 /// kind-21059 filters are fully restricted and challenged like DMs.
 #[test]

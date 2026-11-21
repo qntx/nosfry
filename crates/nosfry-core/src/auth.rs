@@ -94,6 +94,13 @@ impl AuthRules {
         self.restricted_kinds.binary_search(&kind).is_ok()
     }
 
+    /// Whether the relay guards gift wraps — AUTH enabled and kind
+    /// 1059 restricted — advertised as NIP-59 in the NIP-11 document.
+    #[must_use]
+    pub fn guards_gift_wraps(&self) -> bool {
+        self.enabled() && self.is_restricted(1059)
+    }
+
     /// Whether a `relay` tag value names the configured service URL.
     pub(crate) fn matches_relay(&self, url: &str) -> bool {
         self.relay.as_ref().is_some_and(|relay| relay.matches(url))

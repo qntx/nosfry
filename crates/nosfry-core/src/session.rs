@@ -484,6 +484,24 @@ impl Session {
                 return;
             }
         }
+        // A restricted kind is only served to authenticated readers;
+        // with AUTH disabled there is no reader to serve, so the
+        // write is refused — ephemeral restricted kinds too (they are
+        // never stored, and imports bypass this gate by design).
+        if !limits.auth.enabled() && limits.auth.is_restricted(unverified.kind().0) {
+            out.push(Command::Send {
+                verb: RelayVerb::Ok,
+                text: ok_frame(
+                    &unverified.id(),
+                    false,
+                    &Reason::Restricted.message(&format!(
+                        "kind {} is only served to authenticated readers and AUTH is disabled on this relay",
+                        unverified.kind().0
+                    )),
+                ),
+            });
+            return;
+        }
         let id = unverified.id();
         match unverified.verify(&limits.event) {
             Ok(event) => {
