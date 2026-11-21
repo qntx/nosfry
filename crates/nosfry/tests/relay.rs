@@ -1832,7 +1832,7 @@ async fn metrics_count_rejected_upgrades() {
 
 /// `nostr_events_total` counts only events the store persisted and
 /// `nosfry_event_outcomes_total` tallies every verified publish by
-/// outcome (strfry's RelayWriter semantics): store, duplicate,
+/// outcome (strfry's `RelayWriter` semantics): store, duplicate,
 /// delete, blocked rewrite.
 #[tokio::test]
 async fn metrics_count_store_outcomes() {

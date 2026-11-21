@@ -209,8 +209,10 @@ impl Metrics {
     /// The first [`MAX_KIND_SERIES`] kinds ever persisted get their
     /// own series; every later kind counts under `kind="other"`.
     pub(crate) fn event(&self, kind: u16) {
-        if self.claim_kind_series(kind) {
-            self.events[usize::from(kind)].fetch_add(1, Ordering::Relaxed);
+        if self.claim_kind_series(kind)
+            && let Some(counter) = self.events.get(usize::from(kind))
+        {
+            counter.fetch_add(1, Ordering::Relaxed);
         } else {
             self.events_other.fetch_add(1, Ordering::Relaxed);
         }
@@ -220,7 +222,9 @@ impl Metrics {
     /// Assignment is a compare-exchange on [`Self::kinds_assigned`],
     /// so racing first-seens waste at most a slot, never overbook.
     fn claim_kind_series(&self, kind: u16) -> bool {
-        let flag = &self.own_kind[usize::from(kind)];
+        let Some(flag) = self.own_kind.get(usize::from(kind)) else {
+            return false;
+        };
         loop {
             if flag.load(Ordering::Relaxed) {
                 return true;
@@ -256,6 +260,51 @@ impl Metrics {
     pub(crate) fn store_error(&self, op: StoreOp) {
         if let Some(counter) = self.store_errors.get(op as usize) {
             counter.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// `nostr_events_total` — own series for flagged kinds (ascending
+    /// u16 order), then `kind="other"` when non-zero — plus
+    /// `nosfry_event_outcomes_total`.
+    fn render_events(&self, out: &mut String) {
+        family(
+            out,
+            "nostr_events_total",
+            "Events persisted to the store by kind.",
+            "counter",
+        );
+        for (kind, flag) in self.own_kind.iter().enumerate() {
+            if !flag.load(Ordering::Relaxed) {
+                continue;
+            }
+            let Some(counter) = self.events.get(kind) else {
+                continue;
+            };
+            let value = counter.load(Ordering::Relaxed);
+            if value > 0 {
+                writeln!(out, "nostr_events_total{{kind=\"{kind}\"}} {value}").ok();
+            }
+        }
+        let other = self.events_other.load(Ordering::Relaxed);
+        if other > 0 {
+            writeln!(out, "nostr_events_total{{kind=\"other\"}} {other}").ok();
+        }
+        family(
+            out,
+            "nosfry_event_outcomes_total",
+            "Verified EVENT publishes by outcome.",
+            "counter",
+        );
+        for (outcome, counter) in EventOutcome::ALL.iter().zip(&self.outcomes) {
+            let value = counter.load(Ordering::Relaxed);
+            if value > 0 {
+                writeln!(
+                    out,
+                    "nosfry_event_outcomes_total{{outcome=\"{}\"}} {value}",
+                    outcome.as_str()
+                )
+                .ok();
+            }
         }
     }
 
@@ -302,41 +351,7 @@ impl Metrics {
                 counter,
             );
         }
-        family(
-            &mut out,
-            "nostr_events_total",
-            "Events persisted to the store by kind.",
-            "counter",
-        );
-        for (kind, flag) in self.own_kind.iter().enumerate() {
-            if flag.load(Ordering::Relaxed) {
-                let value = self.events[kind].load(Ordering::Relaxed);
-                if value > 0 {
-                    writeln!(out, "nostr_events_total{{kind=\"{kind}\"}} {value}").ok();
-                }
-            }
-        }
-        let other = self.events_other.load(Ordering::Relaxed);
-        if other > 0 {
-            writeln!(out, "nostr_events_total{{kind=\"other\"}} {other}").ok();
-        }
-        family(
-            &mut out,
-            "nosfry_event_outcomes_total",
-            "Verified EVENT publishes by outcome.",
-            "counter",
-        );
-        for (outcome, counter) in EventOutcome::ALL.iter().zip(&self.outcomes) {
-            let value = counter.load(Ordering::Relaxed);
-            if value > 0 {
-                writeln!(
-                    out,
-                    "nosfry_event_outcomes_total{{outcome=\"{}\"}} {value}",
-                    outcome.as_str()
-                )
-                .ok();
-            }
-        }
+        self.render_events(&mut out);
         family(
             &mut out,
             "nosfry_rate_limited_total",
@@ -452,26 +467,33 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("nostr_events_total{"))
             .collect();
-        assert_eq!(series.len(), MAX_KIND_SERIES as usize + 1, "{out}");
-        for (kind, line) in series[..256].iter().enumerate() {
+        let cap = usize::try_from(MAX_KIND_SERIES).unwrap();
+        assert_eq!(series.len(), cap + 1, "{out}");
+        for (kind, line) in series.iter().take(cap).enumerate() {
             assert_eq!(
                 *line,
                 format!("nostr_events_total{{kind=\"{kind}\"}} 1"),
                 "{out}"
             );
         }
-        assert_eq!(series[256], "nostr_events_total{kind=\"other\"} 44");
+        assert_eq!(
+            series.last().copied(),
+            Some("nostr_events_total{kind=\"other\"} 44")
+        );
         // An already-capped kind keeps counting under "other"; an own
         // series stays its own.
         metrics.event(400);
         metrics.event(0);
-        let out = metrics.render(0, 0, 0, 0);
-        assert!(out.contains("nostr_events_total{kind=\"0\"} 2"), "{out}");
+        let again = metrics.render(0, 0, 0, 0);
         assert!(
-            out.contains("nostr_events_total{kind=\"other\"} 45"),
-            "{out}"
+            again.contains("nostr_events_total{kind=\"0\"} 2"),
+            "{again}"
         );
-        assert!(!out.contains("kind=\"400\""), "{out}");
+        assert!(
+            again.contains("nostr_events_total{kind=\"other\"} 45"),
+            "{again}"
+        );
+        assert!(!again.contains("kind=\"400\""), "{again}");
     }
 
     #[test]

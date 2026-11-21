@@ -28,8 +28,9 @@ use common::{event, key};
 use nosfry::admin::{AdminError, ImportStats, delete, export, import, scan};
 use nosfry_core::event::{Event, EventLimits};
 use nosfry_core::filter::Filter;
+use nosfry_core::moderation::{InfoField, ModOp};
 use nosfry_core::store::WriteOutcome;
-use nosfry_lmdb::{Store, StoreOptions};
+use nosfry_lmdb::{Progress, Scan, Store, StoreOptions};
 use serde_json::json;
 
 const MAX_LINE: usize = 4096;
@@ -853,12 +854,12 @@ fn managed_store() -> Fixture {
     store
         .write(
             &[
-                banned_author_ev.clone(),
-                deleted_ev.clone(),
-                banned_ev.clone(),
-                allowed_ev.clone(),
-                vanished_ev.clone(),
-                deleted_wrap.clone(),
+                std::sync::Arc::clone(&banned_author_ev),
+                std::sync::Arc::clone(&deleted_ev),
+                std::sync::Arc::clone(&banned_ev),
+                std::sync::Arc::clone(&allowed_ev),
+                std::sync::Arc::clone(&vanished_ev),
+                std::sync::Arc::clone(&deleted_wrap),
             ],
             None,
         )
@@ -889,12 +890,8 @@ fn managed_store() -> Fixture {
         ref other => panic!("vanish request stored: {other:?}"),
     };
     while store.vanish_step(10_000).unwrap().more {}
-    assert_eq!(store.delete(&[seq]).unwrap(), 1);
+    assert_eq!(store.delete(&[seq]).unwrap(), 1, "kind-62 removed");
 
-    use nosfry_core::moderation::{InfoField, ModOp};
-    let pubkey = |k: &secp256k1::Keypair| {
-        nosfry_core::event::PublicKey(k.x_only_public_key().0.to_byte_array())
-    };
     store
         .moderate(ModOp::BanPubkey {
             pubkey: pubkey(&banned),
@@ -982,7 +979,6 @@ fn export_import_carries_management_state() {
 
     // The imported store behaves like the source: the banned author's
     // stored events stay stored but a moderated scan hides them.
-    use nosfry_lmdb::{Progress, Scan};
     let gate = nosfry_core::auth::ReadGate::default()
         .with_moderation(std::sync::Arc::new(b.moderation().unwrap()));
     let mut emitted = Vec::new();
@@ -1019,15 +1015,15 @@ fn export_import_carries_management_state() {
     // refused by moderation.
     let outcomes = |events: &[std::sync::Arc<Event>]| b.write(events, None).unwrap().outcomes;
     assert_eq!(
-        outcomes(&[f.deleted_ev.clone()]).as_slice(),
+        outcomes(std::slice::from_ref(&f.deleted_ev)).as_slice(),
         [WriteOutcome::Deleted]
     );
     assert_eq!(
-        outcomes(&[f.deleted_wrap.clone()]).as_slice(),
+        outcomes(std::slice::from_ref(&f.deleted_wrap)).as_slice(),
         [WriteOutcome::Deleted]
     );
     assert_eq!(
-        outcomes(&[f.vanished_ev.clone()]).as_slice(),
+        outcomes(std::slice::from_ref(&f.vanished_ev)).as_slice(),
         [WriteOutcome::Vanished]
     );
     assert_eq!(

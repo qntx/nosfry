@@ -81,33 +81,35 @@ pub enum StateError {
 }
 
 /// Serialize the persisted `Moderation` snapshot and every vanish
-/// point as state lines — one per entry, deterministic order (groups
-/// in emission order, entries sorted inside each group). Re-applying
-/// the lines is idempotent, so they are emitted regardless of the
-/// export's `since`/`until` window: the two-pass delta upgrade
-/// re-applies them safely.
+/// point as state lines.
+///
+/// One line per entry in deterministic order (groups in emission
+/// order, entries sorted inside each group). Re-applying the lines is
+/// idempotent, so they are emitted regardless of the export's
+/// `since`/`until` window: the two-pass delta upgrade re-applies them
+/// safely.
 #[must_use]
 pub fn state_lines(m: &Moderation, vanish: &[(PublicKey, u64)]) -> Vec<String> {
     let mut records = Vec::new();
-    let mut keys: Vec<_> = m.allowed_pubkeys.iter().collect();
-    keys.sort_by_key(|(key, _)| *key);
-    for (pubkey, reason) in keys {
+    let mut allowed: Vec<_> = m.allowed_pubkeys.iter().collect();
+    allowed.sort_by_key(|(key, _)| *key);
+    for (pubkey, reason) in allowed {
         records.push(StateRecord::Moderate(ModOp::AllowPubkey {
             pubkey: *pubkey,
             reason: reason.as_deref().map(str::to_owned),
         }));
     }
-    let mut keys: Vec<_> = m.banned_pubkeys.iter().collect();
-    keys.sort_by_key(|(key, _)| *key);
-    for (pubkey, reason) in keys {
+    let mut banned: Vec<_> = m.banned_pubkeys.iter().collect();
+    banned.sort_by_key(|(key, _)| *key);
+    for (pubkey, reason) in banned {
         records.push(StateRecord::Moderate(ModOp::BanPubkey {
             pubkey: *pubkey,
             reason: reason.as_deref().map(str::to_owned),
         }));
     }
-    let mut keys: Vec<_> = m.banned_events.iter().collect();
-    keys.sort_by_key(|(key, _)| *key);
-    for (id, reason) in keys {
+    let mut events: Vec<_> = m.banned_events.iter().collect();
+    events.sort_by_key(|(key, _)| *key);
+    for (id, reason) in events {
         records.push(StateRecord::Moderate(ModOp::BanEvent {
             id: *id,
             reason: reason.as_deref().map(str::to_owned),
@@ -148,25 +150,32 @@ pub fn state_lines(m: &Moderation, vanish: &[(PublicKey, u64)]) -> Vec<String> {
     records.iter().filter_map(state_line).collect()
 }
 
-/// The `{"nosfry_state":1,…}` line for one record, or `None` when the
-/// op is not part of the snapshot vocabulary (`un*` ops are never
-/// emitted). `nosfry_state` stays the first key: import detects the
-/// exact byte prefix.
+/// The `{"nosfry_state":1,…}` line for one record.
+///
+/// `None` when the op is not part of the snapshot vocabulary (`un*`
+/// ops are never emitted). `nosfry_state` stays the first key: import
+/// detects the exact byte prefix.
 #[must_use]
 pub fn state_line(record: &StateRecord) -> Option<String> {
     let (method, params) = match record {
         StateRecord::Vanish { pubkey, at } => ("vanish", json!([pubkey.to_string(), at])),
         StateRecord::Moderate(op) => match op {
-            ModOp::BanPubkey { pubkey, reason } => {
-                ("banpubkey", keyed(&json!(pubkey.to_string()), reason))
+            ModOp::BanPubkey { pubkey, reason } => (
+                "banpubkey",
+                keyed(&json!(pubkey.to_string()), reason.as_deref()),
+            ),
+            ModOp::AllowPubkey { pubkey, reason } => (
+                "allowpubkey",
+                keyed(&json!(pubkey.to_string()), reason.as_deref()),
+            ),
+            ModOp::BanEvent { id, reason } => {
+                ("banevent", keyed(&json!(id.to_string()), reason.as_deref()))
             }
-            ModOp::AllowPubkey { pubkey, reason } => {
-                ("allowpubkey", keyed(&json!(pubkey.to_string()), reason))
-            }
-            ModOp::BanEvent { id, reason } => ("banevent", keyed(&json!(id.to_string()), reason)),
             ModOp::AllowKind { kind } => ("allowkind", json!([kind])),
             ModOp::DisallowKind { kind } => ("disallowkind", json!([kind])),
-            ModOp::BlockIp { ip, reason } => ("blockip", keyed(&json!(ip.to_string()), reason)),
+            ModOp::BlockIp { ip, reason } => {
+                ("blockip", keyed(&json!(ip.to_string()), reason.as_deref()))
+            }
             ModOp::SetInfo { field, value } => (
                 match field {
                     InfoField::Name => "changerelayname",
@@ -188,16 +197,16 @@ pub fn state_line(record: &StateRecord) -> Option<String> {
 }
 
 /// `params` for a keyed entry: `[key]` plus `reason` when present.
-fn keyed(key: &Value, reason: &Option<String>) -> Value {
-    reason
-        .as_ref()
-        .map_or_else(|| json!([key]), |reason| json!([key, reason]))
+fn keyed(key: &Value, reason: Option<&str>) -> Value {
+    reason.map_or_else(|| json!([key]), |reason| json!([key, reason]))
 }
 
-/// Parse one export line: `Ok(None)` when it lacks [`STATE_PREFIX`]
-/// (an ordinary event line), `Ok(Some)` for a valid record, `Err` for
-/// a malformed, unknown-version, or out-of-vocabulary state line.
-/// Management methods are parsed back into [`ModOp`]s through
+/// Parse one export line into a [`StateRecord`].
+///
+/// `Ok(None)` when the line lacks [`STATE_PREFIX`] (an ordinary event
+/// line), `Ok(Some)` for a valid record, `Err` for a malformed,
+/// unknown-version, or out-of-vocabulary state line. Management
+/// methods are parsed back into [`ModOp`]s through
 /// [`management::action`] — one parser for both transports.
 ///
 /// # Errors

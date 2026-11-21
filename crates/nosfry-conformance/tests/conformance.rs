@@ -1610,11 +1610,12 @@ async fn alt_oversized_frame_closes_1009() {
     let pad = "x".repeat(2_097_169 - base_len);
     // The relay may close as soon as the frame header announces an
     // oversized payload — a broken pipe on send is part of the test.
-    let _ = ws
-        .send(yawc::Frame::text(format!(
+    drop(
+        ws.send(yawc::Frame::text(format!(
             "[\"REQ\",\"s\",{{\"kinds\":[1],\"search\":\"{pad}\"}}]"
         )))
-        .await;
+        .await,
+    );
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     loop {
         let frame = tokio::time::timeout_at(deadline, ws.next())
