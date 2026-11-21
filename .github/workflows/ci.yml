@@ -1,17 +1,30 @@
 name: CI
 
+# The full local gate from AGENTS.md. Pull requests run it on their merge
+# ref, the merge queue runs it on the exact commit that lands on main, a
+# push to main runs it again, and release.yml calls it on the tagged
+# commit before anything is built. Branch protection requires the single
+# `gate` job, which fails unless every other job succeeded.
+
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+  merge_group:
+    types: [checks_requested]
+  push:
+    branches: [main]
+  workflow_call:
 
-permissions:
-  contents: read
+permissions: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   taplo:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -21,7 +34,7 @@ jobs:
       - run: npx --yes @taplo/cli@0.7.0 fmt --check
 
   ci:
-    uses: qntx/workflows/.github/workflows/ci-rust.yml@v2
+    uses: qntx/workflows/.github/workflows/ci-rust.yml@b1a930e790044f34f06bd5e1e0ede9e7dd5fa122 # v2.13.1
     permissions:
       contents: read
     with:
@@ -29,18 +42,47 @@ jobs:
       doc: true
       package-check: true
 
-  wasm:
-    name: wasm32 check
-    uses: qntx/workflows/.github/workflows/ci-rust-cross.yml@v2
+  nightly-lint:
+    name: nightly fmt and clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
-    with:
-      targets: wasm32-unknown-unknown
-      packages: nosfry-core nosfry-sql nosfry-worker
-      features: --all-features
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install nightly rustfmt and clippy
+        run: rustup toolchain install nightly --profile minimal --component rustfmt,clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: nightly
+      # group_imports and other rustfmt.toml options are nightly-only:
+      # the pinned toolchain in the ci job silently skips them.
+      - run: cargo +nightly fmt --all -- --check
+      - run: cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
+
+  wasm32:
+    name: wasm32 check and clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      CC_wasm32_unknown_unknown: clang
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup target add wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: wasm32
+      - run: cargo check -p nosfry-core -p nosfry-sql -p nosfry-worker --target wasm32-unknown-unknown
+      - run: cargo clippy -p nosfry-worker --target wasm32-unknown-unknown -- -D warnings
 
   fuzz:
-    uses: qntx/workflows/.github/workflows/ci-rust-fuzz.yml@v2
+    uses: qntx/workflows/.github/workflows/ci-rust-fuzz.yml@b1a930e790044f34f06bd5e1e0ede9e7dd5fa122 # v2.13.1
     permissions:
       contents: read
     with:
@@ -48,17 +90,22 @@ jobs:
 
   conformance-native:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: conformance-native
       - name: Run the conformance suite against the native edition
         run: crates/nosfry-conformance/run.sh native
 
   conformance-worker:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -84,3 +131,19 @@ jobs:
             echo "- raw: $(stat -c%s "$WASM") bytes"
             echo "- gzip: $(gzip -c "$WASM" | wc -c) bytes"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  gate:
+    if: always()
+    needs: [taplo, ci, nightly-lint, wasm32, fuzz, conformance-native, conformance-worker]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Require every gate job to succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for r in $RESULTS; do
+            [ "$r" = success ] || exit 1
+          done

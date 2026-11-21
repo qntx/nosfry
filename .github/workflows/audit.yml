@@ -1,0 +1,43 @@
+name: Audit
+
+# Advisories appear without any change to the repository (RUSTSEC-2026-0543
+# turned main red with no commit), so check the lockfile daily. cargo-deny
+# applies the deny.toml policy; cargo-audit is an independent second
+# reader of the same database and fails on vulnerabilities, unsound and
+# yanked crates (unmaintained crates are governed by deny.toml alone).
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  deny:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check advisories
+          arguments: --all-features
+
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      CARGO_AUDIT_VERSION: 0.22.2
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo install cargo-audit --locked --version "$CARGO_AUDIT_VERSION"
+      - run: cargo audit --deny unsound --deny yanked

@@ -5,13 +5,11 @@ on:
     - cron: "30 1 * * *"
   workflow_dispatch:
 
-permissions:
-  issues: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   stale:
-    uses: qntx/workflows/.github/workflows/ops-stale.yml@v2
+    uses: qntx/workflows/.github/workflows/ops-stale.yml@b1a930e790044f34f06bd5e1e0ede9e7dd5fa122 # v2.13.1
     permissions:
       issues: write
       pull-requests: write
