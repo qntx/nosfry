@@ -1,0 +1,16 @@
+[db]
+path = "/Users/xu/Desktop/qntx/nosfry-wt/meowl-dev/3rdparty/meowl-spike/db-dev"
+
+[relay]
+bind = "127.0.0.1"
+port = 7640
+max_connections_per_ip = 0
+
+[relay.rate_limits]
+events_per_second = 0
+reqs_per_second = 0
+ip_events_per_second = 0
+ip_reqs_per_second = 0
+
+[relay.auth]
+restricted_read_kinds = []

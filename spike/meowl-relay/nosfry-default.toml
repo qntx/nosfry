@@ -1,0 +1,6 @@
+[db]
+path = "/Users/xu/Desktop/qntx/nosfry-wt/meowl-dev/3rdparty/meowl-spike/db-default"
+
+[relay]
+bind = "127.0.0.1"
+port = 7640

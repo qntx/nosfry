@@ -1,0 +1,7 @@
+{
+  "name": "meowl-relay-spike",
+  "private": true,
+  "dependencies": {
+    "@qntx/nostr": "0.16.0"
+  }
+}
