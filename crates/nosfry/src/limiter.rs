@@ -331,7 +331,7 @@ mod tests {
         let spent_limiter = Arc::new(ConnectionLimiter::new(0, 0, burst_one));
         let third = spent_limiter.try_acquire(ip).unwrap();
         let spent = third.buckets();
-        assert!(spent.take_event(now_ms()), "fresh burst of 1");
+        assert!(spent.take_event(now_ms()).is_ok(), "fresh burst of 1");
         drop(third);
         assert_eq!(spent_limiter.per_ip.lock().unwrap().len(), 1);
         let fourth = spent_limiter.try_acquire(ip).unwrap();
@@ -340,7 +340,7 @@ mod tests {
             "a spent entry is reused across reconnects"
         );
         assert!(
-            !fourth.buckets().take_event(now_ms()),
+            fourth.buckets().take_event(now_ms()).is_err(),
             "the shared burst is still spent: reconnect bought nothing"
         );
     }

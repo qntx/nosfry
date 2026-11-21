@@ -414,16 +414,16 @@ fn compile_tag_condition(
     let values: Vec<Cow<'_, str>> = parse_value(raw, key)?;
     let mut encoded = Vec::with_capacity(values.len());
     for value in &values {
-        let normalized;
-        let mut value = value.as_ref();
+        let value = value.as_ref();
         if letter == 'e' || letter == 'p' {
-            if hex::decode_32_ci(value).is_none() {
+            // NIP-01: `e`/`p` filter values are exact 64-char
+            // lowercase hex (strfry accepts uppercase and `0x` —
+            // a documented deviation).
+            if hex::decode_32(value).is_none() {
                 return Err(FilterError::Invalid(format!(
-                    "`{key}` values must be 64 hex chars"
+                    "`{key}` values must be 64 lowercase hex chars"
                 )));
             }
-            normalized = value.to_ascii_lowercase();
-            value = &normalized;
         }
         if let Some(buf) = encode_tag_value(letter as u8, value) {
             encoded.push(buf);
@@ -439,13 +439,14 @@ fn compile_tag_condition(
     Ok(())
 }
 
-/// `ids`/`authors`: exactly 64 hex chars, case-insensitive, deduplicated.
+/// `ids`/`authors`: exactly 64 lowercase hex chars, deduplicated.
 fn decode_hex_list(raw: &RawValue, key: &str) -> Result<Box<[[u8; 32]]>, FilterError> {
     let values: Vec<Cow<'_, str>> = parse_value(raw, key)?;
     let mut out = Vec::with_capacity(values.len());
     for value in values {
-        let bytes = hex::decode_32_ci(&value)
-            .ok_or_else(|| FilterError::Invalid(format!("`{key}` values must be 64 hex chars")))?;
+        let bytes = hex::decode_32(&value).ok_or_else(|| {
+            FilterError::Invalid(format!("`{key}` values must be 64 lowercase hex chars"))
+        })?;
         out.push(bytes);
     }
     out.sort_unstable();
@@ -592,19 +593,67 @@ mod tests {
         assert_eq!(values, [&b"a"[..], &b"b"[..]]);
     }
 
+    /// NIP-01 (01.md): `ids`/`authors`/`#e`/`#p` values must be exact
+    /// 64-char lowercase hex — uppercase, `0x`, and other lengths are
+    /// all `invalid:`. Other tag filters stay case-sensitive text.
     #[test]
-    fn normalizes_uppercase_hex() {
-        let id = encode_32(&[0xAB; 32]);
-        let filter =
-            Filter::parse(&format!(r##"{{"ids":["{id}"],"#e":["{id}"]}}"##)).expect("parse");
+    fn rejects_non_lowercase_filter_hex() {
+        let lower = "ab".repeat(32);
+        let upper = "AB".repeat(32);
+        let mixed = format!("AB{}", "ab".repeat(31));
+        let bad = [
+            upper.clone(),
+            mixed,
+            format!("0x{lower}"),
+            format!("0X{lower}"),
+            "a".repeat(63),
+            "a".repeat(65),
+            "g".repeat(64),
+        ];
+        for key in ["ids", "authors"] {
+            for value in &bad {
+                let err = Filter::parse(&format!(r#"{{"{key}":["{value}"]}}"#)).unwrap_err();
+                assert!(
+                    err.reason().starts_with("invalid:"),
+                    "{key} {value}: {}",
+                    err.reason()
+                );
+            }
+        }
+        for tag in ["e", "p"] {
+            for value in &bad {
+                let err = Filter::parse(&format!(r##"{{"#{tag}":["{value}"]}}"##)).unwrap_err();
+                assert!(
+                    err.reason().starts_with("invalid:"),
+                    "#{tag} {value}: {}",
+                    err.reason()
+                );
+            }
+        }
+        // Lowercase hex decodes to bytes; `#t` keeps its case.
+        let filter = Filter::parse(&format!(
+            r##"{{"ids":["{lower}"],"#e":["{lower}"],"#t":["NOSTR"]}}"##
+        ))
+        .expect("parse");
         assert_eq!(filter.ids().map(<[_]>::len), Some(1));
-        let [(name, values)] = filter.tags() else {
-            panic!("one tag condition");
-        };
-        assert_eq!(*name, b'e');
+        let tags = filter.tags();
+        let e_values = tags
+            .iter()
+            .find(|(name, _)| *name == b'e')
+            .map(|(_, values)| values)
+            .expect("e condition");
         assert_eq!(
-            values.first().map(TagValueBuf::as_bytes),
+            e_values.first().map(TagValueBuf::as_bytes),
             Some(&[0xAB; 32][..])
+        );
+        let t_values = tags
+            .iter()
+            .find(|(name, _)| *name == b't')
+            .map(|(_, values)| values)
+            .expect("t condition");
+        assert_eq!(
+            t_values.first().map(TagValueBuf::as_bytes),
+            Some(&b"NOSTR"[..])
         );
     }
 
@@ -688,13 +737,14 @@ mod tests {
             r#"{"ids":[]}"#
         );
         let filter = Filter::parse(
-            r##"{"authors":["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"],"#e":["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]}"##,
+            r##"{"authors":["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],"#e":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}"##,
         )
         .unwrap();
         assert_eq!(
             filter.to_json(),
             concat!(
-                r#"{"authors":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],"#,
+                r#"{"authors":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","#,
+                r#""bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"],"#,
                 r##""#e":["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}"##
             )
         );

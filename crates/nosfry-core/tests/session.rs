@@ -402,6 +402,26 @@ fn subkey_generation_monotonic() {
     }
 }
 
+/// A REQ whose `ids` carries uppercase hex is an `invalid:` CLOSE —
+/// NIP-01 wants exact lowercase hex in filter value lists.
+#[test]
+fn req_with_uppercase_filter_hex_is_invalid() {
+    let mut s = session();
+    let upper = "AB".repeat(32);
+    let out = feed(
+        &mut s,
+        1_700_000_000,
+        &format!(r#"["REQ","u",{{"ids":["{upper}"]}}]"#),
+    );
+    let frames = sends(&out);
+    assert!(
+        frames
+            .iter()
+            .any(|f| f.contains("\"CLOSED\"") && f.contains("invalid:")),
+        "{out:?}"
+    );
+}
+
 #[test]
 fn expired_event_is_rejected_invalid() {
     let mut s = session();
