@@ -176,8 +176,7 @@ impl<'a> PackedRef<'a> {
             self.0
                 .get(72..74)
                 .and_then(|s| <&[u8; 2]>::try_from(s).ok())
-                .map(|s| u16::from_le_bytes(*s))
-                .unwrap_or_default(),
+                .map_or_default(|s| u16::from_le_bytes(*s)),
         )
     }
 
@@ -211,7 +210,6 @@ impl<'a> PackedRef<'a> {
         self.0
             .get(pos..pos + 8)
             .and_then(|s| <&[u8; 8]>::try_from(s).ok())
-            .map(|s| u64::from_le_bytes(*s))
-            .unwrap_or_default()
+            .map_or_default(|s| u64::from_le_bytes(*s))
     }
 }
