@@ -1,0 +1,18 @@
+[workspace]
+
+[package]
+name    = "marmot-relay-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+secp256k1    = { version = "0.33.1", default-features = false, features = ["std"] }
+sha2         = "0.11.1"
+serde_json   = "1.0.154"
+tokio        = { version = "1.54", features = ["macros", "rt-multi-thread", "time", "net", "io-util"] }
+yawc         = { version = "0.5.0", default-features = false }
+futures-util = "0.3.34"
+faster-hex   = "1.0.0"
+getrandom    = "0.4.3"
+base64       = "0.23.1"
