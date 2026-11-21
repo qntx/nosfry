@@ -513,6 +513,69 @@ fn req_over_limit_is_closed_rate_limited() {
     );
 }
 
+/// NIP-01 (01.md): a `rate-limited:` OK or CLOSED carries the backoff
+/// as a positive-integer millisecond string in the extra element —
+/// [4] for OK, [3] for CLOSED. `NEG-ERR` carries none.
+#[test]
+fn rate_limited_frames_carry_retry_ms() {
+    let rate = nosfry_core::limits::RateLimits {
+        events_per_second: 1,
+        events_burst: 1,
+        reqs_per_second: 1,
+        reqs_burst: 1,
+        ip_events_per_second: 0,
+        ip_events_burst: 0,
+        ip_reqs_per_second: 0,
+        ip_reqs_burst: 0,
+    };
+    let mut s = session_with_rate(rate);
+    let t = 1_000u64;
+
+    let assert_hint = |frame: &str, index: usize| {
+        let json: serde_json::Value = serde_json::from_str(frame).unwrap();
+        let hint = json[index]
+            .as_str()
+            .unwrap_or_else(|| panic!("no retry hint in {json}"));
+        assert!(
+            hint.bytes().all(|b| b.is_ascii_digit()) && hint.starts_with(|c: char| c != '0'),
+            "hint must match ^[1-9][0-9]*$: {hint}"
+        );
+        assert!(
+            hint.parse::<u64>().unwrap() <= 1_000,
+            "hint over bound: {hint}"
+        );
+    };
+
+    // EVENT: burst of 1 passes, the second gets the hint in [4].
+    let event = signed_event(1_700_000_000, 1, "gm");
+    feed_ms(&mut s, t, &event);
+    let out = feed_ms(&mut s, t, &event);
+    let frames = sends(&out);
+    assert!(frames[0].contains("rate-limited: slow down"), "{frames:?}");
+    assert_hint(&frames[0], 4);
+
+    // REQ: burst of 1 passes, the second's CLOSED carries it in [3].
+    feed_ms(&mut s, t, "[\"REQ\",\"a\",{}]");
+    let out = feed_ms(&mut s, t, "[\"REQ\",\"b\",{}]");
+    let frames = sends(&out);
+    let closed = frames
+        .iter()
+        .find(|f| f.contains("rate-limited:"))
+        .unwrap_or_else(|| panic!("{out:?}"));
+    assert_hint(closed, 3);
+
+    // NEG-ERR: NIP-77 gives its 4th element only to `blocked:` —
+    // `rate-limited:` stays a 3-element frame.
+    let out = feed_ms(&mut s, t, "[\"NEG-OPEN\",\"n\",{},\"aabb\"]");
+    let frames = sends(&out);
+    let neg = frames
+        .iter()
+        .find(|f| f.contains("rate-limited:"))
+        .unwrap_or_else(|| panic!("{out:?}"));
+    let json: serde_json::Value = serde_json::from_str(neg).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 3, "{json}");
+}
+
 #[test]
 fn zero_rate_per_second_disables() {
     let rate = nosfry_core::limits::RateLimits {

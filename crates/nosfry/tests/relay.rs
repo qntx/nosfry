@@ -2282,10 +2282,17 @@ async fn reload_rate_limits_apply_to_new_connections() {
     assert_eq!(recv_ok(&mut new_ws, &ev).await[2], true);
     let ev = common::event(&key(8), 1, now(), &json!([]), "second");
     send_text(&mut new_ws, &event_wire(&ev)).await;
-    assert_eq!(
-        recv_ok(&mut new_ws, &ev).await,
-        json!(["OK", ev.id().to_string(), false, "rate-limited: slow down"])
+    let ok = recv_ok(&mut new_ws, &ev).await;
+    assert_eq!(ok[2], false, "{ok}");
+    assert_eq!(ok[3], "rate-limited: slow down", "{ok}");
+    // NIP-01's retry hint: a positive-integer ms string at [4], at
+    // most one second for a 1/s bucket.
+    let hint = ok[4].as_str().unwrap_or_else(|| panic!("{ok}"));
+    assert!(
+        hint.bytes().all(|b| b.is_ascii_digit()) && !hint.starts_with('0'),
+        "hint must match ^[1-9][0-9]*$: {hint}"
     );
+    assert!(hint.parse::<u64>().unwrap() <= 1_000, "{hint}");
     relay.stop().await;
 }
 

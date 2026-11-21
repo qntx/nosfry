@@ -287,10 +287,11 @@ impl AddressBuckets {
         }
     }
 
-    /// Spend one shared EVENT token at `now_ms`; `true` when the
-    /// bucket is disabled.
-    pub fn take_event(&self, now_ms: u64) -> bool {
-        self.events.as_ref().is_none_or(|bucket| {
+    /// Spend one shared EVENT token at `now_ms`; `Err(ms)` carries
+    /// the wait until one whole token refills. A disabled bucket
+    /// always passes.
+    pub fn take_event(&self, now_ms: u64) -> Result<(), u64> {
+        self.events.as_ref().map_or(Ok(()), |bucket| {
             bucket
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -298,10 +299,11 @@ impl AddressBuckets {
         })
     }
 
-    /// Spend one shared REQ token at `now_ms`; `true` when the
-    /// bucket is disabled.
-    pub fn take_req(&self, now_ms: u64) -> bool {
-        self.reqs.as_ref().is_none_or(|bucket| {
+    /// Spend one shared REQ token at `now_ms`; `Err(ms)` carries
+    /// the wait until one whole token refills. A disabled bucket
+    /// always passes.
+    pub fn take_req(&self, now_ms: u64) -> Result<(), u64> {
+        self.reqs.as_ref().map_or(Ok(()), |bucket| {
             bucket
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -364,18 +366,22 @@ impl TokenBucket {
         self.tokens.saturating_add(refill) >= self.capacity
     }
 
-    /// Spend one token at `now_ms`; `false` when the bucket is empty.
-    pub(crate) fn take(&mut self, now_ms: u64) -> bool {
+    /// Spend one token at `now_ms`; `Err(ms)` is the wait until one
+    /// whole token refills (`ceil((1000 - tokens) / refill_ms)`,
+    /// never 0) — the `rate-limited` retry hint of NIP-01.
+    pub(crate) fn take(&mut self, now_ms: u64) -> Result<(), u64> {
         if now_ms > self.last_ms {
             let refill = (now_ms - self.last_ms).saturating_mul(self.refill_ms);
             self.tokens = self.capacity.min(self.tokens.saturating_add(refill));
             self.last_ms = now_ms;
         }
         if self.tokens < 1000 {
-            return false;
+            // Enabled buckets always have `refill_ms` > 0; `max(1)`
+            // keeps even a degenerate bucket panic-free.
+            return Err((1000 - self.tokens).div_ceil(self.refill_ms.max(1)).max(1));
         }
         self.tokens -= 1000;
-        true
+        Ok(())
     }
 }
 
@@ -406,24 +412,49 @@ mod tests {
     #[test]
     fn bucket_burst_exhausts_then_refills() {
         let mut bucket = TokenBucket::new(10, 3);
-        assert!(bucket.take(0));
-        assert!(bucket.take(0));
-        assert!(bucket.take(0));
-        assert!(!bucket.take(0), "burst of 3 is exhausted in one instant");
+        assert!(bucket.take(0).is_ok());
+        assert!(bucket.take(0).is_ok());
+        assert!(bucket.take(0).is_ok());
+        assert!(
+            bucket.take(0).is_err(),
+            "burst of 3 is exhausted in one instant"
+        );
         // +1000 ms at 10 tokens/s refills back to the capacity of 3.
-        assert!(bucket.take(1_000));
-        assert!(bucket.take(1_000));
-        assert!(bucket.take(1_000));
-        assert!(!bucket.take(1_000));
+        assert!(bucket.take(1_000).is_ok());
+        assert!(bucket.take(1_000).is_ok());
+        assert!(bucket.take(1_000).is_ok());
+        assert!(bucket.take(1_000).is_err());
+    }
+
+    /// NIP-01's `rate-limited` hint is the ms until one whole token.
+    #[test]
+    fn bucket_take_reports_wait_ms() {
+        // 20 tokens/s: one token every 50 ms.
+        let mut bucket = TokenBucket::new(20, 1);
+        assert!(bucket.take(0).is_ok());
+        assert_eq!(bucket.take(0), Err(50));
+        // 40 ms of refill leaves 200 milli-tokens short → 10 ms more.
+        assert_eq!(bucket.take(40), Err(10));
+        assert!(bucket.take(50).is_ok());
+    }
+
+    /// The hint is never 0, even when less than a millisecond remains.
+    #[test]
+    fn bucket_wait_is_at_least_one_ms() {
+        let mut bucket = TokenBucket::new(1, 1);
+        assert!(bucket.take(0).is_ok());
+        assert_eq!(bucket.take(0), Err(1_000));
+        assert_eq!(bucket.take(999), Err(1));
+        assert!(bucket.take(1_000).is_ok());
     }
 
     #[test]
     fn bucket_partial_refill() {
         let mut bucket = TokenBucket::new(10, 2);
-        assert!(bucket.take(0) && bucket.take(0));
+        assert!(bucket.take(0).is_ok() && bucket.take(0).is_ok());
         // 150 ms -> 1.5 tokens: one take succeeds, one fails.
-        assert!(bucket.take(150));
-        assert!(!bucket.take(150));
+        assert!(bucket.take(150).is_ok());
+        assert!(bucket.take(150).is_err());
     }
 
     #[test]
@@ -446,20 +477,20 @@ mod tests {
     #[test]
     fn bucket_saturates_at_capacity() {
         let mut bucket = TokenBucket::new(1_000, 5);
-        assert!(bucket.take(0));
+        assert!(bucket.take(0).is_ok());
         // A huge jump refills no more than the burst capacity of 5.
         let later = u64::MAX / 2;
         for _ in 0..5 {
-            assert!(bucket.take(later));
+            assert!(bucket.take(later).is_ok());
         }
-        assert!(!bucket.take(later));
+        assert!(bucket.take(later).is_err());
     }
 
     #[test]
     fn bucket_is_full_only_at_capacity() {
         let mut bucket = TokenBucket::new(10, 3);
         assert!(bucket.is_full(0), "a fresh bucket is full");
-        assert!(bucket.take(0));
+        assert!(bucket.take(0).is_ok());
         assert!(!bucket.is_full(0));
         assert!(!bucket.is_full(99), "0.99 of a token is not full");
         assert!(bucket.is_full(100), "one token refilled in 100 ms");
@@ -484,7 +515,7 @@ mod tests {
         };
         let buckets = AddressBuckets::new(&rate);
         assert!(buckets.is_idle(0), "fresh buckets are full");
-        assert!(buckets.take_event(0));
+        assert!(buckets.take_event(0).is_ok());
         assert!(!buckets.is_idle(0));
         assert!(buckets.is_idle(2_000), "2 tokens at 1/s: idle after 2 s");
     }
@@ -492,12 +523,12 @@ mod tests {
     #[test]
     fn bucket_backwards_clock_refills_nothing() {
         let mut bucket = TokenBucket::new(10, 1);
-        assert!(bucket.take(5_000));
+        assert!(bucket.take(5_000).is_ok());
         // Going backwards grants no refill and does not rewind `last`.
-        assert!(!bucket.take(1_000));
+        assert!(bucket.take(1_000).is_err());
         // Nor does the same timestamp.
-        assert!(!bucket.take(5_000));
-        assert!(bucket.take(6_000));
+        assert!(bucket.take(5_000).is_err());
+        assert!(bucket.take(6_000).is_ok());
     }
 
     #[test]
