@@ -61,7 +61,8 @@ impl StoreOp {
 /// `nosfry_event_outcomes_total{outcome}` — where a publish that
 /// passed verification stopped. Pre-verification refusals
 /// (`invalid:`, `restricted:`, `rate-limited:`) are session-level and
-/// counted under `nosfry_rate_limited_total` instead.
+/// appear in no outcome series; `rate-limited:` is additionally
+/// counted under `nosfry_rate_limited_total`.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum EventOutcome {
     /// Persisted to the store.
