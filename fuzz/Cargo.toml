@@ -90,3 +90,10 @@ path  = "fuzz_targets/relay_url.rs"
 test  = false
 doc   = false
 bench = false
+
+[[bin]]
+name  = "state_line"
+path  = "fuzz_targets/state_line.rs"
+test  = false
+doc   = false
+bench = false
