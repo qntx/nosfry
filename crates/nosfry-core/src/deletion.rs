@@ -52,11 +52,12 @@ pub(crate) fn targets(
     out
 }
 
-/// Whether a kind-5 `e` target with `packed`'s stored record may be
-/// deleted by `deleter` (NIP-09 + NIP-59): the deleter's own event,
-/// or a kind-1059 gift wrap `p`-tagged to the deleter (the wrap's
-/// signing key is random, so NIP-59 lets every recipient delete
-/// it). Kinds 5 and 62 are never deletable.
+/// Whether `deleter` may `e`-delete the event `packed` is.
+///
+/// NIP-09 + NIP-59: the deleter's own event, or a kind-1059 gift
+/// wrap `p`-tagged to the deleter (the wrap's signing key is random,
+/// so NIP-59 lets every recipient delete it). Kinds 5 and 62 are
+/// never deletable.
 #[must_use]
 pub fn deletes(packed: PackedRef<'_>, deleter: &PublicKey) -> bool {
     if matches!(packed.kind().0, 5 | 62) {
@@ -69,10 +70,11 @@ pub fn deletes(packed: PackedRef<'_>, deleter: &PublicKey) -> bool {
                 .any(|(name, value)| name == b'p' && value == deleter.0.as_slice()))
 }
 
-/// The public keys a kind-5 of which can `e`-delete or block the
-/// event with `packed`'s id: its author, plus every packed `p`
-/// value when the event is a kind-1059 gift wrap (NIP-59). Stores
-/// index block rows under each yielded key.
+/// The public keys whose kind 5 may `e`-delete or block `packed`.
+///
+/// The event's author, plus every packed `p` value when the event
+/// is a kind-1059 gift wrap (NIP-59). Stores index block rows under
+/// each yielded key.
 pub fn blockers(packed: PackedRef<'_>) -> impl Iterator<Item = [u8; 32]> + '_ {
     let is_wrap = packed.kind().0 == 1059;
     std::iter::once(packed.pubkey().0).chain(packed.tags().filter_map(move |(name, value)| {

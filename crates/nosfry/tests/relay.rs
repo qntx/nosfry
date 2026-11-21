@@ -575,8 +575,7 @@ impl DeflateSocket {
             .to_ascii_lowercase()
             .lines()
             .find_map(|line| line.strip_prefix("sec-websocket-extensions:"))
-            .map(str::trim)
-            .unwrap_or_default()
+            .map_or_default(str::trim)
             .to_owned();
         assert!(
             extensions.contains("permessage-deflate"),

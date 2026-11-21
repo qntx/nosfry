@@ -388,7 +388,6 @@ impl Server {
         // The live-config channel exists before the writer spawn so
         // the vanish path re-reads `service_url` on every batch.
         let limits = config.limits()?;
-        log_restricted_writes(&config);
         let admins = config.admins()?;
         let (live_tx, live_rx) = watch::channel(Arc::new(Live {
             config: Arc::clone(&config),
@@ -626,6 +625,7 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
     reload: watch::Receiver<Config>,
 ) -> Result<(), ServerError> {
+    log_restricted_writes(&config);
     let server = Server::new(config)?;
     // The reload task ends when the sender side drops; it shares
     // neither the connection tracker nor the shutdown signal.

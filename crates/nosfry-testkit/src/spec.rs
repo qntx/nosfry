@@ -304,11 +304,13 @@ pub fn event_spec_strategy() -> impl Strategy<Value = EventSpec> {
         })
 }
 
-/// Event-spec list generation: `event_spec_strategy` vectors with
-/// the first kind-1059 wrap guaranteed an `e`-deletion kind 5 by its
-/// `p` recipient — placed before the wrap half the time (decided by
-/// its index parity) so both the delete-stored and the
-/// block-on-ingest orderings of NIP-59 fire.
+/// Event-spec vectors that cover NIP-59 recipient deletion.
+///
+/// `event_spec_strategy` vectors with the first kind-1059 wrap
+/// guaranteed an `e`-deletion kind 5 by its `p` recipient — placed
+/// before the wrap half the time (decided by its index parity) so
+/// both the delete-stored and the block-on-ingest orderings of
+/// NIP-59 fire.
 pub fn event_specs_strategy() -> impl Strategy<Value = Vec<EventSpec>> {
     proptest::collection::vec(event_spec_strategy(), 1..40).prop_map(|mut specs| {
         let Some(wrap) = specs.iter().position(|spec| spec.kind == 1059) else {

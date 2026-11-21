@@ -742,7 +742,10 @@ fn gift_wrap_recipient_deletes() {
     );
     let dm = event(&w, 4, 102, &json!([["p", pubkey_hex(0)]]), "dm");
     let out = store
-        .write(&[wrap.clone(), wrap2.clone(), dm.clone()], None)
+        .write(
+            &[Arc::clone(&wrap), Arc::clone(&wrap2), Arc::clone(&dm)],
+            None,
+        )
         .unwrap();
     assert!(
         out.outcomes
@@ -784,8 +787,8 @@ fn gift_wrap_recipient_deletes() {
         ]),
         "",
     );
-    let out = store.write(&[del.clone()], None).unwrap();
-    assert!(matches!(out.outcomes[0], WriteOutcome::Stored { .. }));
+    let del_out = store.write(&[del], None).unwrap();
+    assert!(matches!(del_out.outcomes[0], WriteOutcome::Stored { .. }));
     assert_eq!(
         served_id(&store, &wrap.id().to_string()),
         0,
@@ -803,14 +806,14 @@ fn gift_wrap_recipient_deletes() {
     );
 
     // The block holds for re-publication until the carrier expires.
-    let out = store.write(&[wrap.clone()], None).unwrap();
-    assert_eq!(out.outcomes[0], WriteOutcome::Deleted);
+    let block_out = store.write(&[Arc::clone(&wrap)], None).unwrap();
+    assert_eq!(block_out.outcomes[0], WriteOutcome::Deleted);
     store.expire(300, usize::MAX).unwrap();
-    let out = store.write(&[wrap], None).unwrap();
+    let lift_out = store.write(&[wrap], None).unwrap();
     assert!(
-        matches!(out.outcomes[0], WriteOutcome::Stored { .. }),
+        matches!(lift_out.outcomes[0], WriteOutcome::Stored { .. }),
         "{:?}",
-        out.outcomes
+        lift_out.outcomes
     );
 }
 
@@ -824,7 +827,7 @@ fn deletion_immune_kinds_and_ephemeral() {
     let vanish = event(&k, 62, 100, &json!([]), "vanish");
     let eph = event(&k, 21059, 100, &json!([["p", "00".repeat(32)]]), "eph");
     store
-        .write(&[carrier.clone(), vanish.clone()], None)
+        .write(&[Arc::clone(&carrier), Arc::clone(&vanish)], None)
         .unwrap();
     // A same-author kind 5 targeting the carrier, the request to
     // vanish, and the (never stored) ephemeral id deletes nothing.

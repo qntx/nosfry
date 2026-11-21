@@ -609,8 +609,9 @@ fn write_one(store: &mut dyn StoreDriver, ev: &Arc<Event>) -> WriteOutcome {
         .unwrap_or_else(|| panic!("no outcome for {}", ev.id()))
 }
 
-/// A deterministic NIP-09/NIP-59 script every store must replay:
-/// same-author deletion, the wrap recipient's deletion (first and
+/// A deterministic NIP-09/NIP-59 deletion script for every store.
+///
+/// Same-author deletion, the wrap recipient's deletion (first and
 /// non-first `p` values), a third party's no-op, `p`-tagged non-1059
 /// immunity, kinds 5/62 immunity, the re-publish block and its lift
 /// when the carrier expires, and ephemeral 21059 never consulting
@@ -650,10 +651,10 @@ pub fn deletion_check(store: &mut impl StoreDriver) {
         ]),
         "",
     );
-    assert!(matches!(
-        write_one(store, &foreign),
-        WriteOutcome::Stored { .. }
-    ));
+    assert!(
+        matches!(write_one(store, &foreign), WriteOutcome::Stored { .. }),
+        "third-party kind 5 refused"
+    );
     assert_eq!(served(store, &wrap.id()), 1, "foreign kind 5 deleted");
     assert_eq!(served(store, &wrap2.id()), 1, "foreign kind 5 deleted");
 
@@ -678,10 +679,10 @@ pub fn deletion_check(store: &mut impl StoreDriver) {
         ]),
         "",
     );
-    assert!(matches!(
-        write_one(store, &del),
-        WriteOutcome::Stored { .. }
-    ));
+    assert!(
+        matches!(write_one(store, &del), WriteOutcome::Stored { .. }),
+        "recipient kind 5 refused"
+    );
     for (ev, want) in [
         (&wrap, 0),
         (&wrap2, 0),
@@ -694,11 +695,19 @@ pub fn deletion_check(store: &mut impl StoreDriver) {
     }
 
     // The ephemeral never consults the block row the kind 5 wrote.
-    assert_eq!(write_one(store, &eph), WriteOutcome::Ephemeral);
+    assert_eq!(
+        write_one(store, &eph),
+        WriteOutcome::Ephemeral,
+        "ephemeral consulted a deletion block"
+    );
 
     // Re-publication of the wrap stays blocked until the carrier
     // kind 5 expires.
-    assert_eq!(write_one(store, &wrap), WriteOutcome::Deleted);
+    assert_eq!(
+        write_one(store, &wrap),
+        WriteOutcome::Deleted,
+        "re-publish not blocked"
+    );
     store.expire(400);
     assert!(
         matches!(write_one(store, &wrap), WriteOutcome::Stored { .. }),
