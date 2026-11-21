@@ -602,7 +602,7 @@ mod tests {
         let upper = "AB".repeat(32);
         let mixed = format!("AB{}", "ab".repeat(31));
         let bad = [
-            upper.clone(),
+            upper,
             mixed,
             format!("0x{lower}"),
             format!("0X{lower}"),

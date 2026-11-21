@@ -572,7 +572,7 @@ fn rate_limited_frames_carry_retry_ms() {
     let out = feed_ms(&mut s, t, &event);
     let frames = sends(&out);
     assert!(frames[0].contains("rate-limited: slow down"), "{frames:?}");
-    assert_hint(&frames[0], 4);
+    assert_hint(frames[0], 4);
 
     // REQ: burst of 1 passes, the second's CLOSED carries it in [3].
     feed_ms(&mut s, t, "[\"REQ\",\"a\",{}]");
