@@ -1,0 +1,349 @@
+diff --git a/crates/interop/tests/bridge.rs b/crates/interop/tests/bridge.rs
+index 93c3c6d..fd0709b 100644
+--- a/crates/interop/tests/bridge.rs
++++ b/crates/interop/tests/bridge.rs
+@@ -356,7 +356,7 @@ async fn publish_identity(&mut self, rig: &Rig) {
+     /// Ingest gift-wrapped welcomes, `tick`, drain and publish anything the
+     /// ingest staged. Returns the drained session events.
+     async fn sync_welcomes(&mut self, rig: &Rig) -> Vec<SessionEvent> {
+-        let fetched = fetch_welcomes(rig, &self.account_hex()).await;
++        let fetched = fetch_welcomes(rig, &self.signer).await;
+         self.ingest_wire(rig, fetched).await
+     }
+ 
+@@ -649,6 +649,8 @@ async fn scenario7_bridge_wn_invites_us() {
+     )
+     .await;
+ 
+-    rig.relay.shutdown();
++    if let Some(relay) = &rig.relay {
++        relay.shutdown();
++    }
+     eprintln!("SCENARIO-7 PASS {:.1}s", start.elapsed().as_secs_f64());
+ }
+diff --git a/crates/interop/tests/support/mod.rs b/crates/interop/tests/support/mod.rs
+index fc2bd92..e88e8d4 100644
+--- a/crates/interop/tests/support/mod.rs
++++ b/crates/interop/tests/support/mod.rs
+@@ -32,12 +32,13 @@
+     reason = "test harness code; each scenario uses a subset"
+ )]
+ 
++use std::collections::HashMap;
+ use std::future::Future;
+ use std::path::{Path, PathBuf};
+ use std::pin::Pin;
+ use std::process::{Child, Command, Stdio};
+-use std::sync::Arc;
+ use std::sync::atomic::{AtomicUsize, Ordering};
++use std::sync::{Arc, Mutex};
+ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+ 
+ use mk_bridge as _;
+@@ -49,6 +50,7 @@
+ use nostr::prelude::{
+     Event as NostrEvent, Filter, FromBech32, Kind, PublicKey, RelayUrl, SingleLetterTag, ToBech32,
+ };
++use nostr_sdk::authenticator::SignerAuthenticator;
+ use nostr_sdk::client::Client;
+ use nostr_sdk::local_relay::{LocalRelay, RateLimit};
+ use serde_json::Value;
+@@ -383,7 +385,9 @@ fn is_nip11_probe(head: &[u8]) -> bool {
+ /// relay).
+ #[derive(Debug)]
+ pub struct Rig {
+-    pub relay: LocalRelay,
++    /// `None` under `INTEROP_RELAY_URL`: the scenarios then drive an
++    /// external relay and nothing in-process exists to shut down.
++    pub relay: Option<LocalRelay>,
+     pub client: Client,
+     /// The NIP-11 front URL as sessions and wn see it (no trailing slash):
+     /// document probes are answered there, WebSocket traffic is spliced
+@@ -397,6 +401,11 @@ pub struct Rig {
+     pub wnd: Wnd,
+     /// `None` under `INTEROP_RELAY=bare`.
+     front: Option<Nip11Front>,
++    /// Per-pubkey connections that answer NIP-42 as that account —
++    /// external relays gating restricted kinds on
++    /// `restrict_read_to_involved` serve a member's gift wraps only to
++    /// an authenticated connection for that pubkey.
++    authed_clients: Mutex<HashMap<String, Client>>,
+ }
+ 
+ impl Rig {
+@@ -406,50 +415,91 @@ pub fn nip11_documents_served(&self) -> usize {
+             .as_ref()
+             .map_or(0, |front| front.served.load(Ordering::Relaxed))
+     }
++
++    /// A connection that answers NIP-42 as `signer`'s account, cached per
++    /// pubkey. Relays without AUTH never challenge, so the authenticator
++    /// stays unused there.
++    pub async fn authed_client(&self, signer: &LocalSigner) -> Client {
++        let account = signer.account().to_hex();
++        if let Some(client) = self
++            .authed_clients
++            .lock()
++            .expect("authed clients")
++            .get(&account)
++        {
++            return client.clone();
++        }
++        let client = Client::builder()
++            .authenticator(SignerAuthenticator::new(signer.keys().clone()))
++            .build();
++        client
++            .add_relay(RelayUrl::parse(&self.url).expect("relay url"))
++            .and_connect()
++            .await
++            .expect("authed client connect");
++        self.authed_clients
++            .lock()
++            .expect("authed clients")
++            .insert(account, client.clone());
++        client
++    }
+ }
+ 
+ /// Start relay + wnd and ensure a wn identity with a published KeyPackage.
++/// `INTEROP_RELAY_URL=<ws-url>` skips the in-process `LocalRelay` and the
++/// NIP-11 front entirely: the rig's public URL is the external relay's —
++/// the client, wnd and sessions all dial it and `rig.relay` is `None`.
+ pub async fn rig(test_name: &str) -> Rig {
+     assert_wn_version();
+-    // A real relay's defaults (60 notes/min write cap, 500/filter read cap)
+-    // would silently reject the bulk-traffic scenarios; lift both while
+-    // keeping real NIP-01 storage/ordering semantics. The NIP-11 document
+-    // the front serves must tell the truth about that read cap.
+-    const MAX_FILTER_LIMIT: usize = 10_000;
+-    let relay = LocalRelay::builder()
+-        .rate_limit(RateLimit {
+-            max_reqs: 500,
+-            notes_per_minute: 1_000_000,
+-        })
+-        .max_filter_limit(MAX_FILTER_LIMIT)
+-        .build();
+-    relay.run().await.expect("local relay run");
+-    // nostr-sdk's LocalRelay serves no NIP-11 document; wnd's post-join
+-    // history sweep needs one, so the front answers document probes and
+-    // passes WebSocket traffic through verbatim.
+-    let document = serde_json::json!({
+-        "name": "marmot-interop",
+-        "supported_nips": [1, 11],
+-        "limitation": {"max_limit": MAX_FILTER_LIMIT},
+-    });
+-    let backend = relay
+-        .url()
+-        .await
+-        .as_str()
+-        .strip_prefix("ws://")
+-        .expect("local relay ws url")
+-        .trim_end_matches('/')
+-        .to_owned();
+-    // `INTEROP_RELAY=bare` dials the LocalRelay directly, without the
+-    // document — the shape that reproduces White Noise's sweep loss.
+-    let front = match std::env::var("INTEROP_RELAY").as_deref() {
+-        Ok("bare") => None,
+-        Ok("nip11") | Err(_) => Some(Nip11Front::bind(backend.clone(), document.to_string()).await),
+-        Ok(other) => panic!("INTEROP_RELAY must be nip11 or bare, got {other}"),
++    let external = std::env::var("INTEROP_RELAY_URL")
++        .ok()
++        .filter(|url| !url.is_empty());
++    let (relay, front, url) = if let Some(url) = external {
++        (None, None, url.trim_end_matches('/').to_owned())
++    } else {
++        // A real relay's defaults (60 notes/min write cap, 500/filter read
++        // cap) would silently reject the bulk-traffic scenarios; lift both
++        // while keeping real NIP-01 storage/ordering semantics. The NIP-11
++        // document the front serves must tell the truth about that read cap.
++        const MAX_FILTER_LIMIT: usize = 10_000;
++        let relay = LocalRelay::builder()
++            .rate_limit(RateLimit {
++                max_reqs: 500,
++                notes_per_minute: 1_000_000,
++            })
++            .max_filter_limit(MAX_FILTER_LIMIT)
++            .build();
++        relay.run().await.expect("local relay run");
++        // nostr-sdk's LocalRelay serves no NIP-11 document; wnd's post-join
++        // history sweep needs one, so the front answers document probes and
++        // passes WebSocket traffic through verbatim.
++        let document = serde_json::json!({
++            "name": "marmot-interop",
++            "supported_nips": [1, 11],
++            "limitation": {"max_limit": MAX_FILTER_LIMIT},
++        });
++        let backend = relay
++            .url()
++            .await
++            .as_str()
++            .strip_prefix("ws://")
++            .expect("local relay ws url")
++            .trim_end_matches('/')
++            .to_owned();
++        // `INTEROP_RELAY=bare` dials the LocalRelay directly, without the
++        // document — the shape that reproduces White Noise's sweep loss.
++        let front = match std::env::var("INTEROP_RELAY").as_deref() {
++            Ok("bare") => None,
++            Ok("nip11") | Err(_) => {
++                Some(Nip11Front::bind(backend.clone(), document.to_string()).await)
++            }
++            Ok(other) => panic!("INTEROP_RELAY must be nip11 or bare, got {other}"),
++        };
++        let url = front
++            .as_ref()
++            .map_or_else(|| format!("ws://{backend}"), |front| front.url.clone());
++        (Some(relay), front, url)
+     };
+-    let url = front
+-        .as_ref()
+-        .map_or_else(|| format!("ws://{backend}"), |front| front.url.clone());
+ 
+     let client = Client::builder().build();
+     client
+@@ -495,6 +545,7 @@ pub async fn rig(test_name: &str) -> Rig {
+         wn_pub,
+         wnd,
+         front,
++        authed_clients: Mutex::new(HashMap::new()),
+     }
+ }
+ 
+@@ -695,7 +746,13 @@ pub async fn publish_identity(member: &mut Member, rig: &Rig) {
+ /// Fetch events for `filter` over the live WebSocket connection; the relay
+ /// serves them newest-first, like a real relay.
+ pub async fn fetch(rig: &Rig, filter: Filter) -> Vec<Event> {
+-    rig.client
++    fetch_on(&rig.client, filter).await
++}
++
++/// `fetch` over an explicit connection — e.g. one authenticated via
++/// NIP-42 for restricted-kind reads.
++pub async fn fetch_on(client: &Client, filter: Filter) -> Vec<Event> {
++    client
+         .fetch_events(filter)
+         .timeout(Duration::from_secs(10))
+         .await
+@@ -731,9 +788,14 @@ pub async fn fetch_group(rig: &Rig, route_hex: &str) -> Vec<Event> {
+     fetch(rig, group_filter(route_hex)).await
+ }
+ 
+-/// Kind-1059 gift wraps addressed to `account_hex`, newest-first.
+-pub async fn fetch_welcomes(rig: &Rig, account_hex: &str) -> Vec<Event> {
+-    fetch(rig, welcome_filter(account_hex)).await
++/// Kind-1059 gift wraps addressed to `signer`'s account, newest-first.
++/// Reads through a connection authed as the recipient: relays gating
++/// kind 1059 behind NIP-42 `restrict_read_to_involved` serve wraps only
++/// to the involved authenticated pubkey; unauthenticated relays never
++/// challenge, so the authenticator is a no-op there.
++pub async fn fetch_welcomes(rig: &Rig, signer: &LocalSigner) -> Vec<Event> {
++    let client = rig.authed_client(signer).await;
++    fetch_on(&client, welcome_filter(&signer.account().to_hex())).await
+ }
+ 
+ /// The newest kind-30443 `KeyPackage` published by `account_hex`, if any.
+diff --git a/crates/interop/tests/wn.rs b/crates/interop/tests/wn.rs
+index 6decf54..631e30e 100644
+--- a/crates/interop/tests/wn.rs
++++ b/crates/interop/tests/wn.rs
+@@ -181,16 +181,14 @@ async fn mk_group_with_wn(rig: &Arc<Rig>, a: &mut Member, name: &str) -> GroupId
+ /// A joins a wn-created group via the gift-wrapped Welcome. Asserts
+ /// `GroupJoined` for the exact group id.
+ async fn join_wn_group(rig: &Arc<Rig>, a: &mut Member, gid: &GroupId) {
+-    let account_hex = a.account_hex();
+     let wanted = gid.clone();
+     until_member(
+         a,
+         |a| {
+-            let account_hex = account_hex.clone();
+             let wanted = wanted.clone();
+             let rig = Arc::clone(rig);
+             Box::pin(async move {
+-                let wraps = fetch_welcomes(&rig, &account_hex).await;
++                let wraps = fetch_welcomes(&rig, &a.signer).await;
+                 let events = ingest(&mut *a, wraps).await;
+                 events
+                     .iter()
+@@ -276,7 +274,9 @@ async fn scenario1_mk_core_invites_wn() {
+     wn_says(&rig, &mut a, &gid, &wn_gid, "hello-from-wn").await;
+     member_says(&rig, &mut a, &gid, &wn_gid, "hello-from-mk-core").await;
+ 
+-    rig.relay.shutdown();
++    if let Some(relay) = &rig.relay {
++        relay.shutdown();
++    }
+     eprintln!("SCENARIO-1 PASS {:.1}s", start.elapsed().as_secs_f64());
+ }
+ 
+@@ -331,7 +331,9 @@ async fn scenario2_wn_invites_mk_core() {
+     member_says(&rig, &mut a, &gid, &wn_gid, "s2-hello-from-mk-core").await;
+     wn_says(&rig, &mut a, &gid, &wn_gid, "s2-hello-from-wn").await;
+ 
+-    rig.relay.shutdown();
++    if let Some(relay) = &rig.relay {
++        relay.shutdown();
++    }
+     eprintln!("SCENARIO-2 PASS {:.1}s", start.elapsed().as_secs_f64());
+ }
+ 
+@@ -582,7 +584,9 @@ async fn scenario3_bulk_and_membership() {
+     )
+     .await;
+ 
+-    rig.relay.shutdown();
++    if let Some(relay) = &rig.relay {
++        relay.shutdown();
++    }
+     eprintln!("SCENARIO-3 PASS {:.1}s", start.elapsed().as_secs_f64());
+ }
+ 
+@@ -734,7 +738,9 @@ async fn scenario4_capability_requirements() {
+     member_says(&rig, &mut a, &gid_b, &wn_gid_b, "s4b-hello-from-mk-core").await;
+     wn_says(&rig, &mut a, &gid_b, &wn_gid_b, "s4b-hello-from-wn").await;
+ 
+-    rig.relay.shutdown();
++    if let Some(relay) = &rig.relay {
++        relay.shutdown();
++    }
+     eprintln!("SCENARIO-4 PASS {:.1}s", start.elapsed().as_secs_f64());
+ }
+ 
+@@ -921,7 +927,9 @@ async fn scenario5_media_round_trip() {
+         "s5 mk->wn plaintext matches"
+     );
+ 
+-    rig.relay.shutdown();
++    if let Some(relay) = &rig.relay {
++        relay.shutdown();
++    }
+     eprintln!("SCENARIO-5 PASS {:.1}s", start.elapsed().as_secs_f64());
+ }
+ 
+@@ -1091,6 +1099,8 @@ async fn scenario6_stream_anchors() {
+         "s6 receive must produce no outbound"
+     );
+ 
+-    rig.relay.shutdown();
++    if let Some(relay) = &rig.relay {
++        relay.shutdown();
++    }
+     eprintln!("SCENARIO-6 PASS {:.1}s", start.elapsed().as_secs_f64());
+ }
+diff --git a/crates/mk-core/src/testing.rs b/crates/mk-core/src/testing.rs
+index 9ef8f8d..2b80daf 100644
+--- a/crates/mk-core/src/testing.rs
++++ b/crates/mk-core/src/testing.rs
+@@ -263,6 +263,13 @@ pub struct LocalSigner {
+ }
+ 
+ impl LocalSigner {
++    /// The underlying `Keys` — the interop harness uses them to answer
++    /// NIP-42 challenges as the account on restricted-read relays.
++    #[must_use]
++    pub fn keys(&self) -> &nostr::prelude::Keys {
++        &self.keys
++    }
++
+     /// A signer over a freshly generated keypair.
+     #[must_use]
+     pub fn new() -> Self {
