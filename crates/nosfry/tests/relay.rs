@@ -1830,6 +1830,70 @@ async fn metrics_count_rejected_upgrades() {
     relay.stop().await;
 }
 
+/// `nostr_events_total` counts only events the store persisted and
+/// `nosfry_event_outcomes_total` tallies every verified publish by
+/// outcome (strfry's RelayWriter semantics): store, duplicate,
+/// delete, blocked rewrite.
+#[tokio::test]
+async fn metrics_count_store_outcomes() {
+    let mut config = common::config();
+    config.relay.metrics = true;
+    let relay = Relay::start_with(config).await;
+    let mut ws = relay.connect().await;
+
+    let k = key(60);
+    let ev = common::event(&k, 1, now(), &json!([]), "n");
+    send_text(&mut ws, &event_wire(&ev)).await;
+    assert_eq!(json(&recv_text(&mut ws, T).await)[2], true);
+    // A second publish of the same id is a duplicate — never stored.
+    send_text(&mut ws, &event_wire(&ev)).await;
+    let ok = json(&recv_text(&mut ws, T).await);
+    assert_eq!(ok[2], true);
+    assert!(ok[3].as_str().unwrap().starts_with("duplicate:"), "{ok}");
+    // The author's kind 5 deletes the stored event and blocks rewrites.
+    let del = common::event(
+        &k,
+        5,
+        now() + 1,
+        &json!([["e", format!("{}", ev.id())]]),
+        "",
+    );
+    send_text(&mut ws, &event_wire(&del)).await;
+    assert_eq!(json(&recv_text(&mut ws, T).await)[2], true);
+    send_text(&mut ws, &event_wire(&ev)).await;
+    let ok = json(&recv_text(&mut ws, T).await);
+    assert_eq!(ok[2], false, "{ok}");
+
+    let body = http_get(relay.addr, "/metrics").await;
+    // Persisted only: the first publish and the kind-5 carrier.
+    assert_eq!(
+        metric_value(&body, "nostr_events_total{kind=\"1\"}"),
+        Some(1),
+        "{body}"
+    );
+    assert_eq!(
+        metric_value(&body, "nostr_events_total{kind=\"5\"}"),
+        Some(1),
+        "{body}"
+    );
+    assert_eq!(
+        metric_value(&body, "nosfry_event_outcomes_total{outcome=\"stored\"}"),
+        Some(2),
+        "{body}"
+    );
+    assert_eq!(
+        metric_value(&body, "nosfry_event_outcomes_total{outcome=\"duplicate\"}"),
+        Some(1),
+        "{body}"
+    );
+    assert_eq!(
+        metric_value(&body, "nosfry_event_outcomes_total{outcome=\"deleted\"}"),
+        Some(1),
+        "{body}"
+    );
+    relay.stop().await;
+}
+
 // Write-policy plugin tests: real `/bin/sh -c` scripts in tempdirs.
 
 /// The `sed` extraction every test plugin shares: `event.id` is the

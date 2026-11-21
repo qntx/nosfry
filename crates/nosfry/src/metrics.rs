@@ -2,14 +2,23 @@
 //! exposition format for `GET /metrics`.
 //!
 //! Every label set is fixed and bounded — `verb` labels index the
-//! `ClientVerb`/`RelayVerb` enums, `kind` is a u16 — and counting sits
-//! on the per-message hot path, so storage is flat arrays of atomics:
-//! no locks, no allocation, all `Relaxed`.
+//! `ClientVerb`/`RelayVerb` enums, `outcome` indexes [`EventOutcome`],
+//! and `kind` gets at most [`MAX_KIND_SERIES`] own series with the
+//! rest counting under `kind="other"` — and counting sits on the
+//! per-message hot path, so storage is flat arrays of atomics: no
+//! locks, no allocation, all `Relaxed`.
 
 use std::fmt::Write as _;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use nosfry_core::message::{ClientVerb, RelayVerb};
+use nosfry_core::store::WriteOutcome;
+
+/// Kinds that get their own `nostr_events_total{kind}` series —
+/// first-seen, stable for the process lifetime. Every further kind
+/// counts under `kind="other"`, keeping the label set bounded no
+/// matter what the store holds.
+const MAX_KIND_SERIES: u64 = 256;
 
 /// One store operation for `nosfry_store_errors_total{op}`.
 #[derive(Debug, Clone, Copy)]
@@ -48,6 +57,77 @@ impl StoreOp {
     }
 }
 
+/// One verified-EVENT publish outcome for
+/// `nosfry_event_outcomes_total{outcome}` — where a publish that
+/// passed verification stopped. Pre-verification refusals
+/// (`invalid:`, `restricted:`, `rate-limited:`) are session-level and
+/// counted under `nosfry_rate_limited_total` instead.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum EventOutcome {
+    /// Persisted to the store.
+    Stored,
+    /// Ephemeral kind — broadcast, never written.
+    Ephemeral,
+    /// The id was already stored.
+    Duplicate,
+    /// An equal-or-newer replaceable/addressable version is stored.
+    Superseded,
+    /// A stored kind-5 deletion blocks it.
+    Deleted,
+    /// A NIP-62 vanish point covers it.
+    Vanished,
+    /// The NIP-86 snapshot refused it.
+    Moderated,
+    /// The write-policy plugin rejected or shadow-rejected it.
+    Policy,
+    /// The writer queue charge, send, or commit failed.
+    Error,
+}
+
+impl EventOutcome {
+    /// Every outcome in render order.
+    const ALL: [Self; 9] = [
+        Self::Stored,
+        Self::Ephemeral,
+        Self::Duplicate,
+        Self::Superseded,
+        Self::Deleted,
+        Self::Vanished,
+        Self::Moderated,
+        Self::Policy,
+        Self::Error,
+    ];
+
+    /// The `outcome` label value.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Stored => "stored",
+            Self::Ephemeral => "ephemeral",
+            Self::Duplicate => "duplicate",
+            Self::Superseded => "superseded",
+            Self::Deleted => "deleted",
+            Self::Vanished => "vanished",
+            Self::Moderated => "moderated",
+            Self::Policy => "policy",
+            Self::Error => "error",
+        }
+    }
+
+    /// The outcome label for a store [`WriteOutcome`] (`Ephemeral` is
+    /// mapped for completeness — the native writer never sees one:
+    /// connections broadcast ephemeral events themselves).
+    pub(crate) const fn of(outcome: WriteOutcome) -> Self {
+        match outcome {
+            WriteOutcome::Stored { .. } => Self::Stored,
+            WriteOutcome::Duplicate => Self::Duplicate,
+            WriteOutcome::Superseded => Self::Superseded,
+            WriteOutcome::Ephemeral => Self::Ephemeral,
+            WriteOutcome::Deleted => Self::Deleted,
+            WriteOutcome::Vanished => Self::Vanished,
+        }
+    }
+}
+
 /// Process-wide counters, shared as `Arc<Metrics>`.
 #[derive(Debug)]
 pub(crate) struct Metrics {
@@ -59,8 +139,19 @@ pub(crate) struct Metrics {
     /// `nosfry_rate_limited_total{verb}`.
     rate_limited: [AtomicU64; ClientVerb::ALL.len()],
     /// `nostr_events_total{kind}` — one counter per u16 (512 KiB,
-    /// allocated once) so the label never echoes client strings.
+    /// allocated once), used only by kinds holding an own series.
     events: Box<[AtomicU64]>,
+    /// Per-kind "has its own series" flag, set the first time a kind
+    /// is persisted while fewer than [`MAX_KIND_SERIES`] flags exist.
+    /// A kind never moves between its own series and `other`, so the
+    /// counters stay monotonic.
+    own_kind: Box<[AtomicBool]>,
+    /// Own series handed out so far (compare-exchange assigned).
+    kinds_assigned: AtomicU64,
+    /// `nostr_events_total{kind="other"}`.
+    events_other: AtomicU64,
+    /// `nosfry_event_outcomes_total{outcome}`.
+    outcomes: [AtomicU64; EventOutcome::ALL.len()],
     /// `nosfry_connections_rejected_total`.
     rejected: AtomicU64,
     /// `nosfry_store_errors_total{op}`.
@@ -78,6 +169,13 @@ impl Metrics {
                 .map(|_| AtomicU64::new(0))
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
+            own_kind: (0..=u16::MAX)
+                .map(|_| AtomicBool::new(false))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+            kinds_assigned: AtomicU64::new(0),
+            events_other: AtomicU64::new(0),
+            outcomes: [const { AtomicU64::new(0) }; EventOutcome::ALL.len()],
             rejected: AtomicU64::new(0),
             store_errors: [const { AtomicU64::new(0) }; StoreOp::ALL.len()],
         }
@@ -105,9 +203,46 @@ impl Metrics {
         }
     }
 
-    /// One event that passed verification.
+    /// One event persisted to the store — the writer counts it, so
+    /// duplicates, deletions, and refusals never inflate the series
+    /// (strfry counts on `EventWriteStatus::Written` the same way).
+    /// The first [`MAX_KIND_SERIES`] kinds ever persisted get their
+    /// own series; every later kind counts under `kind="other"`.
     pub(crate) fn event(&self, kind: u16) {
-        if let Some(counter) = self.events.get(usize::from(kind)) {
+        if self.claim_kind_series(kind) {
+            self.events[usize::from(kind)].fetch_add(1, Ordering::Relaxed);
+        } else {
+            self.events_other.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Whether `kind` holds — or can still claim — its own series.
+    /// Assignment is a compare-exchange on [`Self::kinds_assigned`],
+    /// so racing first-seens waste at most a slot, never overbook.
+    fn claim_kind_series(&self, kind: u16) -> bool {
+        let flag = &self.own_kind[usize::from(kind)];
+        loop {
+            if flag.load(Ordering::Relaxed) {
+                return true;
+            }
+            let assigned = self.kinds_assigned.load(Ordering::Relaxed);
+            if assigned >= MAX_KIND_SERIES {
+                return false;
+            }
+            if self
+                .kinds_assigned
+                .compare_exchange(assigned, assigned + 1, Ordering::Relaxed, Ordering::Relaxed)
+                .is_ok()
+            {
+                flag.store(true, Ordering::Relaxed);
+                return true;
+            }
+        }
+    }
+
+    /// One verified publish's outcome.
+    pub(crate) fn event_outcome(&self, outcome: EventOutcome) {
+        if let Some(counter) = self.outcomes.get(outcome as usize) {
             counter.fetch_add(1, Ordering::Relaxed);
         }
     }
@@ -170,13 +305,36 @@ impl Metrics {
         family(
             &mut out,
             "nostr_events_total",
-            "Verified events by kind.",
+            "Events persisted to the store by kind.",
             "counter",
         );
-        for (kind, counter) in self.events.iter().enumerate() {
+        for (kind, flag) in self.own_kind.iter().enumerate() {
+            if flag.load(Ordering::Relaxed) {
+                let value = self.events[kind].load(Ordering::Relaxed);
+                if value > 0 {
+                    writeln!(out, "nostr_events_total{{kind=\"{kind}\"}} {value}").ok();
+                }
+            }
+        }
+        let other = self.events_other.load(Ordering::Relaxed);
+        if other > 0 {
+            writeln!(out, "nostr_events_total{{kind=\"other\"}} {other}").ok();
+        }
+        family(
+            &mut out,
+            "nosfry_event_outcomes_total",
+            "Verified EVENT publishes by outcome.",
+            "counter",
+        );
+        for (outcome, counter) in EventOutcome::ALL.iter().zip(&self.outcomes) {
             let value = counter.load(Ordering::Relaxed);
             if value > 0 {
-                writeln!(out, "nostr_events_total{{kind=\"{kind}\"}} {value}").ok();
+                writeln!(
+                    out,
+                    "nosfry_event_outcomes_total{{outcome=\"{}\"}} {value}",
+                    outcome.as_str()
+                )
+                .ok();
             }
         }
         family(
@@ -280,6 +438,42 @@ mod tests {
         assert!(!out.contains('{'), "no series while every counter is 0");
     }
 
+    /// 300 distinct kinds: the first `MAX_KIND_SERIES` (256) keep their
+    /// own series, the remaining 44 count under `kind="other"`, and a
+    /// kind never migrates between the two.
+    #[test]
+    fn kind_label_cap_overflows_to_other() {
+        let metrics = Metrics::new();
+        for kind in 0..300u16 {
+            metrics.event(kind);
+        }
+        let out = metrics.render(0, 0, 0, 0);
+        let series: Vec<_> = out
+            .lines()
+            .filter(|line| line.starts_with("nostr_events_total{"))
+            .collect();
+        assert_eq!(series.len(), MAX_KIND_SERIES as usize + 1, "{out}");
+        for (kind, line) in series[..256].iter().enumerate() {
+            assert_eq!(
+                *line,
+                format!("nostr_events_total{{kind=\"{kind}\"}} 1"),
+                "{out}"
+            );
+        }
+        assert_eq!(series[256], "nostr_events_total{kind=\"other\"} 44");
+        // An already-capped kind keeps counting under "other"; an own
+        // series stays its own.
+        metrics.event(400);
+        metrics.event(0);
+        let out = metrics.render(0, 0, 0, 0);
+        assert!(out.contains("nostr_events_total{kind=\"0\"} 2"), "{out}");
+        assert!(
+            out.contains("nostr_events_total{kind=\"other\"} 45"),
+            "{out}"
+        );
+        assert!(!out.contains("kind=\"400\""), "{out}");
+    }
+
     #[test]
     fn render_exact_text() {
         let metrics = Metrics::new();
@@ -291,6 +485,9 @@ mod tests {
         metrics.relay_message(RelayVerb::Auth);
         metrics.event(1);
         metrics.event(7);
+        metrics.event_outcome(EventOutcome::Stored);
+        metrics.event_outcome(EventOutcome::Duplicate);
+        metrics.event_outcome(EventOutcome::Moderated);
         metrics.rate_limited(ClientVerb::Event);
         metrics.connection_rejected();
         metrics.store_error(StoreOp::Write);
@@ -307,10 +504,15 @@ mod tests {
              nostr_relay_messages_total{verb=\"EOSE\"} 1\n\
              nostr_relay_messages_total{verb=\"OK\"} 1\n\
              nostr_relay_messages_total{verb=\"AUTH\"} 1\n\
-             # HELP nostr_events_total Verified events by kind.\n\
+             # HELP nostr_events_total Events persisted to the store by kind.\n\
              # TYPE nostr_events_total counter\n\
              nostr_events_total{kind=\"1\"} 1\n\
              nostr_events_total{kind=\"7\"} 1\n\
+             # HELP nosfry_event_outcomes_total Verified EVENT publishes by outcome.\n\
+             # TYPE nosfry_event_outcomes_total counter\n\
+             nosfry_event_outcomes_total{outcome=\"stored\"} 1\n\
+             nosfry_event_outcomes_total{outcome=\"duplicate\"} 1\n\
+             nosfry_event_outcomes_total{outcome=\"moderated\"} 1\n\
              # HELP nosfry_rate_limited_total Messages refused by the session rate limits.\n\
              # TYPE nosfry_rate_limited_total counter\n\
              nosfry_rate_limited_total{verb=\"EVENT\"} 1\n\
