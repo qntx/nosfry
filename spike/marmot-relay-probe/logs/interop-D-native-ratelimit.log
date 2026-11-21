@@ -1,0 +1,49 @@
+    Finished `release` profile [optimized] target(s) in 1.18s
+     Running unittests src/lib.rs (target/release/deps/interop-e160aad22231fe67)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge.rs (target/release/deps/bridge-ba636491b4ec7e7c)
+
+running 1 test
+test scenario7_bridge_wn_invites_us ... SCENARIO-7 PASS 18.3s
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.31s
+
+     Running tests/wn.rs (target/release/deps/wn-152c83caa06a1f99)
+
+running 6 tests
+test scenario1_mk_core_invites_wn ... SCENARIO-1 PASS 22.3s
+ok
+test scenario2_wn_invites_mk_core ... SCENARIO-2 PASS 16.3s
+ok
+test scenario3_bulk_and_membership ... s3: wn sent 25 in 2.6s
+s3: mk sent 475 in 3.3s
+s3: ingested 500 events in 0.1s, decoded 25/25 wn
+SCENARIO-3 PASS 23.2s
+ok
+test scenario4_capability_requirements ... s4: our KP advertises proposals=["0x0008", "0x000a"] extensions=["0x0006", "0xf2d1"] app_components=["0x8001", "0x8003", "0x8004", "0x8006", "0x8009", "0x800b", "0x800c", "0x800d"]
+s4(b): group state: {"ok":true,"result":{"account_id":"07d85cdf8f73d627944c43604ff8f67eda67f002c61faf7b14ac1930344b0c59","group":{"admin_policy":{"admins":["07d85cdf8f73d627944c43604ff8f67eda67f002c61faf7b14ac1930344b0c59"],"component":"marmot.group.admin-policy.v1","component_id":32771,"data_hex":"2007d85cdf8f73d627944c43604ff8f67eda67f002c61faf7b14ac1930344b0c59"},"agent_text_stream":{"allowed_member_roles":["receive","send"],"component":"marmot.group.agent-text-stream.quic.v1","component_id":32774,"data_hex":"010300001000000000000000","max_plaintext_frame_len":4096,"padding_bucket_bytes":0,"replay_ttl_secs":0,"required":true,"required_member_roles":["receive"]},"archived":false,"avatar_url":{"component":"marmot.group.avatar-url.v1","component_id":32775,"data_hex":"000000","dim":null,"present":false,"thumbhash":null,"url":""},"disband_request":null,"disbanded":false,"disbanding":false,"encrypted_media":{"allowed_locator_kinds":["blossom-v1"],"component":"marmot.group.encrypted-media.v2","component_id":32779,"data_hex":"12656e637279707465642d6d656469612d76320b0a626c6f73736f6d2d7631404f0a626c6f73736f6d2d76311d68747470733a2f2f626c6f73736f6d2e646976696e652e766964656f2f0a626c6f73736f6d2d76311a68747470733a2f2f626c6f73736f6d2e646974746f2e7075622f","default_blob_endpoints":[{"base_url":"https://blossom.divine.video/","locator_kind":"blossom-v1"},{"base_url":"https://blossom.ditto.pub/","locator_kind":"blossom-v1"}],"media_format":"encrypted-media-v2","required":true},"endpoint":"ws://127.0.0.1:7805","group_id":"63cdc520c98bd7775fa05068e6426865","image":{"component":"marmot.group.blossom.image.v1","component_id":32770,"image_hash_hex":"","media_type":null,"present":false},"leave_requested_at_ms":null,"message_retention":{"component":"marmot.group.message-retention.v1","component_id":32773,"data_hex":"0000000000000000","disappearing_message_secs":0},"nostr_routing":{"component":"marmot.transport.nostr.routing.v1","component_id":32772,"data_hex":"da341f6cd29ffa4c82c5c0e25bf319b11f0c334dbf1b316602885a9d2ede0ba4141377733a2f2f3132372e302e302e313a37383035","nostr_group_id_hex":"da341f6cd29ffa4c82c5c0e25bf319b11f0c334dbf1b316602885a9d2ede0ba4","relays":["ws://127.0.0.1:7805"]},"pending_confirmation":false,"profile":{"component":"marmot.group.profile.v1","component_id":32769,"data_hex":"0a696e7465726f702d346200","description":"","name":"interop-4b","present":true},"self_membership":"member","unrecoverable":false,"via_welcome_message_id":null,"welcomer_account_id":null},"mls":{"disband_request":null,"disbanding":false,"disbanding_blockers":[],"disbanding_enabled":true,"epoch":1,"group_id":"63cdc520c98bd7775fa05068e6426865","lifecycle_state":"stable","member_count":2,"protocol_profile":"current","required_app_components":[32769,32771,32772,32774,32777,32779,32780,32781],"unrecoverable":false},"npub":"npub1qlv9ehu0w0tz09zvgdsyl78k0mdx0uqzcc0677c54svnqdztp3vsg7dq5f"}}
+SCENARIO-4 PASS 24.6s
+ok
+test scenario5_media_round_trip ... s5: wn upload result: {"ok":true,"result":{"account_id":"61d0f9d08cade8187fea73770a877dc2ad954c46287eb2dfcadebeccadb630d5","attachments":[{"encrypted_size_bytes":204816,"media":{"ciphertext_sha256":"bf4595ec32f6f0ae941bfb446b51b731fca71e8f8369f1c5f700632723a95141","dim":null,"file_name":"s5-plain-84409.bin","locators":[{"kind":"blossom-v1","value":"http://127.0.0.1:55711/bf4595ec32f6f0ae941bfb446b51b731fca71e8f8369f1c5f700632723a95141"}],"media_type":"application/octet-stream","nonce_hex":"7e141d81ea0d559cd95a9a90","plaintext_sha256":"3a419cbb0accd5c93926e84d6b4f6106f9daa60f6ffae48ee3151b1d3809b4a7","source_epoch":1,"source_epoch_identity":"b656f1a0adc3b575c702a9cddf63c5e2375fb49719dce5e042dbfcad5b2371c3","thumbhash":null,"version":"encrypted-media-v2"}}],"group_id":"ce1cf7c03653b9a9dd5150af28adf805","npub":"npub1v8g0n5yv4h5psll2wdms4pmac2ke2nzx9plt9h72m6lvetdkxr2s7gu668","sent":{"maintenance_disposition":"ready","message_ids":["0aa6e8e3811e0005b567d8987f7ee67208b948d1d4e74fab6e66c6fcb00f6d91"],"published":1}}}
+s5: wn->mk attachment locators=[Locator { kind: "blossom-v1", value: "http://127.0.0.1:55711/bf4595ec32f6f0ae941bfb446b51b731fca71e8f8369f1c5f700632723a95141" }] media_type=application/octet-stream
+s5: wn download result: {"ok":true,"result":{"account_id":"61d0f9d08cade8187fea73770a877dc2ad954c46287eb2dfcadebeccadb630d5","group_id":"ce1cf7c03653b9a9dd5150af28adf805","media":{"ciphertext_sha256":"ac64c87d2e5609b830222362caa6bf3a8d90c0c98404cb636e152f6175acab9e","dim":null,"file_name":"s5.bin","locators":[{"kind":"blossom-v1","value":"http://127.0.0.1:55711/ac64c87d2e5609b830222362caa6bf3a8d90c0c98404cb636e152f6175acab9e"}],"media_type":"application/octet-stream","nonce_hex":"bf7026d41746268ae0d09474","plaintext_sha256":"3a419cbb0accd5c93926e84d6b4f6106f9daa60f6ffae48ee3151b1d3809b4a7","source_epoch":1,"source_epoch_identity":null,"thumbhash":null,"version":"encrypted-media-v2"},"npub":"npub1v8g0n5yv4h5psll2wdms4pmac2ke2nzx9plt9h72m6lvetdkxr2s7gu668","output_path":"/var/folders/km/gvbs16_x5lxg0s0z92ydkkg40000gn/T/s5-out-84409.bin","size_bytes":204800}}
+SCENARIO-5 PASS 15.1s
+ok
+test scenario6_stream_anchors ... s6: wn stream start result: {"ok":true,"result":{"account_id":"544e24d9e2736516f99ed10cda4cd0e5d2abd27484fb7b2de94c4fd83a185040","agent_text_stream":{"kind":"start","quic_candidates":["quic://127.0.0.1:4450"],"route":"brokered_quic","stream_id":"0707070707070707070707070707070707070707070707070707070707070707"},"group_id":"a883af7bd1d9e081e131a5090b6ae7c3","maintenance_disposition":"ready","message_ids":["c94369f46fed0f46c8dd8b662363670dfb96a30b684141d70e9d62c93ca9f07b"],"npub":"npub1238zfk0zwdj3d7v76yxd5nxsuhf2h5n5snahkt0ff38aswsc2pqqecld4g","published":1,"stream_id":"0707070707070707070707070707070707070707070707070707070707070707"}}
+s6: wn stream finish result: {"ok":true,"result":{"account_id":"544e24d9e2736516f99ed10cda4cd0e5d2abd27484fb7b2de94c4fd83a185040","agent_text_stream":{"chunk_count":3,"final_text_or_reference":"final text","kind":"final","start_event_id":"c94369f46fed0f46c8dd8b662363670dfb96a30b684141d70e9d62c93ca9f07b","stream_id":"0707070707070707070707070707070707070707070707070707070707070707","transcript_hash":"abababababababababababababababababababababababababababababababab"},"group_id":"a883af7bd1d9e081e131a5090b6ae7c3","maintenance_disposition":"ready","message_ids":["b3e29e453cfc0f7cd26d0ff546d3057e9f7f64aba5a26e759604f63b29bb345d"],"npub":"npub1238zfk0zwdj3d7v76yxd5nxsuhf2h5n5snahkt0ff38aswsc2pqqecld4g","published":1,"stream_id":"0707070707070707070707070707070707070707070707070707070707070707"}}
+SCENARIO-6 PASS 13.7s
+ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 115.33s
+
+   Doc-tests interop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

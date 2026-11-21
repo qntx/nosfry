@@ -1,0 +1,58 @@
+P1 nip11…
+P2a burst back-to-back…
+P2b paced 50/s…
+P3 stored queries…
+P4 live subscription…
+P5 gift wrap…
+P6 keypackage slot…
+P7 relay lists…
+P8 expiration…
+P9 sizes…
+
+==== probe results for ws://127.0.0.1:7802 ====
+P1: nips=[1,9,11,40,42,45,62,70,77] max_limit=500 auth_required=false restricted_writes=false
+P2a: ok=100 false=100 missing=0 reasons={"rate-limited":100}
+P2b: ok=188 false=12 missing=0 reasons={"rate-limited":12}
+P3: {
+  "burst_group": {
+    "all_events_at_burst_created_at": true,
+    "burst_created_at": 1795287583,
+    "closed_reason": null,
+    "count_limit500": 100,
+    "ended": "matched",
+    "group": "81f0dfe1ef5239ed9fbc063523f972efae80db1ad508fc946f3b73f72c03514a",
+    "limit100_count": 100,
+    "limit100_first_id": "000bbedf537af618ecf41177918eae1c67f3bfdd57cc544d72bec2fc81ee3417",
+    "limit100_last_id": "fd6034e42351c742cf66366c729556485b51aba72588d3b6cacd5f2d2e92084f",
+    "limit100_matches_first_100_of_full_order": true,
+    "limit100_matches_last_100_of_full_order": true,
+    "order_created_at_desc_id_asc": true,
+    "repeat_req_identical_order": true,
+    "since_eq_created_at_count": 100,
+    "since_inclusive": true
+  },
+  "paced_group": {
+    "all_events_at_burst_created_at": true,
+    "burst_created_at": 1795287583,
+    "closed_reason": null,
+    "count_limit500": 188,
+    "ended": "matched",
+    "group": "d348611a309ec3a6d9da86f4e9903bc6baf9787caff73d3fa361f1f82c74cfbe",
+    "limit100_count": 100,
+    "limit100_first_id": "00940ae3121446623883dbf993f597c1a7f1defb372fe1f8327cbb9ae083b738",
+    "limit100_last_id": "8082bf0487606799edb252c06282a65ec40ef192630231c61842926e659156c4",
+    "limit100_matches_first_100_of_full_order": true,
+    "limit100_matches_last_100_of_full_order": false,
+    "order_created_at_desc_id_asc": true,
+    "repeat_req_identical_order": true,
+    "since_eq_created_at_count": 188,
+    "since_inclusive": true
+  }
+}
+P4: live=100/100 ordered=false
+P5: unauth_closed=String("auth-required: requested filter requires authentication")
+P6: tie_lower_id=true
+P7: 10002=true 10050=true
+P8: expired_ok=false soon_ok=true served0=1 served6s=0
+P9: see json
+wrote logs/probe-native-auth.json

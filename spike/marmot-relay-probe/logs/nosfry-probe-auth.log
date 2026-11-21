@@ -1,0 +1,2 @@
+[2m2026-11-21T18:59:40.063559Z[0m [32m INFO[0m [2mnosfry[0m[2m:[0m open-file limit [3mlimit[0m[2m=[0m1048575 [3mrequested[0m[2m=[0m1000000
+[2m2026-11-21T18:59:40.063801Z[0m [31mERROR[0m [2mnosfry[0m[2m:[0m fatal [3merr[0m[2m=[0mbind (127.0.0.1, 7802): Address already in use (os error 48)

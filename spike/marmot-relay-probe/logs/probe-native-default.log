@@ -1,0 +1,58 @@
+P1 nip11…
+P2a burst back-to-back…
+P2b paced 50/s…
+P3 stored queries…
+P4 live subscription…
+P5 gift wrap…
+P6 keypackage slot…
+P7 relay lists…
+P8 expiration…
+P9 sizes…
+
+==== probe results for ws://127.0.0.1:7801 ====
+P1: nips=[1,9,11,40,45,62,70,77] max_limit=500 auth_required=false restricted_writes=false
+P2a: ok=100 false=100 missing=0 reasons={"rate-limited":100}
+P2b: ok=189 false=11 missing=0 reasons={"rate-limited":11}
+P3: {
+  "burst_group": {
+    "all_events_at_burst_created_at": true,
+    "burst_created_at": 1795287356,
+    "closed_reason": null,
+    "count_limit500": 100,
+    "ended": "matched",
+    "group": "28fd142b9db6fa6e6a94459484c816142309dc56a453f55f2bf4a662eed61f2b",
+    "limit100_count": 100,
+    "limit100_first_id": "0087bf8c95e77c168fc05a289174e07ea02ab07df5fdcca267141b5066bcf3cc",
+    "limit100_last_id": "ff8260f7cb1dfdb59246ccf77240b27ecbf223ad4f72a54f4beac15cda5cd0fe",
+    "limit100_matches_first_100_of_full_order": true,
+    "limit100_matches_last_100_of_full_order": true,
+    "order_created_at_desc_id_asc": true,
+    "repeat_req_identical_order": true,
+    "since_eq_created_at_count": 100,
+    "since_inclusive": true
+  },
+  "paced_group": {
+    "all_events_at_burst_created_at": true,
+    "burst_created_at": 1795287356,
+    "closed_reason": null,
+    "count_limit500": 189,
+    "ended": "matched",
+    "group": "5da59b539c5f4d6838da439c358dd2eba5e70d7a062993881eb3273d01db20e0",
+    "limit100_count": 100,
+    "limit100_first_id": "002b52d5daa26a78e1e6b8b942a4e0eae279fd2641137f9df182739109a5968a",
+    "limit100_last_id": "85e64636b6a6c58bd23f89ab4f0450fbe37da22f72b50668c47741cf216f7fb1",
+    "limit100_matches_first_100_of_full_order": true,
+    "limit100_matches_last_100_of_full_order": false,
+    "order_created_at_desc_id_asc": true,
+    "repeat_req_identical_order": true,
+    "since_eq_created_at_count": 189,
+    "since_inclusive": true
+  }
+}
+P4: live=100/100 ordered=false
+P5: unauth_closed=String("restricted: requested kinds are not served")
+P6: tie_lower_id=true
+P7: 10002=true 10050=true
+P8: expired_ok=false soon_ok=true served0=1 served6s=0
+P9: see json
+wrote logs/probe-native-default.json

@@ -1,0 +1,73 @@
+{
+  "auth_flag": false,
+  "probes": {
+    "P9": {
+      "1059": [
+        {
+          "outcome": "OK true ",
+          "target": 61440,
+          "wire_bytes": 61439
+        },
+        {
+          "outcome": "OK true ",
+          "target": 71680,
+          "wire_bytes": 71679
+        },
+        {
+          "outcome": "OK true ",
+          "target": 122880,
+          "wire_bytes": 122879
+        },
+        {
+          "outcome": "OK true ",
+          "target": 204800,
+          "wire_bytes": 204799
+        },
+        {
+          "outcome": "OK true ",
+          "target": 2000000,
+          "wire_bytes": 1999999
+        },
+        {
+          "outcome": "OK true ",
+          "target": 2097152,
+          "wire_bytes": 2097151
+        }
+      ],
+      "445": [
+        {
+          "outcome": "OK true ",
+          "target": 61440,
+          "wire_bytes": 61442
+        },
+        {
+          "outcome": "OK true ",
+          "target": 71680,
+          "wire_bytes": 71682
+        },
+        {
+          "outcome": "OK true ",
+          "target": 122880,
+          "wire_bytes": 122882
+        },
+        {
+          "outcome": "OK true ",
+          "target": 204800,
+          "wire_bytes": 204802
+        },
+        {
+          "outcome": "OK true ",
+          "target": 2000000,
+          "wire_bytes": 2000002
+        },
+        {
+          "outcome": "send failed: send: Connection reset by peer (os error 54)",
+          "target": 2097152,
+          "wire_bytes": 2097154
+        }
+      ]
+    }
+  },
+  "relay": "ws://127.0.0.1:7806",
+  "started_at_unix": 1795287626
+}

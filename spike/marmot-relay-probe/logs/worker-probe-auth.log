@@ -1,0 +1,64 @@
+
+ ⛅️ wrangler 4.150.0 (update available 4.166.0)
+───────────────────────────────────────────────
+[custom build] Running: CARGO_PROFILE_RELEASE_STRIP=false worker-build --release
+[custom build] [INFO]: 🎯  Checking for the Wasm target...
+[custom build] 
+[custom build] [INFO]: 🌀  Compiling to Wasm...
+[custom build] 
+[custom build]    Compiling secp256k1-sys v0.14.1
+[custom build] 
+[custom build]    Compiling secp256k1 v0.33.1
+[custom build] 
+[custom build]    Compiling nosfry-core v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/blossom-marmot/crates/nosfry-core)
+[custom build] 
+[custom build]    Compiling nosfry-sql v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/blossom-marmot/crates/nosfry-sql)
+[custom build] 
+[custom build]    Compiling nosfry-worker v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/blossom-marmot/crates/nosfry-worker)
+[custom build] 
+[custom build]     Finished `release` profile [optimized] target(s) in 17.11s
+[custom build] 
+[custom build] [INFO]: Optimizing wasm binaries with `wasm-opt`...
+[custom build] 
+[custom build] [INFO]: ✨  Done in 19.45s
+[custom build] [INFO]: 📦   Your wasm pkg is ready to publish at /Users/xu/Desktop/qntx/nosfry-wt/blossom-marmot/crates/nosfry-worker/build/.tmp.
+[custom build] 
+[custom build] 
+[custom build]   index.js  30.5kb
+[custom build] 
+[custom build] ⚡ Done in 5ms
+[custom build] 
+Your Worker has access to the following bindings:
+Binding                              Resource                  Mode
+env.RELAY (RelayObject)              Durable Object            local
+env.NOSFRY_CONFIG ("(hidden)")       Environment Variable      local
+
+⎔ Starting local server...
+[wrangler:info] Ready on http://localhost:7811
+restored 0 connections, 0 subscriptions (0 rows dropped)
+[wrangler:info] GET / 200 OK (28ms)
+[wrangler:info] GET / 200 OK (3ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (70ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (6ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)

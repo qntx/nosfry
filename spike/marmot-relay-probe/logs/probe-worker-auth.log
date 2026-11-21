@@ -1,0 +1,58 @@
+P1 nip11…
+P2a burst back-to-back…
+P2b paced 50/s…
+P3 stored queries…
+P4 live subscription…
+P5 gift wrap…
+P6 keypackage slot…
+P7 relay lists…
+P8 expiration…
+P9 sizes…
+
+==== probe results for ws://127.0.0.1:7811 ====
+P1: nips=[1,9,11,40,42,45,62,70,77] max_limit=500 auth_required=false restricted_writes=false
+P2a: ok=103 false=97 missing=0 reasons={"rate-limited":97}
+P2b: ok=189 false=11 missing=0 reasons={"rate-limited":11}
+P3: {
+  "burst_group": {
+    "all_events_at_burst_created_at": true,
+    "burst_created_at": 1795287671,
+    "closed_reason": null,
+    "count_limit500": 103,
+    "ended": "matched",
+    "group": "1582882c0417fbcd526f9ed45fd8d591a0cbe1d7cbf8fc279553fdc000a2675f",
+    "limit100_count": 100,
+    "limit100_first_id": "00b86e9063e955ab48a349e87b372e991a7af4750485d27efa0914791a035e97",
+    "limit100_last_id": "f227f50ce1ec78e4a03825c944fd0101280a4fa1ce8acef0e94ecbe34f31e0ad",
+    "limit100_matches_first_100_of_full_order": true,
+    "limit100_matches_last_100_of_full_order": false,
+    "order_created_at_desc_id_asc": true,
+    "repeat_req_identical_order": true,
+    "since_eq_created_at_count": 103,
+    "since_inclusive": true
+  },
+  "paced_group": {
+    "all_events_at_burst_created_at": true,
+    "burst_created_at": 1795287671,
+    "closed_reason": null,
+    "count_limit500": 189,
+    "ended": "matched",
+    "group": "e0217553b4f4bcdd79e5c0b0df8dc40c1d5e68286f31d8703ceb6ccda0ab849d",
+    "limit100_count": 100,
+    "limit100_first_id": "00055d5891aaaf8c685e40278107ba1247014825cbd384e05b3ea144c9163ddb",
+    "limit100_last_id": "764dfc594668da34a1631c529effcd85fca41c8fcfe753ba64bca3a885d5c0ae",
+    "limit100_matches_first_100_of_full_order": true,
+    "limit100_matches_last_100_of_full_order": false,
+    "order_created_at_desc_id_asc": true,
+    "repeat_req_identical_order": true,
+    "since_eq_created_at_count": 189,
+    "since_inclusive": true
+  }
+}
+P4: live=100/100 ordered=false
+P5: unauth_closed=String("auth-required: requested filter requires authentication")
+P6: tie_lower_id=true
+P7: 10002=true 10050=true
+P8: expired_ok=false soon_ok=true served0=1 served6s=0
+P9: see json
+wrote logs/probe-worker-auth.json

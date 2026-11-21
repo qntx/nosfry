@@ -1,0 +1,68 @@
+    Finished `release` profile [optimized] target(s) in 0.57s
+     Running unittests src/lib.rs (target/release/deps/interop-e160aad22231fe67)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge.rs (target/release/deps/bridge-ba636491b4ec7e7c)
+
+running 1 test
+test scenario7_bridge_wn_invites_us ... 
+thread 'scenario7_bridge_wn_invites_us' (33479919) panicked at tests/bridge.rs:490:9:
+timeout waiting for welcome join
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+
+failures:
+
+failures:
+    scenario7_bridge_wn_invites_us
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 103.64s
+
+error: test failed, to rerun pass `--test bridge`
+    Finished `release` profile [optimized] target(s) in 1.13s
+     Running tests/wn.rs (target/release/deps/wn-152c83caa06a1f99)
+
+running 6 tests
+test scenario1_mk_core_invites_wn ... 
+thread 'scenario1_mk_core_invites_wn' (33495004) panicked at tests/support/mod.rs:868:9:
+timeout waiting for wn invite appears
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+FAILED
+test scenario2_wn_invites_mk_core ... 
+thread 'scenario2_wn_invites_mk_core' (33513911) panicked at tests/support/mod.rs:913:9:
+timeout waiting for welcome join
+FAILED
+test scenario3_bulk_and_membership ... 
+thread 'scenario3_bulk_and_membership' (33534786) panicked at tests/support/mod.rs:868:9:
+timeout waiting for wn invite appears
+FAILED
+test scenario4_capability_requirements ... s4: our KP advertises proposals=["0x0008", "0x000a"] extensions=["0x0006", "0xf2d1"] app_components=["0x8001", "0x8003", "0x8004", "0x8006", "0x8009", "0x800b", "0x800c", "0x800d"]
+
+thread 'scenario4_capability_requirements' (33579153) panicked at tests/support/mod.rs:913:9:
+timeout waiting for welcome join
+FAILED
+test scenario5_media_round_trip ... 
+thread 'scenario5_media_round_trip' (33595143) panicked at tests/support/mod.rs:913:9:
+timeout waiting for welcome join
+FAILED
+test scenario6_stream_anchors ... 
+thread 'scenario6_stream_anchors' (33614706) panicked at tests/support/mod.rs:913:9:
+timeout waiting for welcome join
+FAILED
+
+failures:
+
+failures:
+    scenario1_mk_core_invites_wn
+    scenario2_wn_invites_mk_core
+    scenario3_bulk_and_membership
+    scenario4_capability_requirements
+    scenario5_media_round_trip
+    scenario6_stream_anchors
+
+test result: FAILED. 0 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 640.44s
+
+error: test failed, to rerun pass `--test wn`

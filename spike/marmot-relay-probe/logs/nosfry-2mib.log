@@ -1,0 +1,14 @@
+[2m2026-11-21T18:59:59.765232Z[0m [32m INFO[0m [2mnosfry[0m[2m:[0m open-file limit [3mlimit[0m[2m=[0m1048575 [3mrequested[0m[2m=[0m1000000
+[2m2026-11-21T18:59:59.765365Z[0m [32m INFO[0m [2mnosfry[0m[2m:[0m listening [3maddr[0m[2m=[0m(127.0.0.1, 7804)
+[2m2026-11-21T19:00:08.494544Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m1 [3mframe[0m[2m=[0m["OK","16c691dcbc349a738f57ae33c509f0fda36fae4465a84e8fb7abe592571e075e",true,""]
+[2m2026-11-21T19:00:08.500502Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m2 [3mframe[0m[2m=[0m["OK","329a3ac95cdf1bd379fa57c736a044645e119443dc05ca1f567a6a51792c3b9e",true,""]
+[2m2026-11-21T19:00:08.506514Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m3 [3mframe[0m[2m=[0m["OK","eebcb53d1ba3f0f16f1c8ae047b4ecfa4f0b8393c131d976acd539e6313f8784",true,""]
+[2m2026-11-21T19:00:08.513573Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m4 [3mframe[0m[2m=[0m["OK","f04133cda94a87edc45346ec771b67598008764750c76000017e94b67a3ab605",true,""]
+[2m2026-11-21T19:00:08.543504Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m5 [3mframe[0m[2m=[0m["OK","38d7390c878460c6bdfd80764432fa574c0dd74fde5242767d0f0766cb0d2196",true,""]
+[2m2026-11-21T19:00:08.583549Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m6 [3mframe[0m[2m=[0m["OK","b0a86fd045127070962044b689be9bbd6db09cbb9fbc90263e93762996f7578b",true,""]
+[2m2026-11-21T19:00:08.588632Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m7 [3mframe[0m[2m=[0m["OK","8cf25eb0b8dd372f6964dfc554b1c57ab8e55032295e9c893809ee62fa8689a9",true,""]
+[2m2026-11-21T19:00:08.594741Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m8 [3mframe[0m[2m=[0m["OK","8b715a88cbcb7a97398bd83d606162603c5904b1635c72fc279b71737dc1ce82",true,""]
+[2m2026-11-21T19:00:08.602558Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m9 [3mframe[0m[2m=[0m["OK","c78e748fd78c8864fa7104fac1c10275934b9b4f3d0f1c6f96509e9c1e4f9186",true,""]
+[2m2026-11-21T19:00:08.612665Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m10 [3mframe[0m[2m=[0m["OK","6ffd48e92ed400bd35c9579248f1ce702e7fa274be009148a083436389f621f4",true,""]
+[2m2026-11-21T19:00:08.638705Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m11 [3mframe[0m[2m=[0m["OK","2ce1abc95d6e0b3dfdec29fa72cc5d819112d2569062f2d72d46839e5915aefc",true,""]
+[2m2026-11-21T19:00:08.670781Z[0m [34mDEBUG[0m [2mnosfry::ingest[0m[2m:[0m sent [3mconn[0m[2m=[0m12 [3mframe[0m[2m=[0m["OK","8daa03e39af844fa10fe2b4b6a83096e3c68ba2894ad3ca1eeef73b67f1e78fd",true,""]

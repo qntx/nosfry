@@ -1,0 +1,129 @@
+{
+  "auth_flag": true,
+  "probes": {
+    "P1": {
+      "doc": {
+        "limitation": {
+          "auth_required": false,
+          "created_at_lower_limit": 94608000,
+          "created_at_upper_limit": 900,
+          "default_limit": 500,
+          "max_event_tags": 2000,
+          "max_limit": 500,
+          "max_message_length": 2097168,
+          "max_subid_length": 64,
+          "max_subscriptions": 200,
+          "payment_required": false,
+          "restricted_writes": false
+        },
+        "name": "nosfry",
+        "software": "https://github.com/qntx/nosfry",
+        "supported_nips": [
+          1,
+          9,
+          11,
+          40,
+          42,
+          45,
+          62,
+          70,
+          77
+        ],
+        "version": "0.3.0"
+      },
+      "http_status": 200,
+      "limitation": {
+        "auth_required": false,
+        "created_at_lower_limit": 94608000,
+        "created_at_upper_limit": 900,
+        "default_limit": 500,
+        "max_event_tags": 2000,
+        "max_limit": 500,
+        "max_message_length": 2097168,
+        "max_subid_length": 64,
+        "max_subscriptions": 200,
+        "payment_required": false,
+        "restricted_writes": false
+      },
+      "supported_nips": [
+        1,
+        9,
+        11,
+        40,
+        42,
+        45,
+        62,
+        70,
+        77
+      ]
+    },
+    "P9": {
+      "1059": [
+        {
+          "outcome": "OK true ",
+          "target": 61440,
+          "wire_bytes": 61439
+        },
+        {
+          "outcome": "OK true ",
+          "target": 71680,
+          "wire_bytes": 71679
+        },
+        {
+          "outcome": "OK true ",
+          "target": 122880,
+          "wire_bytes": 122879
+        },
+        {
+          "outcome": "OK true ",
+          "target": 204800,
+          "wire_bytes": 204799
+        },
+        {
+          "outcome": "OK true ",
+          "target": 2000000,
+          "wire_bytes": 1999999
+        },
+        {
+          "outcome": "OK true ",
+          "target": 2097152,
+          "wire_bytes": 2097151
+        }
+      ],
+      "445": [
+        {
+          "outcome": "OK true ",
+          "target": 61440,
+          "wire_bytes": 61442
+        },
+        {
+          "outcome": "OK true ",
+          "target": 71680,
+          "wire_bytes": 71682
+        },
+        {
+          "outcome": "OK true ",
+          "target": 122880,
+          "wire_bytes": 122882
+        },
+        {
+          "outcome": "OK true ",
+          "target": 204800,
+          "wire_bytes": 204802
+        },
+        {
+          "outcome": "OK true ",
+          "target": 2000000,
+          "wire_bytes": 2000002
+        },
+        {
+          "outcome": "OK true ",
+          "target": 2097152,
+          "wire_bytes": 2097154
+        }
+      ]
+    }
+  },
+  "relay": "ws://127.0.0.1:7813",
+  "started_at_unix": 1795287707
+}

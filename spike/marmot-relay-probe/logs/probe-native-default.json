@@ -1,0 +1,332 @@
+{
+  "auth_flag": false,
+  "probes": {
+    "P1": {
+      "doc": {
+        "limitation": {
+          "auth_required": false,
+          "created_at_lower_limit": 94608000,
+          "created_at_upper_limit": 900,
+          "default_limit": 500,
+          "max_event_tags": 2000,
+          "max_limit": 500,
+          "max_message_length": 131072,
+          "max_subid_length": 64,
+          "max_subscriptions": 200,
+          "payment_required": false,
+          "restricted_writes": false
+        },
+        "name": "nosfry",
+        "software": "https://github.com/qntx/nosfry",
+        "supported_nips": [
+          1,
+          9,
+          11,
+          40,
+          45,
+          62,
+          70,
+          77
+        ],
+        "version": "0.3.0"
+      },
+      "http_status": 200,
+      "limitation": {
+        "auth_required": false,
+        "created_at_lower_limit": 94608000,
+        "created_at_upper_limit": 900,
+        "default_limit": 500,
+        "max_event_tags": 2000,
+        "max_limit": 500,
+        "max_message_length": 131072,
+        "max_subid_length": 64,
+        "max_subscriptions": 200,
+        "payment_required": false,
+        "restricted_writes": false
+      },
+      "supported_nips": [
+        1,
+        9,
+        11,
+        40,
+        45,
+        62,
+        70,
+        77
+      ]
+    },
+    "P2a": {
+      "collection_ended": "matched",
+      "created_at": 1795287356,
+      "false_reasons_by_prefix": {
+        "rate-limited": 100
+      },
+      "group": "28fd142b9db6fa6e6a94459484c816142309dc56a453f55f2bf4a662eed61f2b",
+      "notices": [],
+      "ok_false": 100,
+      "ok_missing": 0,
+      "ok_true": 100,
+      "paced_50_per_s": false,
+      "sent": 200,
+      "sent_in_ms": 1
+    },
+    "P2b": {
+      "collection_ended": "matched",
+      "created_at": 1795287356,
+      "false_reasons_by_prefix": {
+        "rate-limited": 11
+      },
+      "group": "5da59b539c5f4d6838da439c358dd2eba5e70d7a062993881eb3273d01db20e0",
+      "notices": [],
+      "ok_false": 11,
+      "ok_missing": 0,
+      "ok_true": 189,
+      "paced_50_per_s": true,
+      "sent": 200,
+      "sent_in_ms": 4508
+    },
+    "P3": {
+      "burst_group": {
+        "all_events_at_burst_created_at": true,
+        "burst_created_at": 1795287356,
+        "closed_reason": null,
+        "count_limit500": 100,
+        "ended": "matched",
+        "group": "28fd142b9db6fa6e6a94459484c816142309dc56a453f55f2bf4a662eed61f2b",
+        "limit100_count": 100,
+        "limit100_first_id": "0087bf8c95e77c168fc05a289174e07ea02ab07df5fdcca267141b5066bcf3cc",
+        "limit100_last_id": "ff8260f7cb1dfdb59246ccf77240b27ecbf223ad4f72a54f4beac15cda5cd0fe",
+        "limit100_matches_first_100_of_full_order": true,
+        "limit100_matches_last_100_of_full_order": true,
+        "order_created_at_desc_id_asc": true,
+        "repeat_req_identical_order": true,
+        "since_eq_created_at_count": 100,
+        "since_inclusive": true
+      },
+      "paced_group": {
+        "all_events_at_burst_created_at": true,
+        "burst_created_at": 1795287356,
+        "closed_reason": null,
+        "count_limit500": 189,
+        "ended": "matched",
+        "group": "5da59b539c5f4d6838da439c358dd2eba5e70d7a062993881eb3273d01db20e0",
+        "limit100_count": 100,
+        "limit100_first_id": "002b52d5daa26a78e1e6b8b942a4e0eae279fd2641137f9df182739109a5968a",
+        "limit100_last_id": "85e64636b6a6c58bd23f89ab4f0450fbe37da22f72b50668c47741cf216f7fb1",
+        "limit100_matches_first_100_of_full_order": true,
+        "limit100_matches_last_100_of_full_order": false,
+        "order_created_at_desc_id_asc": true,
+        "repeat_req_identical_order": true,
+        "since_eq_created_at_count": 189,
+        "since_inclusive": true
+      }
+    },
+    "P4": {
+      "group": "2ceb0fc9bb0e74f4bc3df580deb914a0648822c352af7232fd6e13115684f07f",
+      "live_order_created_at_desc_id_asc": false,
+      "published": 100,
+      "received_live": 100
+    },
+    "P5": {
+      "auth": null,
+      "created_at_age_hours": 36,
+      "mixed_req": {
+        "auth_frame": false,
+        "closed": null,
+        "events_served": 3,
+        "served_kinds": [
+          445,
+          445,
+          445
+        ]
+      },
+      "publish_ok": true,
+      "publish_reason": "",
+      "recipient": "8188b0945b4c258db9749c858dc01a700f9e654a9b03736225c1814450a0695c",
+      "unauth_req": {
+        "auth_frame": false,
+        "closed": "restricted: requested kinds are not served",
+        "events": 0,
+        "frames": [
+          [
+            "CLOSED",
+            "w",
+            "restricted: requested kinds are not served"
+          ]
+        ]
+      }
+    },
+    "P6": {
+      "author": "92e70802cda8e4ef25b9a6ff9811395760ec067d1bcbcf851104a13d3e3326ba",
+      "event_delete": {
+        "e3_served_after": false,
+        "ok": true,
+        "reason": ""
+      },
+      "replace": {
+        "ok": [
+          true,
+          true
+        ],
+        "only_newer_served": true,
+        "reasons": [
+          "",
+          ""
+        ],
+        "served_ids": [
+          "24dfd19b1d7d97698ddc425f57ba88ee2b2f42f8870474eaaa9b2a66fb66b238"
+        ]
+      },
+      "republish_after_delete": {
+        "ok": true,
+        "reason": "",
+        "served": true
+      },
+      "slot_delete": {
+        "ok": true,
+        "pd1_served_after": false,
+        "reason": "",
+        "served_ids": [
+          "5b4f5666f7f2a9a18de606619e1682df9e5bcebf7a86d2a1d3b4c1ba82875bca",
+          "b120e8d9e54e2ffef2efff729a03da593022b53fc1d4d0d0eb91bd5b572c906d"
+        ]
+      },
+      "t0": 1795287361,
+      "tie": {
+        "lower_id_survives": true,
+        "pd2_ok": [
+          [
+            true,
+            ""
+          ],
+          [
+            true,
+            ""
+          ]
+        ],
+        "pd2_send_order": [
+          "higher-id",
+          "lower-id"
+        ],
+        "pd3_ok": [
+          [
+            true,
+            ""
+          ],
+          [
+            false,
+            "duplicate: have a newer version"
+          ]
+        ],
+        "pd3_send_order": [
+          "lower-id",
+          "higher-id"
+        ],
+        "served": [
+          {
+            "content": "kp-pd2-a",
+            "d": "pd2",
+            "id": "5b4f5666f7f2a9a18de606619e1682df9e5bcebf7a86d2a1d3b4c1ba82875bca"
+          },
+          {
+            "content": "kp-pd3-a",
+            "d": "pd3",
+            "id": "b120e8d9e54e2ffef2efff729a03da593022b53fc1d4d0d0eb91bd5b572c906d"
+          }
+        ]
+      }
+    },
+    "P7": {
+      "10002": {
+        "only_newest_served": true,
+        "served": 1,
+        "served_ids": [
+          "c5582b2d1df657edc24f6c408dac7f4a306befa56786b162d66d4bfc559bc9ff"
+        ]
+      },
+      "10050": {
+        "only_newest_served": true,
+        "served": 1,
+        "served_ids": [
+          "b65bff1e3e060c33f29beb7c750905f409bc551c77e21c33da1adab6829979f1"
+        ]
+      }
+    },
+    "P8": {
+      "expired_at_publish_ok": false,
+      "expired_at_publish_reason": "invalid: event has expired",
+      "expiring_soon_ok": true,
+      "expiring_soon_reason": "",
+      "served_after_6s": 0,
+      "served_immediately": 1
+    },
+    "P9": {
+      "1059": [
+        {
+          "outcome": "OK true ",
+          "target": 61440,
+          "wire_bytes": 61439
+        },
+        {
+          "outcome": "OK false invalid: event too large (71669 > 65536 bytes)",
+          "target": 71680,
+          "wire_bytes": 71679
+        },
+        {
+          "outcome": "OK false invalid: event too large (122869 > 65536 bytes)",
+          "target": 122880,
+          "wire_bytes": 122879
+        },
+        {
+          "outcome": "no response (closed)",
+          "target": 204800,
+          "wire_bytes": 204799
+        },
+        {
+          "outcome": "send failed: send: Broken pipe (os error 32)",
+          "target": 2000000,
+          "wire_bytes": 1999999
+        },
+        {
+          "outcome": "send failed: send: Broken pipe (os error 32)",
+          "target": 2097152,
+          "wire_bytes": 2097151
+        }
+      ],
+      "445": [
+        {
+          "outcome": "OK true ",
+          "target": 61440,
+          "wire_bytes": 61442
+        },
+        {
+          "outcome": "OK false invalid: event too large (71672 > 65536 bytes)",
+          "target": 71680,
+          "wire_bytes": 71682
+        },
+        {
+          "outcome": "OK false invalid: event too large (122872 > 65536 bytes)",
+          "target": 122880,
+          "wire_bytes": 122882
+        },
+        {
+          "outcome": "no response (closed)",
+          "target": 204800,
+          "wire_bytes": 204802
+        },
+        {
+          "outcome": "send failed: send: Broken pipe (os error 32)",
+          "target": 2000000,
+          "wire_bytes": 2000002
+        },
+        {
+          "outcome": "send failed: send: Broken pipe (os error 32)",
+          "target": 2097152,
+          "wire_bytes": 2097154
+        }
+      ]
+    }
+  },
+  "relay": "ws://127.0.0.1:7801",
+  "started_at_unix": 1795287356
+}

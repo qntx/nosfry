@@ -1,0 +1,57 @@
+   Compiling interop v0.0.0 (/Users/xu/Desktop/qntx/nosfry-wt/blossom-marmot/3rdparty/marmot/crates/interop)
+    Finished `release` profile [optimized] target(s) in 1m 18s
+     Running unittests src/lib.rs (target/release/deps/interop-e160aad22231fe67)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridge.rs (target/release/deps/bridge-ba636491b4ec7e7c)
+
+running 1 test
+test scenario7_bridge_wn_invites_us ... SCENARIO-7 PASS 16.4s
+NIP-11 documents served: 0
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.42s
+
+     Running tests/wn.rs (target/release/deps/wn-152c83caa06a1f99)
+
+running 6 tests
+test scenario1_mk_core_invites_wn ... SCENARIO-1 PASS 14.1s
+NIP-11 documents served: 1
+ok
+test scenario2_wn_invites_mk_core ... SCENARIO-2 PASS 13.7s
+NIP-11 documents served: 0
+ok
+test scenario3_bulk_and_membership ... s3: wn sent 25 in 3.7s
+s3: mk sent 475 in 0.6s
+s3: ingested 500 events in 0.1s, decoded 25/25 wn
+SCENARIO-3 PASS 27.4s
+NIP-11 documents served: 1
+ok
+test scenario4_capability_requirements ... s4: our KP advertises proposals=["0x0008", "0x000a"] extensions=["0x0006", "0xf2d1"] app_components=["0x8001", "0x8003", "0x8004", "0x8006", "0x8009", "0x800b", "0x800c", "0x800d"]
+s4(b): group state: {"ok":true,"result":{"account_id":"cf9b61abaad5104550f49027510559618b140ccdb02bd86a382a1307f9a9397a","group":{"admin_policy":{"admins":["cf9b61abaad5104550f49027510559618b140ccdb02bd86a382a1307f9a9397a"],"component":"marmot.group.admin-policy.v1","component_id":32771,"data_hex":"20cf9b61abaad5104550f49027510559618b140ccdb02bd86a382a1307f9a9397a"},"agent_text_stream":{"allowed_member_roles":["receive","send"],"component":"marmot.group.agent-text-stream.quic.v1","component_id":32774,"data_hex":"010300001000000000000000","max_plaintext_frame_len":4096,"padding_bucket_bytes":0,"replay_ttl_secs":0,"required":true,"required_member_roles":["receive"]},"archived":false,"avatar_url":{"component":"marmot.group.avatar-url.v1","component_id":32775,"data_hex":"000000","dim":null,"present":false,"thumbhash":null,"url":""},"disband_request":null,"disbanded":false,"disbanding":false,"encrypted_media":{"allowed_locator_kinds":["blossom-v1"],"component":"marmot.group.encrypted-media.v2","component_id":32779,"data_hex":"12656e637279707465642d6d656469612d76320b0a626c6f73736f6d2d7631404f0a626c6f73736f6d2d76311d68747470733a2f2f626c6f73736f6d2e646976696e652e766964656f2f0a626c6f73736f6d2d76311a68747470733a2f2f626c6f73736f6d2e646974746f2e7075622f","default_blob_endpoints":[{"base_url":"https://blossom.divine.video/","locator_kind":"blossom-v1"},{"base_url":"https://blossom.ditto.pub/","locator_kind":"blossom-v1"}],"media_format":"encrypted-media-v2","required":true},"endpoint":"ws://127.0.0.1:54740","group_id":"af40235f0c6243d9e5cfea1a1f7947b9","image":{"component":"marmot.group.blossom.image.v1","component_id":32770,"image_hash_hex":"","media_type":null,"present":false},"leave_requested_at_ms":null,"message_retention":{"component":"marmot.group.message-retention.v1","component_id":32773,"data_hex":"0000000000000000","disappearing_message_secs":0},"nostr_routing":{"component":"marmot.transport.nostr.routing.v1","component_id":32772,"data_hex":"38d499ae59eede7e03e01823c8f45bde479f17b8530b4bcf16d6ce3276303ce9151477733a2f2f3132372e302e302e313a3534373430","nostr_group_id_hex":"38d499ae59eede7e03e01823c8f45bde479f17b8530b4bcf16d6ce3276303ce9","relays":["ws://127.0.0.1:54740"]},"pending_confirmation":false,"profile":{"component":"marmot.group.profile.v1","component_id":32769,"data_hex":"0a696e7465726f702d346200","description":"","name":"interop-4b","present":true},"self_membership":"member","unrecoverable":false,"via_welcome_message_id":null,"welcomer_account_id":null},"mls":{"disband_request":null,"disbanding":false,"disbanding_blockers":[],"disbanding_enabled":true,"epoch":1,"group_id":"af40235f0c6243d9e5cfea1a1f7947b9","lifecycle_state":"stable","member_count":2,"protocol_profile":"current","required_app_components":[32769,32771,32772,32774,32777,32779,32780,32781],"unrecoverable":false},"npub":"npub1e7dkr2a265gy2585jqn4zp2evx93grxdkq4as63c9gfs07df89aqp4ef8c"}}
+SCENARIO-4 PASS 22.7s
+NIP-11 documents served: 1
+ok
+test scenario5_media_round_trip ... s5: wn upload result: {"ok":true,"result":{"account_id":"7f6424bf34ec20897b4cad498a660ebbc4f18156fc49ab71f85740dae0046180","attachments":[{"encrypted_size_bytes":204816,"media":{"ciphertext_sha256":"a924dd5e3a0af3b5b4fb558929959c5b5e488517472efaada87446002ac78fbb","dim":null,"file_name":"s5-plain-6243.bin","locators":[{"kind":"blossom-v1","value":"http://127.0.0.1:55605/a924dd5e3a0af3b5b4fb558929959c5b5e488517472efaada87446002ac78fbb"}],"media_type":"application/octet-stream","nonce_hex":"2e57dc05274d429446cba06b","plaintext_sha256":"3a419cbb0accd5c93926e84d6b4f6106f9daa60f6ffae48ee3151b1d3809b4a7","source_epoch":1,"source_epoch_identity":"c5e97ef03f66b4baf511aea5bda28b3e4cf5911e0b2218cb4d4c811a29ec5e20","thumbhash":null,"version":"encrypted-media-v2"}}],"group_id":"54cee431e60e8ea450e71384cbd29a7a","npub":"npub10ajzf0e5assgj76v44yc5eswh0z0rq2kl3y6ku0c2aqd4cqyvxqqgyqsly","sent":{"maintenance_disposition":"ready","message_ids":["3dc7da144da392f574d16d90c3cb19d556ea986193e052cb49617da9de2a30d7"],"published":1}}}
+s5: wn->mk attachment locators=[Locator { kind: "blossom-v1", value: "http://127.0.0.1:55605/a924dd5e3a0af3b5b4fb558929959c5b5e488517472efaada87446002ac78fbb" }] media_type=application/octet-stream
+s5: wn download result: {"ok":true,"result":{"account_id":"7f6424bf34ec20897b4cad498a660ebbc4f18156fc49ab71f85740dae0046180","group_id":"54cee431e60e8ea450e71384cbd29a7a","media":{"ciphertext_sha256":"77074a5c5c2e3d05ecf6a81026df8de797a4242c77797a872e38d7f443e757b6","dim":null,"file_name":"s5.bin","locators":[{"kind":"blossom-v1","value":"http://127.0.0.1:55605/77074a5c5c2e3d05ecf6a81026df8de797a4242c77797a872e38d7f443e757b6"}],"media_type":"application/octet-stream","nonce_hex":"d692a860a3ebf3f51afe6d2a","plaintext_sha256":"3a419cbb0accd5c93926e84d6b4f6106f9daa60f6ffae48ee3151b1d3809b4a7","source_epoch":1,"source_epoch_identity":null,"thumbhash":null,"version":"encrypted-media-v2"},"npub":"npub10ajzf0e5assgj76v44yc5eswh0z0rq2kl3y6ku0c2aqd4cqyvxqqgyqsly","output_path":"/var/folders/km/gvbs16_x5lxg0s0z92ydkkg40000gn/T/s5-out-6243.bin","size_bytes":204800}}
+SCENARIO-5 PASS 17.9s
+NIP-11 documents served: 0
+ok
+test scenario6_stream_anchors ... s6: wn stream start result: {"ok":true,"result":{"account_id":"36d6ca8f54a870be240401e450b23c7616a581149881dd3e33bbfc8c34e17dbf","agent_text_stream":{"kind":"start","quic_candidates":["quic://127.0.0.1:4450"],"route":"brokered_quic","stream_id":"0707070707070707070707070707070707070707070707070707070707070707"},"group_id":"3d7f6197dfff00f95b26920bc4f3d327","maintenance_disposition":"ready","message_ids":["0476b99fd5c06cd3e8adf4dcd5a275dbf9089e9cada9975eaacff8d91485131b"],"npub":"npub1xmtv4r654pctufqyq8j9pv3uwct2tqg5nzqa603nh07gcd8p0klswk4m54","published":1,"stream_id":"0707070707070707070707070707070707070707070707070707070707070707"}}
+s6: wn stream finish result: {"ok":true,"result":{"account_id":"36d6ca8f54a870be240401e450b23c7616a581149881dd3e33bbfc8c34e17dbf","agent_text_stream":{"chunk_count":3,"final_text_or_reference":"final text","kind":"final","start_event_id":"0476b99fd5c06cd3e8adf4dcd5a275dbf9089e9cada9975eaacff8d91485131b","stream_id":"0707070707070707070707070707070707070707070707070707070707070707","transcript_hash":"abababababababababababababababababababababababababababababababab"},"group_id":"3d7f6197dfff00f95b26920bc4f3d327","maintenance_disposition":"ready","message_ids":["07bc4f892e21fd39857d66208d44466262ebb74819fe0eb615275e9d55a22214"],"npub":"npub1xmtv4r654pctufqyq8j9pv3uwct2tqg5nzqa603nh07gcd8p0klswk4m54","published":1,"stream_id":"0707070707070707070707070707070707070707070707070707070707070707"}}
+SCENARIO-6 PASS 18.0s
+NIP-11 documents served: 0
+ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 113.94s
+
+   Doc-tests interop
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

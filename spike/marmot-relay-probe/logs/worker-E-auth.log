@@ -1,0 +1,340 @@
+
+ ⛅️ wrangler 4.150.0
+────────────────────
+[custom build] Running: CARGO_PROFILE_RELEASE_STRIP=false worker-build --release
+[custom build] [INFO]: 🎯  Checking for the Wasm target...
+[custom build] 
+[custom build] [INFO]: 🌀  Compiling to Wasm...
+[custom build] 
+[custom build]    Compiling unicode-ident v1.0.27
+[custom build] 
+[custom build]    Compiling proc-macro2 v1.0.107
+[custom build]    Compiling quote v1.0.47
+[custom build]    Compiling wasm-bindgen-shared v0.2.129
+[custom build]    Compiling rustversion v1.0.23
+[custom build]    Compiling bumpalo v3.20.3
+[custom build]    Compiling stable_deref_trait v1.2.1
+[custom build]    Compiling cfg-if v1.0.5
+[custom build]    Compiling serde_core v1.0.229
+[custom build] 
+[custom build]    Compiling
+[custom build]  memchr v2.8.3
+[custom build] 
+[custom build]    Compiling once_cell v1.21.4
+[custom build] 
+[custom build]    Compiling slab v0.4.12
+[custom build] 
+[custom build]    Compiling pin-project-lite v0.2.17
+[custom build] 
+[custom build]    Compiling futures-core v0.3.34
+[custom build]    Compiling futures-task v0.3.34
+[custom build]    Compiling futures-sink v0.3.34
+[custom build]    Compiling futures-io v0.3.34
+[custom build]    Compiling writeable v0.6.4
+[custom build]    Compiling litemap v0.8.3
+[custom build]    Compiling serde v1.0.229
+[custom build]    Compiling itoa v1.0.18
+[custom build] 
+[custom build]    Compiling shlex v2.0.1
+[custom build] 
+[custom build]    Compiling icu_normalizer_data v2.3.0
+[custom build] 
+[custom build]    Compiling utf8_iter v1.0.4
+[custom build] 
+[custom build]    Compiling typenum v1.20.1
+[custom build] 
+[custom build]    Compiling find-msvc-tools v0.1.14
+[custom build] 
+[custom build]    Compiling icu_properties_data v2.3.0
+[custom build] 
+[custom build]    Compiling cc v1.8.0
+[custom build] 
+[custom build]    Compiling wasm-bindgen v0.2.129
+[custom build] 
+[custom build]    Compiling zmij v1.0.23
+[custom build] 
+[custom build]    Compiling futures-util v0.3.34
+[custom build] 
+[custom build]    Compiling smallvec v1.16.3
+[custom build] 
+[custom build]    Compiling heck v0.5.0
+[custom build] 
+[custom build]    Compiling serde_json v1.0.154
+[custom build] 
+[custom build]    Compiling autocfg v1.5.1
+[custom build] 
+[custom build]    Compiling syn v3.0.9
+[custom build] 
+[custom build]    Compiling syn v2.0.119
+[custom build] 
+[custom build]    Compiling num-traits v0.2.19
+[custom build] 
+[custom build]    Compiling thiserror v2.0.21
+[custom build] 
+[custom build]    Compiling percent-encoding v2.3.2
+[custom build] 
+[custom build]    Compiling const-oid v0.10.2
+[custom build] 
+[custom build]    Compiling form_urlencoded v1.2.2
+[custom build] 
+[custom build]    Compiling bytes v1.12.1
+[custom build] 
+[custom build]    Compiling ryu v1.0.23
+[custom build] 
+[custom build]    Compiling negentropy v0.5.2
+[custom build] 
+[custom build]    Compiling hybrid-array v0.4.15
+[custom build] 
+[custom build]    Compiling base64 v0.23.1
+[custom build] 
+[custom build]    Compiling http v1.5.0
+[custom build] 
+[custom build]    Compiling secp256k1-sys v0.14.1
+[custom build] 
+[custom build]    Compiling getrandom v0.4.3
+[custom build] 
+[custom build]    Compiling winnow v1.0.4
+[custom build] 
+[custom build]    Compiling foldhash v0.2.0
+[custom build] 
+[custom build]    Compiling futures-channel v0.3.34
+[custom build] 
+[custom build]    Compiling crypto-common v0.2.2
+[custom build] 
+[custom build]    Compiling block-buffer v0.12.1
+[custom build] 
+[custom build]    Compiling tokio v1.54.1
+[custom build] 
+[custom build]    Compiling matchit v0.7.3
+[custom build] 
+[custom build]    Compiling toml_parser v1.1.5+spec-1.1.0
+[custom build] 
+[custom build]    Compiling toml_writer v1.1.3+spec-1.1.0
+[custom build] 
+[custom build]    Compiling http-body v1.1.0
+[custom build] 
+[custom build]    Compiling digest v0.11.3
+[custom build] 
+[custom build]    Compiling toml_datetime v1.1.2+spec-1.1.0
+[custom build] 
+[custom build]    Compiling sha2 v0.11.1
+[custom build] 
+[custom build]    Compiling serde_spanned v1.1.2
+[custom build] 
+[custom build]    Compiling toml v1.1.8+spec-1.1.0
+[custom build] 
+[custom build]    Compiling strum_macros v0.28.0
+[custom build] 
+[custom build]    Compiling pin-project-internal v1.1.13
+[custom build] 
+[custom build]    Compiling pin-project v1.1.13
+[custom build] 
+[custom build]    Compiling synstructure v0.14.0
+[custom build] 
+[custom build]    Compiling wasm-bindgen-macro-support v0.2.129
+[custom build] 
+[custom build]    Compiling strum v0.28.0
+[custom build] 
+[custom build]    Compiling zerofrom-derive v0.1.8
+[custom build] 
+[custom build]    Compiling yoke-derive v0.8.4
+[custom build]    Compiling zerovec-derive v0.11.6
+[custom build]    Compiling displaydoc v0.2.7
+[custom build] 
+[custom build]    Compiling futures-macro v0.3.34
+[custom build] 
+[custom build]    Compiling serde_derive v1.0.229
+[custom build] 
+[custom build]    Compiling thiserror-impl v2.0.21
+[custom build] 
+[custom build]    Compiling async-trait v0.1.92
+[custom build] 
+[custom build]    Compiling zerofrom v0.1.8
+[custom build] 
+[custom build]    Compiling yoke v0.8.3
+[custom build] 
+[custom build]    Compiling zerovec v0.11.8
+[custom build]    Compiling zerotrie v0.2.5
+[custom build] 
+[custom build]    Compiling tinystr v0.8.4
+[custom build]    Compiling potential_utf v0.1.6
+[custom build] 
+[custom build]    Compiling icu_collections v2.3.0
+[custom build] 
+[custom build]    Compiling icu_locale_core v2.3.0
+[custom build] 
+[custom build]    Compiling icu_provider v2.3.1
+[custom build] 
+[custom build]    Compiling faster-hex v1.0.0
+[custom build]    Compiling serde_urlencoded v0.7.1
+[custom build] 
+[custom build]    Compiling icu_properties v2.3.0
+[custom build] 
+[custom build]    Compiling icu_normalizer v2.3.0
+[custom build] 
+[custom build]    Compiling wasm-bindgen-macro v0.2.129
+[custom build] 
+[custom build]    Compiling idna_adapter v1.2.2
+[custom build] 
+[custom build]    Compiling idna v1.1.0
+[custom build] 
+[custom build]    Compiling url v2.5.8
+[custom build] 
+[custom build]    Compiling js-sys v0.3.106
+[custom build] 
+[custom build]    Compiling secp256k1 v0.33.1
+[custom build] 
+[custom build]    Compiling console_error_panic_hook v0.1.7
+[custom build] 
+[custom build]    Compiling nosfry-core v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/blossom-marmot/crates/nosfry-core)
+[custom build] 
+[custom build]    Compiling nosfry-sql v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/blossom-marmot/crates/nosfry-sql)
+[custom build] 
+[custom build]    Compiling web-sys v0.3.106
+[custom build] 
+[custom build]    Compiling worker-sys v0.8.7
+[custom build] 
+[custom build]    Compiling worker-macros v0.8.7
+[custom build] 
+[custom build]    Compiling wasm-bindgen-futures v0.4.79
+[custom build] 
+[custom build]    Compiling serde-wasm-bindgen v0.6.5
+[custom build]    Compiling chrono v0.4.45
+[custom build] 
+[custom build]    Compiling wasm-streams v0.7.0
+[custom build] 
+[custom build]    Compiling worker v0.8.7
+[custom build] 
+[custom build]    Compiling nosfry-worker v0.3.0 (/Users/xu/Desktop/qntx/nosfry-wt/blossom-marmot/crates/nosfry-worker)
+[custom build] 
+[custom build]     Finished `release` profile [optimized] target(s) in 1m 11s
+[custom build] 
+[custom build] [INFO]: Optimizing wasm binaries with `wasm-opt`...
+[custom build] 
+[custom build] [INFO]: ✨  Done in 1m 14s
+[custom build] [INFO]: 📦   Your wasm pkg is ready to publish at /Users/xu/Desktop/qntx/nosfry-wt/blossom-marmot/crates/nosfry-worker/build/.tmp.
+[custom build] 
+[custom build] 
+[custom build]   index.js  30.5kb
+[custom build] 
+[custom build] ⚡ Done in 14ms
+[custom build] 
+Your Worker has access to the following bindings:
+Binding                              Resource                  Mode
+env.RELAY (RelayObject)              Durable Object            local
+env.NOSFRY_CONFIG ("(hidden)")       Environment Variable      local
+
+⎔ Starting local server...
+[wrangler:info] Ready on http://localhost:7811
+restored 0 connections, 0 subscriptions (0 rows dropped)
+[wrangler:info] GET / 200 OK (38ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (14ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (11ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (1ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (9ms)
+[wrangler:info] GET / 200 OK (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (12ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (9ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (15ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (13ms)
+[wrangler:info] GET / 200 OK (6ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (6ms)
+[wrangler:info] GET / 101 Switching Protocols (8ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+restored 5 connections, 4 subscriptions (0 rows dropped)
+restored 3 connections, 4 subscriptions (0 rows dropped)
+[wrangler:info] GET / 101 Switching Protocols (15ms)
+restored 4 connections, 4 subscriptions (0 rows dropped)
+restored 4 connections, 4 subscriptions (0 rows dropped)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (5ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (29ms)
+[wrangler:info] GET / 101 Switching Protocols (29ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (12ms)
+[wrangler:info] GET / 101 Switching Protocols (46ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (5ms)
+[wrangler:info] GET / 200 OK (5ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (8ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (4ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (1ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (24ms)
+[wrangler:info] GET / 101 Switching Protocols (1ms)
+[wrangler:info] GET / 101 Switching Protocols (1ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (1ms)
+[wrangler:info] GET / 101 Switching Protocols (3ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (1ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (27ms)
+[wrangler:info] GET / 101 Switching Protocols (1ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)
+[wrangler:info] GET / 101 Switching Protocols (5ms)
+[wrangler:info] GET / 101 Switching Protocols (1ms)
+[wrangler:info] GET / 101 Switching Protocols (2ms)

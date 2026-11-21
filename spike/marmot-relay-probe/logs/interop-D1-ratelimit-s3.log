@@ -1,0 +1,12 @@
+    Finished `release` profile [optimized] target(s) in 1.21s
+     Running tests/wn.rs (target/release/deps/wn-152c83caa06a1f99)
+
+running 1 test
+test scenario3_bulk_and_membership ... s3: wn sent 25 in 3.1s
+s3: mk sent 475 in 4.3s
+s3: ingested 500 events in 0.1s, decoded 25/25 wn
+SCENARIO-3 PASS 29.1s
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5 filtered out; finished in 29.11s
+
