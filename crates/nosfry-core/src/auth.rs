@@ -40,7 +40,7 @@ pub struct AuthConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            restricted_read_kinds: vec![4, 1059],
+            restricted_read_kinds: vec![4, 1059, 21059],
             restrict_read_to_involved: true,
         }
     }
@@ -275,6 +275,23 @@ mod tests {
             gate(&open, &[other]).allows(packed),
             "involved_only = false"
         );
+    }
+
+    #[test]
+    fn default_restricts_dms_and_wraps() {
+        assert_eq!(
+            AuthConfig::default().restricted_read_kinds,
+            vec![4, 1059, 21059],
+            "DMs plus stored and ephemeral gift wraps"
+        );
+        let rules = auth_rules(
+            "wss://relay.example",
+            &AuthConfig::default().restricted_read_kinds,
+            true,
+        );
+        for kind in [4, 1059, 21059] {
+            assert!(rules.is_restricted(kind), "kind {kind}");
+        }
     }
 
     #[test]

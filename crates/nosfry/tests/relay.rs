@@ -2523,6 +2523,85 @@ async fn auth_dm_flow_restricts_reads_to_involved() {
     relay.stop().await;
 }
 
+/// NIP-59 ephemeral wraps (kind 21059) are restricted by default:
+/// an unauthenticated REQ for them is refused, and a live wrap is
+/// delivered only to its authenticated `p` recipient — never to an
+/// uninvolved authenticated subscriber.
+#[tokio::test]
+async fn ephemeral_wrap_restricted_to_recipient() {
+    let relay = Relay::start_with(auth_config()).await;
+    let url = "wss://relay.example.com";
+    let pk2 = faster_hex::hex_string(&key(2).x_only_public_key().0.to_byte_array());
+
+    // An unauthenticated REQ for the restricted ephemeral kind is
+    // challenged then refused.
+    let mut ws_a = relay.connect().await;
+    send_text(&mut ws_a, &req_wire("sub", "{\"kinds\":[21059]}")).await;
+    let auth = json(&recv_text(&mut ws_a, T).await);
+    assert_eq!(auth[0], "AUTH", "{auth}");
+    let challenge = auth[1].as_str().unwrap().to_owned();
+    let closed = json(&recv_text(&mut ws_a, T).await);
+    assert_eq!(closed[0], "CLOSED", "{closed}");
+
+    // The recipient authenticates and subscribes for their wraps.
+    send_text(&mut ws_a, &auth_wire(&key(2), &challenge, url)).await;
+    assert_eq!(json(&recv_text(&mut ws_a, T).await)[2], true);
+    send_text(
+        &mut ws_a,
+        &req_wire("wraps", &format!("{{\"kinds\":[21059],\"#p\":[\"{pk2}\"]}}")),
+    )
+    .await;
+    let eose = json(&recv_text(&mut ws_a, T).await);
+    assert_eq!(eose[0], "EOSE", "{eose}");
+
+    // An uninvolved third party authenticates and subscribes to
+    // wraps plus a public kind so a marker bounds the window.
+    let mut ws_b = relay.connect().await;
+    send_text(&mut ws_b, &req_wire("probe", "{\"kinds\":[21059]}")).await;
+    let auth_b = json(&recv_text(&mut ws_b, T).await);
+    let challenge_b = auth_b[1].as_str().unwrap().to_owned();
+    drop(json(&recv_text(&mut ws_b, T).await)); // CLOSED
+    send_text(&mut ws_b, &auth_wire(&key(3), &challenge_b, url)).await;
+    assert_eq!(json(&recv_text(&mut ws_b, T).await)[2], true);
+    send_text(&mut ws_b, &req_wire("all", "{\"kinds\":[21059,1]}")).await;
+    let eose = json(&recv_text(&mut ws_b, T).await);
+    assert_eq!(eose[0], "EOSE", "{eose}");
+
+    // A live wrap for key2 plus a public marker. OK on the publisher
+    // means both are already queued at every shard.
+    let mut pub_ws = relay.connect().await;
+    let wrap = common::event(&key(7), 21059, now(), &json!([["p", pk2]]), "gift");
+    send_text(&mut pub_ws, &event_wire(&wrap)).await;
+    assert_eq!(recv_ok(&mut pub_ws, &wrap).await[2], true);
+    let marker = common::event(&key(5), 1, now(), &json!([]), "marker");
+    send_text(&mut pub_ws, &event_wire(&marker)).await;
+    assert_eq!(recv_ok(&mut pub_ws, &marker).await[2], true);
+
+    // ws_a's wrap subscription receives the wrap live.
+    let live = json(&recv_text(&mut ws_a, T).await);
+    assert_eq!(live[0], "EVENT", "{live}");
+    assert_eq!(live[1], "wraps");
+    assert_eq!(live[2]["id"], wrap.id().to_string());
+
+    // ws_b's stream yields only the marker — the barrier EOSE queued
+    // after both publishes proves the wrap was never delivered.
+    send_text(&mut ws_b, &req_wire("barrier", "{\"kinds\":[1]}")).await;
+    let mut ids = Vec::new();
+    loop {
+        let frame = json(&recv_text(&mut ws_b, T).await);
+        match (frame[0].as_str().unwrap(), frame[1].as_str().unwrap()) {
+            // Only live `all`-sub events prove what the gate let
+            // through; `barrier` replays the stored marker too.
+            ("EVENT", "all") => ids.push(frame[2]["id"].as_str().unwrap().to_owned()),
+            ("EOSE", "barrier") => break,
+            _ => {}
+        }
+    }
+    assert_eq!(ids, vec![marker.id().to_string()], "{ids:?}");
+
+    relay.stop().await;
+}
+
 #[tokio::test]
 async fn protected_event_requires_auth() {
     let relay = Relay::start_with(auth_config()).await;

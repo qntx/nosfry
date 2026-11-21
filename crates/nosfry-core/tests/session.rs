@@ -713,6 +713,27 @@ fn req_fully_restricted_auth_disabled() {
     );
 }
 
+/// The shipped default restricts the ephemeral wrap kind too:
+/// kind-21059 filters are fully restricted and challenged like DMs.
+#[test]
+fn req_ephemeral_wrap_restricted_by_default() {
+    let mut s = session_auth(
+        "wss://relay.example.com",
+        &nosfry_core::auth::AuthConfig::default().restricted_read_kinds,
+        true,
+    );
+    let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[21059]}]");
+    let frames = sends(&out);
+    assert_eq!(
+        frames.as_slice(),
+        [
+            "[\"AUTH\",\"challenge\"]",
+            "[\"CLOSED\",\"a\",\"auth-required: requested filter requires authentication\"]",
+        ],
+        "{out:?}"
+    );
+}
+
 #[test]
 fn req_fully_restricted_challenges_once() {
     let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);

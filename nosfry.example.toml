@@ -155,8 +155,8 @@ timeout_seconds = 10
 
 [relay.auth]
 # Kinds served only to authenticated readers (strfry default: DMs and
-# gift wraps).
-restricted_read_kinds = [4, 1059]
+# both gift-wrap kinds).
+restricted_read_kinds = [4, 1059, 21059]
 # Serve restricted kinds only to authenticated pubkeys involved in the
 # event (author or "p" tag); false serves them to any authed reader.
 restrict_read_to_involved = true
