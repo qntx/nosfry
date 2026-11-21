@@ -155,8 +155,7 @@ async fn http_get(path: &str) -> (u16, String, String) {
     let content_type = head
         .lines()
         .find(|l| l.to_ascii_lowercase().starts_with("content-type:"))
-        .map(|l| l.split_once(':').map(|(_, v)| v.trim().to_owned()).unwrap())
-        .unwrap_or_default();
+        .map_or_default(|l| l.split_once(':').map(|(_, v)| v.trim().to_owned()).unwrap());
     (status, content_type, body.to_owned())
 }
 
@@ -1363,11 +1362,10 @@ async fn ephemeral_wrap_restricted_to_recipient() {
     // then refused.
     let mut ws_r = connect().await;
     let frames = req(&mut ws_r, "r", "{\"kinds\":[21059]}").await;
-    let challenge = frames
-        .iter()
-        .find(|v| v[0] == "AUTH")
-        .map(|v| v[1].as_str().unwrap().to_owned())
-        .expect("no AUTH challenge: {frames:?}");
+    let challenge = frames.iter().find(|v| v[0] == "AUTH").map_or_else(
+        || panic!("no AUTH challenge: {frames:?}"),
+        |v| v[1].as_str().unwrap().to_owned(),
+    );
     assert!(
         frames
             .iter()
@@ -1387,15 +1385,22 @@ async fn ephemeral_wrap_restricted_to_recipient() {
     // public kind, so a later marker bounds the window.
     let mut ws_x = connect().await;
     let frames = req(&mut ws_x, "r", "{\"kinds\":[21059]}").await;
-    let challenge = frames
-        .iter()
-        .find(|v| v[0] == "AUTH")
-        .map(|v| v[1].as_str().unwrap().to_owned())
-        .expect("no AUTH challenge: {frames:?}");
+    let challenge = frames.iter().find(|v| v[0] == "AUTH").map_or_else(
+        || panic!("no AUTH challenge: {frames:?}"),
+        |v| v[1].as_str().unwrap().to_owned(),
+    );
     auth_as(&mut ws_x, &other, &challenge).await;
     send(&mut ws_x, &req_wire("w", "{\"kinds\":[21059,1]}")).await;
-    let eose = recv_json(&mut ws_x).await;
-    assert_eq!(eose[0], "EOSE", "{eose}");
+    // Live events from other tests may interleave; EOSE on "w" ends
+    // the window and nothing kind-21059 may leak before it.
+    loop {
+        let frame = recv_json(&mut ws_x).await;
+        match (frame[0].as_str().unwrap(), frame[1].as_str().unwrap()) {
+            ("EVENT", "w") => assert_ne!(frame[2]["kind"], 21059, "gate leak: {frame}"),
+            ("EOSE", "w") => break,
+            _ => {}
+        }
+    }
 
     // A live wrap to the recipient plus a public marker: ws_x must
     // see the marker but never the wrap.
@@ -1440,6 +1445,8 @@ async fn ephemeral_wrap_restricted_to_recipient() {
 #[tokio::test]
 #[ignore = "needs NOSFRY_URL"]
 async fn maybe_restricted_filters_challenge_before_output() {
+    use negentropy::{Negentropy, NegentropyStorageVector};
+
     let recipient = key();
     let rp = pubkey(&recipient);
     // A stored wrap only `recipient` may read.
@@ -1491,7 +1498,6 @@ async fn maybe_restricted_filters_challenge_before_output() {
     assert_eq!(frames.last().unwrap()[0], "COUNT", "{frames:?}");
 
     // NEG-OPEN gets the challenge ahead of the first NEG-MSG.
-    use negentropy::{Negentropy, NegentropyStorageVector};
     let mut storage = NegentropyStorageVector::with_capacity(0);
     storage.seal().unwrap();
     let mut neg = Negentropy::owned(storage, 500_000).unwrap();
