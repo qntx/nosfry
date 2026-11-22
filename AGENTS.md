@@ -14,8 +14,8 @@ Local gate before a pull request:
 
 ```bash
 npx --yes @taplo/cli@0.7.0 fmt --check
-cargo +nightly fmt --all -- --check
-cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
+cargo +"$(cat .github/nightly-toolchain)" fmt --all -- --check
+cargo +"$(cat .github/nightly-toolchain)" clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo deny check
@@ -59,7 +59,7 @@ TOML is formatted by taplo (`.taplo.toml`, aligned `=`); keep `taplo fmt --check
 Fuzz one target locally (needs a nightly toolchain and `cargo-fuzz`):
 
 ```bash
-cargo +nightly fuzz run <target> -- -max_total_time=60
+cargo +"$(cat .github/nightly-toolchain)" fuzz run <target> -- -max_total_time=60
 ```
 
 `docs/` is local-only and is never pushed: the whole directory is gitignored; never commit any file under `docs/`. Locally it is a Fumadocs tree: every page needs non-empty `title` and `description` frontmatter and must be listed in its folder's `meta.json`; headings start at `##`, every fenced code block has a language. Verify doc changes with `bunx oxfmt --ignore-path=/dev/null <files>` and `bun validate-docs-tree.ts docs --lint` from a checkout of `qntx/workflows/actions/validate-docs-tree`.

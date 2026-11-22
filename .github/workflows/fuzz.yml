@@ -13,9 +13,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      nightly: ${{ steps.pin.outputs.nightly }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - id: pin
+        run: echo "nightly=$(cat .github/nightly-toolchain)" >> "$GITHUB_OUTPUT"
+
   fuzz:
+    needs: toolchain
     uses: qntx/workflows/.github/workflows/ci-rust-fuzz.yml@b1a930e790044f34f06bd5e1e0ede9e7dd5fa122 # v2.13.1
     permissions:
       contents: read
     with:
       max-total-time: 900
+      rust-version: ${{ needs.toolchain.outputs.nightly }}
