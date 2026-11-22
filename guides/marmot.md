@@ -19,10 +19,12 @@ nosfry relay --config contrib/marmot/nosfry.toml
 ## The profile, key by key
 
 `[relay] service_url = "wss://relay.example.com"` turns on NIP-42
-AUTH — set the deployed URL. Without it every Welcome is accepted
-`OK true` and then never served, because kind 1059 is only readable
-by its author or `p`-tagged recipient; the sender is told the
-message was delivered and the invitee never sees it.
+AUTH — set the deployed URL. Kind 1059 is only readable by its
+author or `p`-tagged recipient, so without AUTH no Welcome could
+ever be served: nosfry then refuses every Welcome with
+`OK false "restricted: …"` rather than acknowledging a message the
+invitee would never see (older relays, nosfry 0.3 included, answered
+`OK true` and swallowed it).
 
 `[events] max_event_size = 2097152` is the spec's SHOULD for group
 and inbox relays: a Welcome wrap is about 3x the MLS Welcome it
