@@ -453,7 +453,7 @@ In scope:
 - Configuration surface: `nosfry.example.toml`, `docker/nosfry.toml`,
   `crates/nosfry-worker/wrangler.toml`
 - Build and release:
-  - `.github/workflows/{ci,audit,container,publish,release,fuzz,dependabot}.yml`;
+  - `.github/workflows/{ci,audit,container,publish,release,fuzz}.yml`;
   - the reusable workflows and actions they call from `qntx/workflows`,
     pinned by commit SHA (the caller side and the permissions granted);
   - `Dockerfile`, `.dockerignore`, `rust-toolchain.toml`.
