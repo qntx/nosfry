@@ -74,7 +74,9 @@ code computes.
 | [86](https://github.com/nostr-protocol/nips/blob/master/86.md) | Relay management API       | when `relay.management.admins` is set                                             |
 
 NIP-98 authorizes the NIP-86 calls. strfry's write-policy plugins and
-`strfry export` dumps work unchanged ([guides/administration.md](guides/administration.md)).
+`strfry export` dumps work unchanged ([guides/administration.md](guides/administration.md)),
+and `nosfry sync` reconciles with any NIP-77 relay, strfry included, in
+either direction ([guides/sync.md](guides/sync.md)).
 
 ## Performance
 
@@ -99,8 +101,8 @@ to 3,000 events/s, heavier per idle connection.
 ## Documentation
 
 - [guides/](guides/README.md): install, configuration reference, deployment,
-  administration, Tor, Workers, a test relay for local development and CI,
-  and the security model and limits.
+  administration, sync with other relays, Tor, Workers, a test relay for
+  local development and CI, and the security model and limits.
 - [`nosfry.example.toml`](nosfry.example.toml): every configuration key with its
   default.
 - [CHANGELOG.md](CHANGELOG.md), [SECURITY.md](SECURITY.md) (how to report a

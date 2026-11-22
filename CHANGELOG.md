@@ -163,6 +163,20 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Added
 
+- `nosfry sync <url> [--filter] [--dir down|up|both] [--since]
+  [--until]` reconciles the local database with any NIP-77 relay
+  (nosfry, strfry) and transfers the difference (native). Memory stays
+  bounded whatever the set sizes: the range is reconciled in time
+  windows of at most 100,000 local events and 100,000 differences,
+  split further when the remote answers `blocked:`. Frame sizes and
+  download batches follow the remote's NIP-11 limits, `rate-limited:`
+  answers are retried after their hint, and an interrupted run is
+  resumed by running it again. Downloads pass the same validation as a
+  client `EVENT`, NIP-86 moderation, and the write-policy plugin
+  (`"sourceType":"Sync"`); protected events and restricted kinds are
+  never uploaded. Exit codes: 0 complete, 3 partial, 1 failed. NIP-42
+  keys come only from `--auth-key-file` (mode 600); loopback and
+  private addresses need `--allow-private`. See `guides/sync.md`.
 - `[relay] service_url_aliases` lists further `ws://`/`wss://` names
   the relay answers to (for example its onion address); NIP-42 AUTH,
   NIP-62 requests to vanish, and NIP-98 management calls accept the
@@ -276,6 +290,11 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Fixed
 
+- Events written by another process while the relay runs (`nosfry
+  import`, `nosfry sync`) were invisible to new `REQ`, `COUNT` and
+  `NEG-OPEN` queries until the relay stored an event of its own. Each
+  query now starts from the store's latest commit; such events are
+  still not broadcast to subscriptions that are already open (native).
 - The native relay refused a WebSocket frame of exactly
   `max_websocket_payload_size` bytes (yawc's limit is exclusive);
   the limit is now inclusive on both editions.
