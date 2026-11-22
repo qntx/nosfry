@@ -34,6 +34,7 @@ mod peer;
 mod policy;
 mod reader;
 mod shard;
+pub mod sync;
 mod writer;
 
 use std::future::Future;
@@ -194,7 +195,7 @@ fn reader_channels(
 }
 
 /// Start the write-policy task unless the plugin command is empty.
-fn start_policy(cfg: &config::WritePolicy) -> Option<policy::WritePolicy> {
+pub(crate) fn start_policy(cfg: &config::WritePolicy) -> Option<policy::WritePolicy> {
     (!cfg.plugin.is_empty())
         .then(|| policy::WritePolicy::new(&cfg.plugin, Duration::from_secs(cfg.timeout_seconds)))
 }
