@@ -79,11 +79,15 @@ const SHARD_QUEUE: usize = 4096;
 
 /// Scan jobs (REQ, COUNT, and NEG-OPEN `Start`s) admitted to one
 /// reader and not yet finished. This — not the inbox size — is the
-/// binding admission limit: one reader's live scan count can never
-/// exceed it, so time-sliced work stays bounded no matter how many
-/// subscriptions clients open, and the shard sheds the excess with
+/// binding shared admission limit: one reader's live scan count can
+/// never exceed it, so time-sliced work stays bounded no matter how
+/// many subscriptions clients open. Fairness across connections
+/// comes first: a connection's own pending-query budget
+/// (`2 * max_subs_per_connection`, built in `Connection::new`)
+/// sheds it alone with `rate-limited: too many pending queries`
+/// before it can spend this shared cap, which sheds with
 /// `rate-limited: relay busy` instead of queueing unboundedly.
-const READER_JOBS: usize = 16_384;
+const READER_JOBS: usize = 4_096;
 
 /// One reader inbox's capacity: `READER_JOBS` scan slots plus
 /// `SHARD_QUEUE` of headroom for the control messages (`Cancel`,
@@ -174,7 +178,7 @@ fn reader_channels(
         .into_iter()
         .map(|tx| ReaderInbox {
             tx,
-            jobs: Arc::new(AtomicUsize::new(0)),
+            jobs: Arc::new(channels::JobBudget::new(READER_JOBS)),
         })
         .collect();
     (inboxes, rxs)

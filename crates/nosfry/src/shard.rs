@@ -15,7 +15,8 @@ use nosfry_lmdb::Store;
 use tokio::sync::mpsc;
 
 use crate::channels::{
-    ConnId, JobSlot, Out, Outbound, ReaderInbox, ReaderMsg, ScanKind, ScanStart, ShardMsg, route,
+    ConnId, JobSlot, Out, Outbound, ReaderInbox, ReaderMsg, ScanKind, ScanLease, ScanStart,
+    ShardMsg, route,
 };
 use crate::metrics::{Metrics, ReaderBusy};
 
@@ -216,16 +217,28 @@ impl Shard {
         }
     }
 
-    /// Admit one scan: take a reader job slot first (the job cap, not
-    /// the inbox, is the binding limit), then — for a REQ — charge the
-    /// subscription budget and register the live machinery, and only
-    /// then hand the `Start` to the reader. A full inbox undoes the
-    /// registration exactly like the `Remove` path before shedding; a
-    /// disconnected one means shutdown and drops silently.
+    /// Admit one scan: take a slot on the connection's own
+    /// pending-query budget first, then one on the reader's job
+    /// budget (the job cap, not the inbox, is the binding shared
+    /// limit), then — for a REQ — charge the subscription budget and
+    /// register the live machinery, and only then hand the `Start` to
+    /// the reader. A connection opening queries faster than its
+    /// reader drains them hits its own cap and is shed alone, before
+    /// it may spend the shared cap on other connections' work. A
+    /// full inbox undoes the registration exactly like the `Remove`
+    /// path before shedding; a disconnected one means shutdown and
+    /// drops silently.
     fn register(&mut self, start: Box<ScanStart>) {
-        let slot = JobSlot::try_acquire(&route(&self.readers, start.conn).jobs, crate::READER_JOBS);
-        let Some(slot) = slot else {
-            self.shed_start(&start);
+        let Some(conn_slot) = JobSlot::try_acquire(&start.conn_jobs) else {
+            self.shed_start(
+                &start,
+                "rate-limited: too many pending queries",
+                ReaderBusy::ConnScan,
+            );
+            return;
+        };
+        let Some(reader_slot) = JobSlot::try_acquire(&route(&self.readers, start.conn).jobs) else {
+            self.shed_start(&start, "rate-limited: relay busy", ReaderBusy::Scan);
             return;
         };
         // A COUNT or sync needs the snapshot but no live
@@ -235,7 +248,13 @@ impl Shard {
             return;
         }
         let conn = start.conn;
-        let msg = ReaderMsg::Start { start, slot };
+        let msg = ReaderMsg::Start {
+            start,
+            lease: ScanLease {
+                _conn: conn_slot,
+                _reader: reader_slot,
+            },
+        };
         // `Full` hands back the message just sent — always the `Start`
         // here; any other variant is impossible and its lease simply
         // drops with the message. A disconnect means shutdown.
@@ -245,24 +264,25 @@ impl Shard {
             if matches!(failed.kind, ScanKind::Req) {
                 self.unregister_req(failed.conn, &failed.sub.id);
             }
-            self.shed_start(&failed);
+            self.shed_start(&failed, "rate-limited: relay busy", ReaderBusy::Scan);
         }
     }
 
-    /// The shed answer for an un-admitted scan: `CLOSED rate-limited:
-    /// relay busy` for REQ/COUNT, `NEG-ERR` for a sync open — the same
-    /// frame family a client-side rate limit produces, so SDKs back
-    /// off and the freed session/neg slot tears the sub down itself.
-    fn shed_start(&self, start: &ScanStart) {
-        self.metrics.reader_busy(ReaderBusy::Scan);
+    /// The shed answer for an un-admitted scan: `CLOSED <reason>` for
+    /// REQ/COUNT, `NEG-ERR` for a sync open — the same frame family a
+    /// client-side rate limit produces, so SDKs back off and the
+    /// freed session/neg slot tears the sub down itself. `busy` is
+    /// the `nosfry_reader_busy_total` class it counts under.
+    fn shed_start(&self, start: &ScanStart, reason: &'static str, busy: ReaderBusy) {
+        self.metrics.reader_busy(busy);
         match start.kind {
             ScanKind::Req | ScanKind::Count => start.out.push(Out::Closed {
                 sub: start.sub.clone(),
-                reason: "rate-limited: relay busy".to_owned(),
+                reason: reason.to_owned(),
             }),
             ScanKind::Neg { .. } => start.out.push(Out::Neg {
                 sub: start.sub.clone(),
-                text: neg_err_frame(&start.sub.id, "rate-limited: relay busy"),
+                text: neg_err_frame(&start.sub.id, reason),
                 closes: true,
             }),
         }
@@ -479,7 +499,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
-    use crate::channels::{ScanKind, ScanStart};
+    use crate::channels::{JobBudget, ScanKind, ScanStart};
 
     fn event(kind: u16, content: &str) -> Arc<Event> {
         let keypair = Keypair::from_secret_key(&SecretKey::from_secret_bytes([7u8; 32]).unwrap());
@@ -525,10 +545,10 @@ mod tests {
     ) -> (
         Arc<[ReaderInbox]>,
         std::sync::mpsc::Receiver<ReaderMsg>,
-        Arc<AtomicUsize>,
+        Arc<JobBudget>,
     ) {
         let (tx, rx) = std::sync::mpsc::sync_channel(cap);
-        let jobs = Arc::new(AtomicUsize::new(0));
+        let jobs = Arc::new(JobBudget::new(crate::READER_JOBS));
         (
             Arc::from([ReaderInbox {
                 tx,
@@ -546,7 +566,7 @@ mod tests {
     ) -> (
         Shard,
         std::sync::mpsc::Receiver<ReaderMsg>,
-        Arc<AtomicUsize>,
+        Arc<JobBudget>,
         tempfile::TempDir,
     ) {
         let dir = tempfile::tempdir().unwrap();
@@ -590,6 +610,7 @@ mod tests {
             out: out.clone(),
             gate: ReadGate::default(),
             snapshot: 0,
+            conn_jobs: Arc::new(JobBudget::new(usize::MAX)),
         })));
         shard.handle(ShardMsg::Remove {
             conn: 1,
@@ -603,6 +624,7 @@ mod tests {
             out,
             gate: ReadGate::default(),
             snapshot: 0,
+            conn_jobs: Arc::new(JobBudget::new(usize::MAX)),
         })));
         // The stale generation's scan finished late; Activate is ignored.
         shard.handle(ShardMsg::Activate {
@@ -655,6 +677,7 @@ mod tests {
             out,
             gate: ReadGate::default(),
             snapshot: 0,
+            conn_jobs: Arc::new(JobBudget::new(usize::MAX)),
         })));
 
         match reader_rx.try_recv() {
@@ -688,6 +711,7 @@ mod tests {
             out,
             gate: ReadGate::default(),
             snapshot: 0,
+            conn_jobs: Arc::new(JobBudget::new(usize::MAX)),
         })));
         shard.handle(ShardMsg::Remove {
             conn: 1,
@@ -713,6 +737,27 @@ mod tests {
             out: out.clone(),
             gate: ReadGate::default(),
             snapshot: 0,
+            conn_jobs: Arc::new(JobBudget::new(usize::MAX)),
+        }))
+    }
+
+    /// A REQ on an explicit connection budget (the fairness cap).
+    fn req_budget(
+        conn: u64,
+        sub: &str,
+        generation: u64,
+        out: &Outbound,
+        conn_jobs: &Arc<JobBudget>,
+    ) -> ShardMsg {
+        ShardMsg::Register(Box::new(ScanStart {
+            conn,
+            sub: sub_key(sub, generation),
+            kind: ScanKind::Req,
+            filters: filters(),
+            out: out.clone(),
+            gate: ReadGate::default(),
+            snapshot: 0,
+            conn_jobs: Arc::clone(conn_jobs),
         }))
     }
 
@@ -1007,6 +1052,7 @@ mod tests {
                 out: out.clone(),
                 gate: ReadGate::default(),
                 snapshot: 0,
+                conn_jobs: Arc::new(JobBudget::new(usize::MAX)),
             })));
         }
         assert_eq!(charge.load(Ordering::Relaxed), 0);
@@ -1017,7 +1063,7 @@ mod tests {
     fn busy_shard() -> (
         Shard,
         std::sync::mpsc::Receiver<ReaderMsg>,
-        Arc<AtomicUsize>,
+        Arc<JobBudget>,
         Arc<Metrics>,
         tempfile::TempDir,
     ) {
@@ -1062,7 +1108,7 @@ mod tests {
             }
             other => panic!("expected shed Closed, got {other:?}"),
         }
-        assert_eq!(jobs.load(Ordering::Relaxed), 0, "the slot is returned");
+        assert_eq!(jobs.jobs.load(Ordering::Relaxed), 0, "the slot is returned");
         let state = &shard.conns[&1];
         assert!(state.pending.is_empty(), "no pending buffer survives");
         assert!(state.sub_bytes.is_empty(), "no charge survives");
@@ -1091,6 +1137,7 @@ mod tests {
                 out: out.clone(),
                 gate: ReadGate::default(),
                 snapshot: 0,
+                conn_jobs: Arc::new(JobBudget::new(usize::MAX)),
             })));
         }
 
@@ -1114,7 +1161,7 @@ mod tests {
     #[test]
     fn reader_job_cap_sheds_before_registering() {
         let (mut shard, _reader_rx, jobs, _dir) = shard_with_reader_cap(8);
-        jobs.store(crate::READER_JOBS, Ordering::Relaxed);
+        jobs.jobs.store(crate::READER_JOBS, Ordering::Relaxed);
         let (out, out_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
 
         shard.handle(req(1, "s", 1, &out));
@@ -1178,5 +1225,40 @@ mod tests {
             "{}",
             metrics.render(0, 0, 0, 0, 0)
         );
+    }
+    /// The per-connection pending-query budget sheds only the
+    /// flooding connection: another connection on the same reader is
+    /// still admitted, and the conn slot returns when the queued
+    /// `Start` drops.
+    #[test]
+    fn conn_job_cap_sheds_only_that_connection() {
+        let (mut shard, reader_rx, _jobs, _dir) = shard_with_reader_cap(8);
+        let conn_jobs = Arc::new(JobBudget::new(1));
+        let (out1, out_rx1) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
+
+        shard.handle(req_budget(1, "s1", 1, &out1, &conn_jobs));
+        assert_eq!(conn_jobs.jobs.load(Ordering::Relaxed), 1);
+
+        shard.handle(req_budget(1, "s2", 1, &out1, &conn_jobs));
+        match out_rx1.try_recv() {
+            Some(Out::Closed { sub, reason }) => {
+                assert_eq!(sub.id.as_str(), "s2");
+                assert_eq!(reason, "rate-limited: too many pending queries");
+            }
+            other => panic!("expected shed Closed, got {other:?}"),
+        }
+        assert_eq!(conn_jobs.jobs.load(Ordering::Relaxed), 1);
+
+        // Another connection on the same reader is still admitted.
+        let (out2, _out_rx2) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
+        shard.handle(req(2, "s3", 1, &out2));
+
+        // Dropping conn 1's queued `Start` returns its conn slot.
+        match reader_rx.try_recv() {
+            Ok(ReaderMsg::Start { start, .. }) => assert_eq!(start.conn, 1),
+            other => panic!("expected conn 1's Start, got {other:?}"),
+        }
+        assert_eq!(conn_jobs.jobs.load(Ordering::Relaxed), 0);
+        assert!(matches!(reader_rx.try_recv(), Ok(ReaderMsg::Start { .. })));
     }
 }

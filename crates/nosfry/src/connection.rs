@@ -104,6 +104,12 @@ struct Connection<'a> {
     out: Outbound,
     /// Ping interval, fixed at connect time.
     ping_interval: Duration,
+    /// This connection's pending-query budget: its live
+    /// subscriptions plus as many replaced or cancelled scans still
+    /// waiting for their `Cancel`, COUNTs and syncs included.
+    /// Reaching it means the client opens queries faster than its
+    /// reader drains them, so only this connection is shed.
+    conn_jobs: Arc<crate::channels::JobBudget>,
     /// Reusable drained-batch buffer (`VecDeque` keeps FIFO order and
     /// its capacity across batches without a `drain` loop).
     batch: VecDeque<Out>,
@@ -150,6 +156,9 @@ impl<'a> Connection<'a> {
                 ),
                 out,
                 ping_interval: Duration::from_secs(live.config.relay.auto_ping_seconds),
+                conn_jobs: Arc::new(crate::channels::JobBudget::new(
+                    (2 * live.limits.req.max_subs_per_connection).max(1),
+                )),
                 batch: VecDeque::new(),
             },
             out_rx,
@@ -430,6 +439,7 @@ impl<'a> Connection<'a> {
                     gate,
                     snapshot: 0,
                     out: self.out.clone(),
+                    conn_jobs: Arc::clone(&self.conn_jobs),
                 })))
                 .await,
         );

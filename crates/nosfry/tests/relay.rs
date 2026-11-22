@@ -4529,9 +4529,10 @@ async fn landing_security_headers() {
 /// store holds 5 000 kind-1 events; twenty flooders re-REQ on ten
 /// rotating subscriptions each with `limit: 500` — the most
 /// expensive canned scan — while a victim publishes and reads back.
-/// Everything the flooders receive must be a scan answer or the shed
-/// `CLOSED rate-limited: relay busy`; the victim's every round trip
-/// lands within `T`.
+/// Everything the flooders receive must be a scan answer or a shed
+/// `CLOSED` (`rate-limited: too many pending queries` when their own
+/// pending-query budget is full, `rate-limited: relay busy` when the
+/// reader's is); the victim's every round trip lands within `T`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn req_flood_does_not_starve_victims() {
     use nosfry_lmdb::{Store, StoreOptions};
@@ -4582,6 +4583,7 @@ async fn req_flood_does_not_starve_victims() {
             let mut verbs: std::collections::HashMap<String, usize> =
                 std::collections::HashMap::new();
             let mut shed = 0usize;
+            let mut conn_shed = 0usize;
             let mut other_closed = Vec::new();
             while let Some(frame) = rx.next().await {
                 if frame.opcode() != yawc::OpCode::Text {
@@ -4592,15 +4594,14 @@ async fn req_flood_does_not_starve_victims() {
                 let verb = frame[0].as_str().unwrap().to_owned();
                 *verbs.entry(verb.clone()).or_default() += 1;
                 if verb == "CLOSED" {
-                    let reason = frame[2].as_str().unwrap();
-                    if reason == "rate-limited: relay busy" {
-                        shed += 1;
-                    } else {
-                        other_closed.push(reason.to_owned());
+                    match frame[2].as_str().unwrap() {
+                        "rate-limited: relay busy" => shed += 1,
+                        "rate-limited: too many pending queries" => conn_shed += 1,
+                        other => other_closed.push(other.to_owned()),
                     }
                 }
             }
-            (verbs, shed, other_closed)
+            (verbs, shed, conn_shed, other_closed)
         }));
     }
 
@@ -4642,9 +4643,12 @@ async fn req_flood_does_not_starve_victims() {
                             break;
                         }
                         "CLOSED" => {
-                            assert_eq!(
-                                frame[2].as_str().unwrap(),
-                                "rate-limited: relay busy",
+                            assert!(
+                                matches!(
+                                    frame[2].as_str().unwrap(),
+                                    "rate-limited: relay busy"
+                                        | "rate-limited: too many pending queries"
+                                ),
                                 "victim REQ closed for another reason"
                             );
                             break;
@@ -4675,12 +4679,14 @@ async fn req_flood_does_not_starve_victims() {
     }
     let mut verbs = std::collections::HashMap::new();
     let mut shed = 0usize;
+    let mut conn_shed = 0usize;
     for read in flood_reads {
-        let (v, s, other_closed) = read.await.unwrap();
+        let (v, s, cs, other_closed) = read.await.unwrap();
         for (verb, n) in v {
             *verbs.entry(verb).or_insert(0usize) += n;
         }
         shed += s;
+        conn_shed += cs;
         assert!(
             other_closed.is_empty(),
             "shed reasons were {other_closed:?}"
@@ -4693,8 +4699,8 @@ async fn req_flood_does_not_starve_victims() {
         );
     }
     eprintln!(
-        "req_flood: {sent} REQs from {FLOODERS} flooders -> {verbs:?}, {shed} shed; \
-         {i} victim rounds, {victim_sheds} victim sheds"
+        "req_flood: {sent} REQs from {FLOODERS} flooders -> {verbs:?}, {shed} shed \
+         (reader) + {conn_shed} shed (conn); {i} victim rounds, {victim_sheds} victim sheds"
     );
 
     // The relay must still answer a fresh REQ after the flood — no

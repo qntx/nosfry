@@ -149,7 +149,7 @@ pub(crate) enum ShardMsg {
     },
 }
 
-/// One reader thread's inbox plus its job counter: the shards route
+/// One reader thread's inbox plus its job budget: the shards route
 /// `conn % readers.len()` here and charge one job per admitted
 /// `Start`, so a shard's `try_send` never has to wait for a reader.
 #[derive(Debug)]
@@ -158,28 +158,51 @@ pub(crate) struct ReaderInbox {
     pub(crate) tx: SyncSender<ReaderMsg>,
     /// Scan jobs admitted to this reader and not yet finished —
     /// summed into the `nosfry_reader_jobs` gauge.
-    pub(crate) jobs: Arc<AtomicUsize>,
+    pub(crate) jobs: Arc<JobBudget>,
 }
 
-/// RAII lease on one reader job slot: the shard takes it at admission
-/// and the scan entry drops it — finished, errored, cancelled, or the
-/// connection gone.
+/// A counted admission capacity: `jobs` slots in flight, refusing
+/// at `cap`. Shared per reader inbox ([`crate::READER_JOBS`]) and
+/// per connection — a connection's budget covers its live
+/// subscriptions plus as many replaced or cancelled scans still
+/// waiting for their `Cancel`, COUNTs and syncs included.
+#[derive(Debug)]
+pub(crate) struct JobBudget {
+    /// Jobs in flight — gauge input for the reader budgets.
+    pub(crate) jobs: AtomicUsize,
+    /// Admission limit.
+    cap: usize,
+}
+
+impl JobBudget {
+    /// An empty budget at `cap`.
+    pub(crate) const fn new(cap: usize) -> Self {
+        Self {
+            jobs: AtomicUsize::new(0),
+            cap,
+        }
+    }
+}
+
+/// RAII lease on one [`JobBudget`] slot: the shard takes it at
+/// admission and the scan entry drops it — finished, errored,
+/// cancelled, or the connection gone.
 #[derive(Debug)]
 pub(crate) struct JobSlot {
-    /// The counter this lease decrements on drop.
-    jobs: Arc<AtomicUsize>,
+    /// The budget this lease returns its slot to on drop.
+    budget: Arc<JobBudget>,
 }
 
 impl JobSlot {
-    /// Take one job slot; `None` once `cap` jobs are in flight. CAS
+    /// Take one slot; `None` once `cap` jobs are in flight. CAS
     /// loop like `shard::try_charge`: refuse, never overshoot.
-    pub(crate) fn try_acquire(jobs: &Arc<AtomicUsize>, cap: usize) -> Option<Self> {
-        let mut current = jobs.load(Ordering::Relaxed);
+    pub(crate) fn try_acquire(budget: &Arc<JobBudget>) -> Option<Self> {
+        let mut current = budget.jobs.load(Ordering::Relaxed);
         loop {
-            if current >= cap {
+            if current >= budget.cap {
                 return None;
             }
-            match jobs.compare_exchange_weak(
+            match budget.jobs.compare_exchange_weak(
                 current,
                 current + 1,
                 Ordering::Relaxed,
@@ -187,7 +210,7 @@ impl JobSlot {
             ) {
                 Ok(_) => {
                     return Some(Self {
-                        jobs: Arc::clone(jobs),
+                        budget: Arc::clone(budget),
                     });
                 }
                 Err(now) => current = now,
@@ -198,8 +221,20 @@ impl JobSlot {
 
 impl Drop for JobSlot {
     fn drop(&mut self) {
-        self.jobs.fetch_sub(1, Ordering::Relaxed);
+        self.budget.jobs.fetch_sub(1, Ordering::Relaxed);
     }
+}
+
+/// Both slot leases one admitted `Start` carries into the reader's
+/// scan entry: the owning connection's per-connection budget and the
+/// reader's shared `READER_JOBS` budget. Both release when the entry
+/// drops.
+#[derive(Debug)]
+pub(crate) struct ScanLease {
+    /// Slot on the owning connection's budget.
+    pub(crate) _conn: JobSlot,
+    /// Slot on the reader's budget.
+    pub(crate) _reader: JobSlot,
 }
 
 /// Inbox item for a reader thread.
@@ -212,8 +247,9 @@ pub(crate) enum ReaderMsg {
     Start {
         /// The scan arguments.
         start: Box<ScanStart>,
-        /// The job lease counted toward `nosfry_reader_jobs`.
-        slot: JobSlot,
+        /// The job leases counted toward the connection's and
+        /// reader's budgets.
+        lease: ScanLease,
     },
     /// Cancel one scan.
     Cancel {
@@ -271,6 +307,9 @@ pub(crate) struct ScanStart {
     pub(crate) snapshot: u64,
     /// Where results go.
     pub(crate) out: Outbound,
+    /// The owning connection's pending-query budget — its live subs
+    /// plus scans still waiting for their `Cancel`.
+    pub(crate) conn_jobs: Arc<JobBudget>,
 }
 
 /// A `NEG-MSG` forwarded to the reader owning the sync (boxed: it

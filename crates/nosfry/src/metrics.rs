@@ -133,9 +133,11 @@ impl EventOutcome {
 /// because the reader admission limits were hit.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ReaderBusy {
-    /// A REQ/COUNT/NEG-OPEN `Start` shed at the job cap or a full
-    /// inbox.
+    /// A REQ/COUNT/NEG-OPEN `Start` shed at the reader job cap or a
+    /// full inbox.
     Scan,
+    /// A `Start` shed at its connection's pending-query budget.
+    ConnScan,
     /// A `NEG-MSG` shed on a full inbox.
     NegMsg,
     /// A `Cancel`/`CancelConn`/`NegClose` dropped on a full inbox.
@@ -144,12 +146,13 @@ pub(crate) enum ReaderBusy {
 
 impl ReaderBusy {
     /// Every class in render order.
-    const ALL: [Self; 3] = [Self::Scan, Self::NegMsg, Self::Control];
+    const ALL: [Self; 4] = [Self::Scan, Self::ConnScan, Self::NegMsg, Self::Control];
 
     /// The `msg` label value.
     const fn as_str(self) -> &'static str {
         match self {
             Self::Scan => "scan",
+            Self::ConnScan => "conn_scan",
             Self::NegMsg => "neg_msg",
             Self::Control => "control",
         }
@@ -600,6 +603,7 @@ mod tests {
         metrics.store_error(StoreOp::Scan);
         metrics.store_error(StoreOp::Scan);
         metrics.reader_busy(ReaderBusy::Scan);
+        metrics.reader_busy(ReaderBusy::ConnScan);
         metrics.reader_busy(ReaderBusy::Control);
         assert_eq!(
             metrics.render(3, 512, 0, 7, 11),
@@ -634,6 +638,7 @@ mod tests {
              # HELP nosfry_reader_busy_total Messages a shard dropped because the reader admission limits were hit.\n\
              # TYPE nosfry_reader_busy_total counter\n\
              nosfry_reader_busy_total{msg=\"scan\"} 1\n\
+             nosfry_reader_busy_total{msg=\"conn_scan\"} 1\n\
              nosfry_reader_busy_total{msg=\"control\"} 1\n\
              # HELP nosfry_connections Current WebSocket connections.\n\
              # TYPE nosfry_connections gauge\n\
