@@ -31,13 +31,24 @@ fn map<K, V>() -> Map<K, V> {
 }
 
 /// A subscription registered but not yet activated: its live matches
-/// buffer until the stored scan finishes.
+/// buffer until the stored scan finishes. Every buffered match holds
+/// an [`Outbound::reserve`] against the connection's pending budget —
+/// buffered bytes already count in `out.pending()` (and in the
+/// process total), so the reader pauses its scan on real memory
+/// pressure. A sub whose reservations alone fill the budget ends at
+/// the per-connection cap with "fell behind" for that sub only —
+/// never a connection kill, never a deadlock.
 #[derive(Debug)]
 struct PendingSub {
     /// Generation the pending state belongs to; `Activate` must match.
     generation: u64,
-    /// Buffered live matches in arrival order.
-    buffer: VecDeque<(SubKey, Arc<Event>)>,
+    /// Buffered live matches in arrival order. Entries share the
+    /// pending's `SubKey` — id from the map key, generation from
+    /// `generation` — rebuilt at flush.
+    buffer: VecDeque<Arc<Event>>,
+    /// Bytes `buffer` holds reserved on the connection's `Outbound`;
+    /// every teardown path releases them before the `PendingSub` dies.
+    reserved: usize,
 }
 
 /// Per-connection state inside one shard; created on `Register`, which
@@ -156,7 +167,7 @@ impl Shard {
                     return;
                 }
                 if let Some(pending) = state.pending.remove(&sub.id) {
-                    flush(&state.out, pending.buffer);
+                    flush(&state.out, &sub.id, pending);
                 }
             }
             ShardMsg::Remove { conn, sub_id } => {
@@ -166,7 +177,7 @@ impl Shard {
             ShardMsg::RemoveConn { conn } => {
                 self.monitors.remove_connection(conn);
                 if let Some(state) = self.conns.remove(&conn) {
-                    release(&self.sub_charge, state.sub_bytes.values().sum());
+                    self.release_conn(state);
                 }
                 self.forward(conn, ReaderMsg::CancelConn { conn });
             }
@@ -278,13 +289,25 @@ impl Shard {
         }
     }
 
+    /// The `RemoveConn` teardown of one connection's state: release
+    /// every live sub's byte charge and every pending buffer's
+    /// reservations.
+    fn release_conn(&self, state: ConnState) {
+        release(&self.sub_charge, state.sub_bytes.values().sum());
+        for pending in state.pending.into_values() {
+            state.out.unreserve(pending.reserved);
+        }
+    }
+
     /// The `Remove`-path state teardown: monitor index, pending
     /// buffer, and the subscription byte charge. Idempotent — also
     /// the undo for a `Start` that never reached the reader.
     fn unregister_req(&mut self, conn: ConnId, sub_id: &SubId) {
         self.monitors.remove(conn, sub_id);
         if let Some(state) = self.conns.get_mut(&conn) {
-            state.pending.remove(sub_id);
+            if let Some(pending) = state.pending.remove(sub_id) {
+                state.out.unreserve(pending.reserved);
+            }
             release_sub(state, sub_id, &self.sub_charge);
         }
     }
@@ -314,17 +337,21 @@ impl Shard {
             });
         // A re-REQ arrives as Remove + Register, but releasing an
         // old charge on insert keeps the accounting right for a
-        // bare re-Register too.
+        // bare re-Register too — and its buffer's reservations go
+        // with it.
         if let Some(old) = state.sub_bytes.insert(start.sub.id.clone(), bytes) {
             release(&self.sub_charge, old);
         }
-        state.pending.insert(
+        if let Some(old) = state.pending.insert(
             start.sub.id.clone(),
             PendingSub {
                 generation: start.sub.generation,
                 buffer: VecDeque::new(),
+                reserved: 0,
             },
-        );
+        ) {
+            state.out.unreserve(old.reserved);
+        }
         self.monitors.insert(
             start.conn,
             start.sub.clone(),
@@ -371,15 +398,21 @@ fn route_hit(
         });
         return;
     };
-    if pending.buffer.len() < PENDING_CAP {
-        pending.buffer.push_back((sub, Arc::clone(event)));
+    let frame_bytes = Out::event_bytes(&sub, event);
+    if pending.buffer.len() < PENDING_CAP && state.out.reserve(frame_bytes) {
+        pending.buffer.push_back(Arc::clone(event));
+        pending.reserved += frame_bytes;
         return;
+    }
+    // Over the entry cap or the byte budget: the reservations go
+    // back first so the `CLOSED` itself still fits.
+    if let Some(dropped) = state.pending.remove(&sub.id) {
+        state.out.unreserve(dropped.reserved);
     }
     state.out.push(Out::Closed {
         sub: sub.clone(),
         reason: "error: subscription fell behind".to_owned(),
     });
-    state.pending.remove(&sub.id);
     // Release the charge now: the `Remove` the connection sends for
     // this `Out::Closed` may be dropped as stale, and a second
     // release is a no-op on the map anyway.
@@ -389,10 +422,21 @@ fn route_hit(
     monitors.remove(conn, &sub.id);
 }
 
-/// Push every buffered live match to the connection.
-fn flush(out: &Outbound, buffer: VecDeque<(SubKey, Arc<Event>)>) {
-    for (sub, event) in buffer {
-        out.push(Out::Event { sub, event });
+/// Flush an activated pending sub: release its reservations — each
+/// push below charges the same bytes again — then send every buffered
+/// live match under the `SubKey` rebuilt from the map key and the
+/// pending generation.
+fn flush(out: &Outbound, sub_id: &SubId, pending: PendingSub) {
+    out.unreserve(pending.reserved);
+    let sub = SubKey {
+        id: sub_id.clone(),
+        generation: pending.generation,
+    };
+    for event in pending.buffer {
+        out.push(Out::Event {
+            sub: sub.clone(),
+            event,
+        });
     }
 }
 
@@ -762,14 +806,17 @@ mod tests {
     #[test]
     fn overflow_close_releases_the_charge() {
         let (mut shard, charge, _reader_rx, _dir) = shard_with_budget(0);
-        let (out, out_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
+        let (out, out_rx) = Outbound::new(usize::MAX, Arc::new(AtomicUsize::new(0)));
 
         shard.handle(req(1, "s", 1, &out));
-        let state = shard.conns.get_mut(&1).unwrap();
-        let pending = state.pending.get_mut(&SubId::parse("s").unwrap()).unwrap();
+        // Fill the pending buffer to PENDING_CAP through live batches —
+        // an unbounded budget so only the entry cap can trip.
+        let ev = event(1, "x");
         for _ in 0..PENDING_CAP {
-            pending.buffer.push_back((sub_key("s", 1), event(1, "x")));
+            shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, Arc::clone(&ev))])));
         }
+        let reserved = out.pending();
+        assert!(reserved > 0, "buffered matches went uncharged");
 
         let batch: crate::channels::Batch = vec![(1u64, event(1, "hi"))];
         shard.handle(ShardMsg::Batch(Arc::new(batch)));
@@ -779,12 +826,168 @@ mod tests {
             }
             other => panic!("expected overflow Closed, got {other:?}"),
         }
+        // The reservations went back; the queue holds only the CLOSED.
+        assert!(out.pending() < reserved, "reservations were not returned");
         assert_eq!(charge.load(Ordering::Relaxed), 0);
         // The following Remove stays a no-op.
         shard.handle(ShardMsg::Remove {
             conn: 1,
             sub_id: SubId::parse("s").unwrap(),
         });
+        assert_eq!(charge.load(Ordering::Relaxed), 0);
+    }
+
+    /// The bytes an `Out::Event` for `ev` under `id` charges —
+    /// `accounted_bytes` stated independently so drift between the
+    /// reservation and the push shows up here.
+    fn event_frame_bytes(id: &str, ev: &Event) -> usize {
+        ev.json().len() + SubId::parse(id).unwrap().json().len() + 12
+    }
+
+    /// A pending REQ's buffered live matches reserve their
+    /// `Out::Event` bytes on the connection's `Outbound` — inside the
+    /// per-connection budget and the process total — and the
+    /// `Activate` flush leaves exactly the queued frames' charge.
+    #[test]
+    fn pending_buffer_reserves_outbound_bytes() {
+        let (mut shard, _charge, _reader_rx, _dir) = shard_with_budget(0);
+        let total = Arc::new(AtomicUsize::new(0));
+        let (out, out_rx) = Outbound::new(usize::MAX, Arc::clone(&total));
+
+        shard.handle(req(1, "s", 1, &out));
+        let ev = event(1, "hi");
+        let bytes = event_frame_bytes("s", &ev);
+        shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, ev)])));
+        assert_eq!(out.pending(), bytes, "buffered match went uncharged");
+        assert_eq!(total.load(Ordering::Relaxed), bytes);
+
+        shard.handle(ShardMsg::Activate {
+            conn: 1,
+            sub: sub_key("s", 1),
+        });
+        // Unreserved then re-charged by the push: the same bytes, now
+        // a queued frame — after it, no reservation may linger.
+        assert_eq!(out.pending(), bytes);
+        assert!(matches!(out_rx.try_recv(), Some(Out::Event { .. })));
+        out_rx.written(bytes);
+        drop(out_rx);
+        assert_eq!(out.pending(), 0);
+        assert_eq!(total.load(Ordering::Relaxed), 0);
+    }
+
+    /// `Remove` on a pending sub returns its reservations.
+    #[test]
+    fn remove_unreserves_the_buffer() {
+        let (mut shard, _charge, _reader_rx, _dir) = shard_with_budget(0);
+        let total = Arc::new(AtomicUsize::new(0));
+        let (out, _out_rx) = Outbound::new(usize::MAX, Arc::clone(&total));
+
+        shard.handle(req(1, "s", 1, &out));
+        let ev = event(1, "hi");
+        shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, Arc::clone(&ev))])));
+        assert_eq!(
+            out.pending(),
+            event_frame_bytes("s", &ev),
+            "buffered match went uncharged"
+        );
+
+        shard.handle(ShardMsg::Remove {
+            conn: 1,
+            sub_id: SubId::parse("s").unwrap(),
+        });
+        assert_eq!(out.pending(), 0, "Remove kept the reservation");
+        assert_eq!(total.load(Ordering::Relaxed), 0);
+    }
+
+    /// `RemoveConn` returns every pending sub's reservations.
+    #[test]
+    fn remove_conn_unreserves_the_buffer() {
+        let (mut shard, _charge, _reader_rx, _dir) = shard_with_budget(0);
+        let total = Arc::new(AtomicUsize::new(0));
+        let (out, _out_rx) = Outbound::new(usize::MAX, Arc::clone(&total));
+
+        shard.handle(req(1, "s", 1, &out));
+        shard.handle(req(1, "t", 1, &out));
+        let ev = event(1, "hi");
+        shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, Arc::clone(&ev))])));
+        assert_eq!(
+            out.pending(),
+            2 * event_frame_bytes("s", &ev),
+            "buffered matches went uncharged"
+        );
+
+        shard.handle(ShardMsg::RemoveConn { conn: 1 });
+        assert_eq!(out.pending(), 0, "RemoveConn kept the reservations");
+        assert_eq!(total.load(Ordering::Relaxed), 0);
+    }
+
+    /// A bare re-`Register` of a pending id releases the old buffer's
+    /// reservations; the new generation starts empty.
+    #[test]
+    fn re_register_unreserves_the_buffer() {
+        let (mut shard, _charge, _reader_rx, _dir) = shard_with_budget(0);
+        let total = Arc::new(AtomicUsize::new(0));
+        let (out, out_rx) = Outbound::new(usize::MAX, Arc::clone(&total));
+
+        shard.handle(req(1, "s", 1, &out));
+        let ev = event(1, "hi");
+        shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, Arc::clone(&ev))])));
+        let bytes = event_frame_bytes("s", &ev);
+        assert_eq!(out.pending(), bytes);
+
+        shard.handle(req(1, "s", 2, &out));
+        assert_eq!(out.pending(), 0, "re-Register kept the old reservations");
+        assert_eq!(total.load(Ordering::Relaxed), 0);
+
+        // Generation 2 buffers and flushes under its own reservation.
+        shard.handle(ShardMsg::Batch(Arc::new(vec![(2u64, Arc::clone(&ev))])));
+        assert_eq!(out.pending(), bytes);
+        shard.handle(ShardMsg::Activate {
+            conn: 1,
+            sub: sub_key("s", 2),
+        });
+        assert!(matches!(
+            out_rx.try_recv(),
+            Some(Out::Event {
+                sub: SubKey { generation: 2, .. },
+                ..
+            })
+        ));
+        out_rx.written(bytes);
+        drop(out_rx);
+        assert_eq!(out.pending(), 0);
+    }
+
+    /// Reservations share the connection's byte budget: a burst that
+    /// overruns it closes only that sub — `error: subscription fell
+    /// behind`, never `is_dead` — and returns every reserved byte.
+    #[test]
+    fn fell_behind_unreserves_and_keeps_the_connection() {
+        let (mut shard, charge, _reader_rx, _dir) = shard_with_budget(0);
+        let total = Arc::new(AtomicUsize::new(0));
+        let (out, out_rx) = Outbound::new(4096, Arc::clone(&total));
+
+        shard.handle(req(1, "s", 1, &out));
+        for _ in 0..30 {
+            shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, event(1, "hi"))])));
+        }
+        match out_rx.try_recv() {
+            Some(Out::Closed { sub, reason }) => {
+                assert_eq!(sub.id.as_str(), "s");
+                assert_eq!(reason, "error: subscription fell behind");
+            }
+            other => panic!("expected fell-behind Closed, got {other:?}"),
+        }
+        assert!(
+            !out.is_dead(),
+            "a refused reserve must not kill the connection"
+        );
+        // Every reserved byte came back: only the CLOSED is charged.
+        assert_eq!(out.pending(), total.load(Ordering::Relaxed));
+        out_rx.written(out.pending());
+        drop(out_rx);
+        assert_eq!(out.pending(), 0);
+        assert_eq!(total.load(Ordering::Relaxed), 0);
         assert_eq!(charge.load(Ordering::Relaxed), 0);
     }
 

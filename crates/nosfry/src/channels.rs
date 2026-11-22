@@ -357,9 +357,15 @@ impl Out {
                 text.len()
             }
             Self::Frames { texts, .. } => texts.iter().map(String::len).sum(),
-            Self::Event { sub, event } => event.json().len() + sub.id.json().len() + 12,
+            Self::Event { sub, event } => Self::event_bytes(sub, event),
             Self::Closed { sub, reason } => sub.id.json().len() + reason.len() + 14,
         }
+    }
+
+    /// The bytes a pushed `EVENT` frame for `sub`/`event` charges —
+    /// exactly what a reservation for the buffered match must cover.
+    pub(crate) fn event_bytes(sub: &SubKey, event: &Event) -> usize {
+        event.json().len() + sub.id.json().len() + 12
     }
 }
 
@@ -459,6 +465,43 @@ impl Outbound {
             queue.items.push_back(out);
         }
         self.shared.waker.wake();
+    }
+
+    /// Charge `bytes` of the pending budget for a frame that is not
+    /// queued yet — a live match buffered by a pending subscription.
+    /// The CAS loop only takes `pending` above its last value when the
+    /// sum still fits `max_pending`: `false` charges nothing and never
+    /// marks the connection dead, leaving the overflow decision to the
+    /// caller. A reservation made after the `OutboundRx` dropped stays
+    /// charged until `unreserve` — fine, because the shard always
+    /// unreserves on `RemoveConn`.
+    pub(crate) fn reserve(&self, bytes: usize) -> bool {
+        let mut pending = self.shared.pending.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = pending.checked_add(bytes) else {
+                return false;
+            };
+            if next > self.shared.max_pending {
+                return false;
+            }
+            match self.shared.pending.compare_exchange_weak(
+                pending,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.total.fetch_add(bytes, Ordering::Relaxed);
+                    return true;
+                }
+                Err(now) => pending = now,
+            }
+        }
+    }
+
+    /// Return `bytes` reserved by [`reserve`](Self::reserve).
+    pub(crate) fn unreserve(&self, bytes: usize) {
+        self.release(bytes);
     }
 
     /// Undo a charge that never made it into the queue.
@@ -667,6 +710,30 @@ mod tests {
         let (out, rx) = Outbound::new(usize::MAX, Arc::clone(&total));
         drop(rx);
         out.push(frame(100));
+        assert_eq!(out.pending(), 0);
+        assert_eq!(out.total(), 0);
+    }
+
+    /// A reservation charges `pending` and `total` only while it fits
+    /// the budget — a refused one charges nothing and never marks the
+    /// connection dead.
+    #[test]
+    fn reserve_charges_within_budget_only() {
+        let total = Arc::new(AtomicUsize::new(0));
+        let (out, _rx) = Outbound::new(1000, Arc::clone(&total));
+        assert!(out.reserve(400));
+        assert_eq!(out.pending(), 400);
+        assert_eq!(out.total(), 400);
+        assert!(out.reserve(600));
+        assert_eq!(out.pending(), 1000);
+        // One byte over refuses without charging — and the
+        // connection stays alive.
+        assert!(!out.reserve(1));
+        assert_eq!(out.pending(), 1000);
+        assert_eq!(out.total(), 1000);
+        assert!(!out.is_dead());
+        // `unreserve` returns both counters.
+        out.unreserve(1000);
         assert_eq!(out.pending(), 0);
         assert_eq!(out.total(), 0);
     }
