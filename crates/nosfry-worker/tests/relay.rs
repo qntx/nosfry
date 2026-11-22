@@ -2053,7 +2053,10 @@ fn filter_validation_refuses_req() {
     );
     msg(&mut r, 1, &req_frame("s", &json!({"kinds": [1]})));
     assert!(
-        socket.sent().iter().any(|f| f == "[\"EOSE\",\"s\",[\"finish\"]]"),
+        socket
+            .sent()
+            .iter()
+            .any(|f| f == "[\"EOSE\",\"s\",[\"finish\"]]"),
         "{:?}",
         socket.sent()
     );
