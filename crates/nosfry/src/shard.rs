@@ -385,9 +385,7 @@ impl Shard {
         ) {
             state.out.unreserve(old.reserved);
         }
-        state
-            .snapshots
-            .insert(start.sub.id.clone(), start.snapshot);
+        state.snapshots.insert(start.sub.id.clone(), start.snapshot);
         self.monitors.insert(
             start.conn,
             start.sub.clone(),
@@ -499,7 +497,7 @@ pub(crate) fn run(
     sub_budget: usize,
     metrics: Arc<Metrics>,
 ) {
-    let mut shard = Shard::new(&store, readers, sub_charge, sub_budget, metrics);
+    let mut shard = Shard::new(store, readers, sub_charge, sub_budget, metrics);
     while let Some(msg) = rx.blocking_recv() {
         shard.handle(msg);
     }
@@ -754,10 +752,8 @@ mod tests {
         });
         // The foreign seq's `Batch` arrives late, plus a newer one.
         let newer = event(1, "newer");
-        let batch: crate::channels::Batch = vec![
-            (1, Arc::clone(&foreign)),
-            (2, Arc::clone(&newer)),
-        ];
+        let batch: crate::channels::Batch =
+            vec![(1, Arc::clone(&foreign)), (2, Arc::clone(&newer))];
         shard.handle(ShardMsg::Batch(Arc::new(batch)));
         // The ephemeral has no seq: both subs take it.
         let eph = event(1, "ephemeral");
