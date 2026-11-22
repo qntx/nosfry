@@ -4493,3 +4493,192 @@ async fn landing_security_headers() {
     }
     relay.stop().await;
 }
+
+/// C-14: a REQ flood must not starve a well-behaved connection. The
+/// store holds 5 000 kind-1 events; twenty flooders re-REQ on ten
+/// rotating subscriptions each with `limit: 500` — the most
+/// expensive canned scan — while a victim publishes and reads back.
+/// Everything the flooders receive must be a scan answer or the shed
+/// `CLOSED rate-limited: relay busy`; the victim's every round trip
+/// lands within `T`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn req_flood_does_not_starve_victims() {
+    use nosfry_lmdb::{Store, StoreOptions};
+
+    const FLOODERS: usize = 20;
+    const FLOOD_TIME: Duration = Duration::from_secs(5);
+
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("db");
+    {
+        let store = Store::open(&db, &StoreOptions::default()).unwrap();
+        let k = key(77);
+        for base in (0..5_000u64).step_by(500) {
+            let batch: Vec<_> = (base..(base + 500).min(5_000))
+                .map(|i| common::event(&k, 1, 1_000_000 + i, &json!([]), "f"))
+                .collect();
+            store.write(&batch, None).unwrap();
+        }
+    }
+    let mut config = common::config();
+    config.db.path = db;
+    let relay = Relay::start_with(config).await;
+
+    // Each flooder sends REQs flat-out while a sibling task drains
+    // every frame and counts the verbs — a client that never stops
+    // asking but always reads.
+    let mut flood_writes = Vec::new();
+    let mut flood_reads = Vec::new();
+    for _ in 0..FLOODERS {
+        let (mut tx, mut rx) = relay.connect().await.split();
+        flood_writes.push(tokio::spawn(async move {
+            let deadline = Instant::now() + FLOOD_TIME;
+            let mut n = 0u64;
+            while Instant::now() < deadline {
+                let sub = format!("s{}", n % 10);
+                let req = req_wire(&sub, "{\"kinds\":[1],\"limit\":500}");
+                n += 1;
+                if tx.send(yawc::Frame::text(req)).await.is_err() {
+                    break;
+                }
+            }
+            // SplitSink drop sends no close; without this the read
+            // half waits on a stream the relay never ends.
+            drop(tx.close().await);
+            n
+        }));
+        flood_reads.push(tokio::spawn(async move {
+            let mut verbs: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            let mut shed = 0usize;
+            let mut other_closed = Vec::new();
+            while let Some(frame) = rx.next().await {
+                if frame.opcode() != yawc::OpCode::Text {
+                    continue;
+                }
+                let text = std::str::from_utf8(frame.payload()).unwrap();
+                let frame = json(text);
+                let verb = frame[0].as_str().unwrap().to_owned();
+                *verbs.entry(verb.clone()).or_default() += 1;
+                if verb == "CLOSED" {
+                    let reason = frame[2].as_str().unwrap();
+                    if reason == "rate-limited: relay busy" {
+                        shed += 1;
+                    } else {
+                        other_closed.push(reason.to_owned());
+                    }
+                }
+            }
+            (verbs, shed, other_closed)
+        }));
+    }
+
+    // The victim: every 100 ms publish a note, wait for its OK, then
+    // REQ it back and wait for EOSE. A shed REQ is retried — the shed
+    // is a valid answer, starvation is not.
+    let mut victim = relay.connect().await;
+    let vk = key(78);
+    let mut latencies = Vec::new();
+    let mut victim_sheds = 0u64;
+    let deadline = Instant::now() + FLOOD_TIME;
+    let mut i = 0u64;
+    while Instant::now() < deadline {
+        i += 1;
+        let iteration = async {
+            let t0 = Instant::now();
+            let ev = common::event(&vk, 1, now() + i, &json!([]), "v");
+            send_text(&mut victim, &event_wire(&ev)).await;
+            let ok = json(&recv_text(&mut victim, T).await);
+            assert_eq!(ok[0], "OK", "victim publish {i} got no OK");
+            assert!(ok[2].as_bool().unwrap(), "victim publish {i} refused");
+            let ev_json = json(ev.json());
+            let id = ev_json["id"].as_str().unwrap().to_owned();
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                send_text(
+                    &mut victim,
+                    &req_wire("v", &format!("{{\"ids\":[\"{id}\"]}}")),
+                )
+                .await;
+                let mut saw_eose = false;
+                loop {
+                    let frame = json(&recv_text(&mut victim, T).await);
+                    match frame[0].as_str().unwrap() {
+                        "EVENT" => {}
+                        "EOSE" => {
+                            saw_eose = true;
+                            break;
+                        }
+                        "CLOSED" => {
+                            assert_eq!(
+                                frame[2].as_str().unwrap(),
+                                "rate-limited: relay busy",
+                                "victim REQ closed for another reason"
+                            );
+                            break;
+                        }
+                        other => panic!("victim got unexpected {other}"),
+                    }
+                }
+                if saw_eose {
+                    return t0.elapsed();
+                }
+                assert!(attempt < 8, "victim REQ {i} shed {attempt} times in a row");
+                victim_sheds += 1;
+            }
+        };
+        let elapsed = tokio::time::timeout(T, iteration)
+            .await
+            .unwrap_or_else(|_| panic!("victim round trip {i} exceeded {T:?}"));
+        latencies.push(elapsed);
+        let until_100ms = Instant::now() + Duration::from_millis(100);
+        if until_100ms < deadline {
+            tokio::time::sleep_until(until_100ms.into()).await;
+        }
+    }
+
+    let mut sent = 0u64;
+    for write in flood_writes {
+        sent += write.await.unwrap();
+    }
+    let mut verbs = std::collections::HashMap::new();
+    let mut shed = 0usize;
+    for read in flood_reads {
+        let (v, s, other_closed) = read.await.unwrap();
+        for (verb, n) in v {
+            *verbs.entry(verb).or_insert(0usize) += n;
+        }
+        shed += s;
+        assert!(
+            other_closed.is_empty(),
+            "shed reasons were {other_closed:?}"
+        );
+    }
+    for verb in verbs.keys() {
+        assert!(
+            matches!(verb.as_str(), "EVENT" | "EOSE" | "CLOSED"),
+            "flooders saw unexpected verb {verb}"
+        );
+    }
+    eprintln!(
+        "req_flood: {sent} REQs from {FLOODERS} flooders -> {verbs:?}, {shed} shed; \
+         {i} victim rounds, {victim_sheds} victim sheds"
+    );
+
+    // The relay must still answer a fresh REQ after the flood — no
+    // deadlock, no wedge.
+    let mut post = relay.connect().await;
+    let got = req_ids(&mut post, "after", "{\"kinds\":[1],\"limit\":1}").await;
+    assert_eq!(got.len(), 1);
+
+    latencies.sort();
+    let p50 = latencies[latencies.len() / 2];
+    let p99 = latencies[latencies.len() * 99 / 100];
+    let max = latencies.last().unwrap();
+    eprintln!(
+        "req_flood victim latency: p50={p50:?} p99={p99:?} max={max:?} n={}",
+        latencies.len()
+    );
+    relay.stop().await;
+}
