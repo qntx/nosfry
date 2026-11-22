@@ -7,6 +7,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use nosfry::config::Config;
@@ -87,6 +88,34 @@ enum Cmd {
     Compact {
         /// Destination file; must not exist.
         dest: PathBuf,
+    },
+    /// Sync events with a remote relay over NIP-77 negentropy,
+    /// newest-first in bounded time windows.
+    Sync {
+        /// Peer relay URL: `ws://` or `wss://`.
+        url: String,
+        /// One NIP-01 filter (a JSON object); `limit` and `search`
+        /// are refused since they would make the synced set partial.
+        #[arg(long)]
+        filter: Option<String>,
+        /// Transfer direction.
+        #[arg(long, value_enum, default_value = "down")]
+        dir: nosfry::sync::Direction,
+        /// Only events at or after this unix timestamp.
+        #[arg(long)]
+        since: Option<u64>,
+        /// Only events at or before this unix timestamp.
+        #[arg(long)]
+        until: Option<u64>,
+        /// 64-hex secret key file for NIP-42 AUTH.
+        #[arg(long, value_name = "PATH")]
+        auth_key_file: Option<PathBuf>,
+        /// Allow peers on private/loopback/link-local addresses.
+        #[arg(long)]
+        allow_private: bool,
+        /// Stall timeout in seconds.
+        #[arg(long, default_value_t = 60)]
+        timeout: u64,
     },
 }
 
@@ -188,7 +217,7 @@ fn is_broken_pipe(mut err: &(dyn std::error::Error + 'static)) -> bool {
     }
 }
 
-async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let config = Config::load(&cli.config)?;
     match cli.command {
         Cmd::Relay => relay(config, cli.config).await,
@@ -209,7 +238,44 @@ async fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             filter,
         } => delete(&config, filter.as_deref(), age, dry_run),
         Cmd::Compact { dest } => compact(&config, &dest),
+        Cmd::Sync {
+            url,
+            filter,
+            dir,
+            since,
+            until,
+            auth_key_file,
+            allow_private,
+            timeout,
+        } => {
+            let mut opts = nosfry::sync::SyncOptions::new(url);
+            opts.filter = filter;
+            opts.direction = dir;
+            opts.since = since;
+            opts.until = until;
+            opts.auth_key_file = auth_key_file;
+            opts.allow_private = allow_private;
+            opts.timeout = Duration::from_secs(timeout);
+            return sync(&config, opts).await;
+        }
     }
+    .map(|()| ExitCode::SUCCESS)
+}
+
+/// Run [`nosfry::sync::run`] against the configured store: `0`
+/// complete, `3` partial (transient transfers missed), `1` fatal.
+async fn sync(
+    config: &Config,
+    opts: nosfry::sync::SyncOptions,
+) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    // `open` creates the database when absent, like `import`.
+    let store = Store::open(&config.db.path, &config.store_options())?;
+    let report = nosfry::sync::run(&store, config, opts).await?;
+    tracing::info!(stats = ?report.stats, outcome = ?report.outcome, "sync done");
+    Ok(match report.outcome {
+        nosfry::sync::Outcome::Complete => ExitCode::SUCCESS,
+        nosfry::sync::Outcome::Partial => ExitCode::from(3),
+    })
 }
 
 /// Raise the soft open-file limit toward `target`, capped by the hard
@@ -329,7 +395,7 @@ fn compact(config: &Config, dest: &Path) -> Result<(), Box<dyn std::error::Error
 async fn main() -> ExitCode {
     init_tracing();
     match run(Cli::parse()).await {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => code,
         Err(err) if is_broken_pipe(err.as_ref()) => ExitCode::SUCCESS,
         Err(err) => {
             tracing::error!(%err, "fatal");

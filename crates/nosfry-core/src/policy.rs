@@ -7,11 +7,13 @@
 //! to a service binding.
 //!
 //! - Request: `{"type":"new","event":<raw>,"receivedAt":<unix>,`
-//!   `"sourceType":"IP4"|"IP6"|"Unix","sourceInfo":"<ip or path>"[,`
-//!   `"authed":"<hex pubkey>"]}` — IPv4-mapped IPv6 reports `IP4`
-//!   with the v4 address; a unix-socket listener reports `Unix` with
-//!   its socket path; `authed` appears only after the connection
-//!   authenticated (NIP-42).
+//!   `"sourceType":"IP4"|"IP6"|"Unix"|"Sync","sourceInfo":"<ip, path,`
+//!   `or peer url>"[,"authed":"<hex pubkey>"]}` — IPv4-mapped IPv6
+//!   reports `IP4` with the v4 address; a unix-socket listener
+//!   reports `Unix` with its socket path; a `nosfry sync` download
+//!   reports `Sync` with the peer's URL (strfry's plugin input for
+//!   sync); `authed` appears only after the connection authenticated
+//!   (NIP-42), which sync never does.
 //! - Response: `{"id":"<event id>","action":"accept"|"reject"|`
 //!   `"shadowReject","msg":"..."}` (`msg` optional). Non-JSON lines
 //!   are [`ResponseError::Noise`] so transports that stream lines may
@@ -84,6 +86,19 @@ pub fn request_line_unix(
     format!(
         "{{\"type\":\"new\",\"event\":{event_json},\"receivedAt\":{received_at},\
          \"sourceType\":\"Unix\",\"sourceInfo\":{info}{authed}}}"
+    )
+}
+
+/// The request line for an event `nosfry sync` downloaded from a
+/// peer: `"sourceType":"Sync"`, `source_info` the peer's URL
+/// (JSON-escaped), no `authed` — sync never authenticates to its own
+/// write policy.
+#[must_use]
+pub fn request_line_sync(event_json: &str, received_at: u64, source_info: &str) -> String {
+    let info = serde_json::to_string(source_info).unwrap_or_else(|_| "\"\"".to_owned());
+    format!(
+        "{{\"type\":\"new\",\"event\":{event_json},\"receivedAt\":{received_at},\
+         \"sourceType\":\"Sync\",\"sourceInfo\":{info}}}"
     )
 }
 
@@ -213,6 +228,24 @@ mod tests {
             source_parts("2001:db8::1".parse().unwrap()),
             ("IP6", "2001:db8::1".to_owned())
         );
+    }
+
+    /// A `nosfry sync` download reports `sourceType` `Sync` with the
+    /// peer URL and never an `authed` field.
+    #[test]
+    fn request_line_sync_shape() {
+        let line = request_line_sync(EVENT_JSON, 1_700_000_000, "wss://relay.example.com");
+        let request: Req<'_> = serde_json::from_str(&line).unwrap();
+        assert_eq!(request.kind, "new");
+        assert_eq!(request.received_at, 1_700_000_000);
+        assert_eq!(request.source_type, "Sync");
+        assert_eq!(request.source_info, "wss://relay.example.com");
+        assert_eq!(request.event.get(), EVENT_JSON);
+        assert_eq!(request.authed, None);
+        // A URL with JSON metacharacters still parses.
+        let escaped = request_line_sync(EVENT_JSON, 0, "ws://a\"b\n/");
+        let parsed: Req<'_> = serde_json::from_str(&escaped).unwrap();
+        assert_eq!(parsed.source_info, "ws://a\"b\n/");
     }
 
     /// A unix-socket listener reports `sourceType` `Unix` with the

@@ -1,0 +1,1 @@
+{"name":"nosfry","supported_nips":[1,11,42,77],"limitation":{"max_message_length":262144,"max_limit":5000},"auth_required":false}

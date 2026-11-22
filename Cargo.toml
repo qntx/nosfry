@@ -68,6 +68,13 @@ tokio-util         = { version = "0.7.20", features = ["rt"] }
 rlimit             = "0.11.0"
 socket2            = "0.6"
 
+# Sync client (native only)
+tokio-rustls   = { version = "0.26.6", default-features = false, features = ["ring", "logging", "tls12"] }
+webpki-roots   = "1.0.12"
+url            = "2.5.8"
+http-body-util = "0.1.5"
+bytes          = "1.12"
+
 [profile.release]
 codegen-units = 1
 lto           = "thin"

@@ -97,3 +97,10 @@ path  = "fuzz_targets/state_line.rs"
 test  = false
 doc   = false
 bench = false
+
+[[bin]]
+name  = "relay_message"
+path  = "fuzz_targets/relay_message.rs"
+test  = false
+doc   = false
+bench = false
