@@ -562,6 +562,7 @@ impl<E: Executor, S: Socket> Relay<E, S> {
             count: self.limits.req.max_filter_limit_count > 0,
             sync: self.sync_cap() > 0,
             auth: !self.config.relay.service_url.is_empty(),
+            gift_wrap: self.limits.auth.guards_gift_wraps(),
             management: !self.config.relay.management.admins.is_empty(),
         }
     }

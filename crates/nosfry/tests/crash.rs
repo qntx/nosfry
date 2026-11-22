@@ -91,6 +91,26 @@ fn write_config(dir: &Path, port: u16) -> PathBuf {
     path
 }
 
+/// `write_config` plus `service_url`: AUTH on, so restricted kinds
+/// (gift wraps) are writeable and reads are gated.
+fn write_auth_config(dir: &Path, port: u16) -> PathBuf {
+    let path = dir.join("nosfry.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "[db]\npath = \"{}\"\n\
+             [relay]\nport = {port}\nnofiles = 0\nmax_connections_per_ip = 0\n\
+             service_url = \"ws://127.0.0.1:{port}\"\n\
+             [relay.limits]\nmax_filter_limit = 100_000\n\
+             [relay.rate_limits]\nevents_per_second = 0\nevents_burst = 0\n\
+             reqs_per_second = 0\nreqs_burst = 0\n",
+            dir.join("db").display()
+        ),
+    )
+    .unwrap();
+    path
+}
+
 /// At most 10 ids of a sorted vector, for failure messages.
 fn head(ids: &[String]) -> &[String] {
     &ids[..ids.len().min(10)]
@@ -622,4 +642,60 @@ async fn kill9_loses_no_acknowledged_event() {
         acked_regular.len(),
         acked_deleted.len()
     );
+}
+
+/// NIP-59 across a crash: the `ix_deletion` row the recipient's
+/// kind 5 wrote must survive kill -9 — a republished wrap still
+/// answers `blocked:` after restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn wrap_deletion_block_survives_crash() {
+    let dir = tempfile::tempdir().unwrap();
+    let port = free_port();
+    let cfg = write_auth_config(dir.path(), port);
+    let addr: SocketAddr = format!("127.0.0.1:{port}").parse().unwrap();
+    let mut child = spawn_relay(&cfg, &dir.path().join("relay.err"));
+    wait_for_tcp(addr).await;
+
+    let w = key(7); // the wrap's random signing key
+    let r = key(8); // the recipient whose kind 5 deletes it
+    let r_hex = faster_hex::hex_string(&r.x_only_public_key().0.to_byte_array());
+    let wrap = event(&w, 1059, now_secs(), &json!([["p", r_hex]]), "wrap");
+    let del = event(
+        &r,
+        5,
+        now_secs(),
+        &json!([["e", wrap.id().to_string()], ["k", "1059"]]),
+        "",
+    );
+
+    let mut ws = connect(addr).await.expect("connect failed");
+    send_text(&mut ws, &event_wire(&wrap)).await;
+    let ok = recv_ok(&mut ws, &wrap.id().to_string()).await.unwrap();
+    assert_eq!(ok.get(2).and_then(Value::as_bool), Some(true), "{ok}");
+    send_text(&mut ws, &event_wire(&del)).await;
+    let ok = recv_ok(&mut ws, &del.id().to_string()).await.unwrap();
+    assert_eq!(ok.get(2).and_then(Value::as_bool), Some(true), "{ok}");
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let mut child = spawn_relay(&cfg, &dir.path().join("relay-2.err"));
+    wait_for_tcp(addr).await;
+    let mut ws = connect(addr).await.expect("reconnect failed");
+    send_text(&mut ws, &event_wire(&wrap)).await;
+    let ok = recv_ok(&mut ws, &wrap.id().to_string()).await.unwrap();
+    assert_eq!(ok.get(2).and_then(Value::as_bool), Some(false), "{ok}");
+    assert!(
+        ok.get(3)
+            .and_then(Value::as_str)
+            .is_some_and(|m| m.starts_with("blocked:")),
+        "republished wrap after crash: {ok}"
+    );
+
+    let status = Command::new("kill")
+        .args(["-TERM", &child.id().to_string()])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    child.wait().unwrap();
 }

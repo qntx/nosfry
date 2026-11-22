@@ -617,7 +617,7 @@ mod tests {
         let (out, rx) = Outbound::new(usize::MAX, Arc::new(AtomicUsize::new(0)));
         let waker = Waker::noop();
         let mut cx = Context::from_waker(waker);
-        let mut fut = Box::pin(rx.recv());
+        let mut fut = std::pin::pin!(rx.recv());
         assert!(fut.as_mut().poll(&mut cx).is_pending());
         drop(out);
         assert!(matches!(fut.as_mut().poll(&mut cx), Poll::Ready(None)));
@@ -635,9 +635,9 @@ mod tests {
         drop(out);
         let waker = Waker::noop();
         let mut cx = Context::from_waker(waker);
-        let mut fut = Box::pin(rx.recv());
+        let mut fut = std::pin::pin!(rx.recv());
         assert!(matches!(fut.as_mut().poll(&mut cx), Poll::Ready(Some(_))));
-        let mut next = Box::pin(rx.recv());
+        let mut next = std::pin::pin!(rx.recv());
         assert!(matches!(next.as_mut().poll(&mut cx), Poll::Ready(None)));
     }
 
@@ -658,7 +658,7 @@ mod tests {
         let flag = Arc::new(Flag(AtomicBool::new(false)));
         let waker = Waker::from(Arc::clone(&flag));
         let mut cx = Context::from_waker(&waker);
-        let mut fut = Box::pin(rx.recv());
+        let mut fut = std::pin::pin!(rx.recv());
         assert!(fut.as_mut().poll(&mut cx).is_pending());
         std::thread::spawn(move || out.push(frame(7)))
             .join()

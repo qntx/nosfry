@@ -141,7 +141,7 @@ async fn apply(state: &AppState, op: ModOp) -> Result<Value, String> {
         let moderation = state.moderation.borrow().clone();
         let mut next = (**live).clone();
         next.nip11 = crate::http::nip11(&next.config, &next.limits, &moderation).into();
-        next.landing = crate::http::landing(&next.config, &moderation).into();
+        next.landing = crate::http::landing(&next.config, &next.limits, &moderation).into();
         *live = Arc::new(next);
     });
     Ok(Value::Bool(true))

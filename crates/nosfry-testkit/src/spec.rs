@@ -304,6 +304,50 @@ pub fn event_spec_strategy() -> impl Strategy<Value = EventSpec> {
         })
 }
 
+/// Event-spec vectors that cover NIP-59 recipient deletion.
+///
+/// `event_spec_strategy` vectors with the first kind-1059 wrap
+/// guaranteed an `e`-deletion kind 5 by its `p` recipient — placed
+/// before the wrap half the time (decided by its index parity) so
+/// both the delete-stored and the block-on-ingest orderings of
+/// NIP-59 fire.
+pub fn event_specs_strategy() -> impl Strategy<Value = Vec<EventSpec>> {
+    proptest::collection::vec(event_spec_strategy(), 1..40).prop_map(|mut specs| {
+        let Some(wrap) = specs.iter().position(|spec| spec.kind == 1059) else {
+            return specs;
+        };
+        let recipient = specs[wrap]
+            .tags
+            .iter()
+            .find_map(|tag| match tag {
+                TagSpec::P(i) => Some(*i % 4),
+                _ => None,
+            })
+            .unwrap_or_else(|| (specs[wrap].key + 1) % 4);
+        // Insert before or after the wrap; `E(target)` resolves
+        // against the final `ids` list, so the target index accounts
+        // for the shift the insertion itself causes.
+        let (pos, target) = if wrap % 2 == 0 {
+            (wrap, wrap + 1)
+        } else {
+            (wrap + 1, wrap)
+        };
+        let created_at = specs[wrap].created_at + 1;
+        specs.insert(
+            pos,
+            EventSpec {
+                key: recipient,
+                kind: 5,
+                created_at,
+                tags: vec![TagSpec::E(target)],
+                content: "wrap deletion".to_owned(),
+                expiration: None,
+            },
+        );
+        specs
+    })
+}
+
 /// Filter-spec generation covering every cursor shape plus empty
 /// lists and merged conditions.
 pub fn filter_spec_strategy() -> impl Strategy<Value = FilterSpec> {

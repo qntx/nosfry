@@ -422,7 +422,7 @@ fn protected_event_requires_auth() {
 
 #[test]
 fn oversized_message_closes_1009() {
-    let mut r = relay("[relay]\nmax_websocket_payload_size = 64\n");
+    let mut r = relay("[events]\nmax_event_size = 32\n[relay]\nmax_websocket_payload_size = 64\n");
     let socket = connect(&mut r, 1);
     msg(&mut r, 1, &"x".repeat(100));
     assert_eq!(socket.closed(), vec![(1009, "message too big".to_owned())]);

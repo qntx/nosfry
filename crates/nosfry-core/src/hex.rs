@@ -1,8 +1,9 @@
 //! Hex helpers shared by event and filter validation.
 //!
-//! Event ids/pubkeys/signatures and `e`/`p` tag values are canonical
-//! lowercase hex; filter `ids`/`authors`/`#e`/`#p` values are accepted
-//! case-insensitively and normalized to lowercase on the wire.
+//! Event ids/pubkeys/signatures, `e`/`p` tag values, and filter
+//! `ids`/`authors`/`#e`/`#p` values are all exact lowercase hex
+//! (NIP-01); [`decode_list`] alone stays case-insensitive for
+//! NIP-77 negentropy payloads.
 
 /// `true` when `s` is exactly `len` chars of `[0-9a-f]`.
 pub(crate) fn is_lower_hex(s: &str, len: usize) -> bool {
@@ -19,16 +20,6 @@ pub(crate) fn is_hex(s: &str, len: usize) -> bool {
 /// Decode a 64-char lowercase hex string into 32 bytes.
 pub(crate) fn decode_32(s: &str) -> Option<[u8; 32]> {
     if !is_lower_hex(s, 64) {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    faster_hex::hex_decode(s.as_bytes(), &mut out).ok()?;
-    Some(out)
-}
-
-/// Decode a 64-char hex string of either case into 32 bytes.
-pub(crate) fn decode_32_ci(s: &str) -> Option<[u8; 32]> {
-    if !is_hex(s, 64) {
         return None;
     }
     let mut out = [0u8; 32];

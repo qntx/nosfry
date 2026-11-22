@@ -569,6 +569,19 @@ pub fn ok_frame(id: &EventId, accepted: bool, message: &str) -> String {
     out
 }
 
+/// `["OK", "<id>", <accepted>, "<message>", "<params>"]` — the
+/// optional NIP-01 params element, today only the `rate-limited`
+/// retry hint: a decimal-millisecond string like `"1000"`.
+#[must_use]
+pub fn ok_frame_with_params(id: &EventId, accepted: bool, message: &str, params: &str) -> String {
+    let mut out = ok_frame(id, accepted, message);
+    out.pop();
+    out.push(',');
+    out.push_str(&json_escape(params));
+    out.push(']');
+    out
+}
+
 /// `["EOSE", "<sub>"]`.
 #[must_use]
 pub fn eose_frame(sub: &SubId) -> String {
@@ -607,6 +620,18 @@ pub fn closed_frame(sub: &SubId, message: &str) -> String {
     out.push_str(sub.json());
     out.push(',');
     out.push_str(&json_escape(message));
+    out.push(']');
+    out
+}
+
+/// `["CLOSED", "<sub>", "<message>", "<params>"]` — see
+/// [`ok_frame_with_params`].
+#[must_use]
+pub fn closed_frame_with_params(sub: &SubId, message: &str, params: &str) -> String {
+    let mut out = closed_frame(sub, message);
+    out.pop();
+    out.push(',');
+    out.push_str(&json_escape(params));
     out.push(']');
     out
 }

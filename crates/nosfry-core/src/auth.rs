@@ -40,7 +40,7 @@ pub struct AuthConfig {
 impl Default for AuthConfig {
     fn default() -> Self {
         Self {
-            restricted_read_kinds: vec![4, 1059],
+            restricted_read_kinds: vec![4, 1059, 21059],
             restrict_read_to_involved: true,
         }
     }
@@ -94,9 +94,31 @@ impl AuthRules {
         self.restricted_kinds.binary_search(&kind).is_ok()
     }
 
+    /// Whether the relay guards gift wraps — AUTH enabled and kind
+    /// 1059 restricted — advertised as NIP-59 in the NIP-11 document.
+    #[must_use]
+    pub fn guards_gift_wraps(&self) -> bool {
+        self.enabled() && self.is_restricted(1059)
+    }
+
     /// Whether a `relay` tag value names the configured service URL.
     pub(crate) fn matches_relay(&self, url: &str) -> bool {
         self.relay.as_ref().is_some_and(|relay| relay.matches(url))
+    }
+
+    /// Whether any filter can match a restricted kind — restricted
+    /// kinds are configured and some possible filter has no `kinds`
+    /// list or lists at least one of them. An unauthenticated REQ,
+    /// COUNT, or NEG-OPEN matching this gets an AUTH challenge and
+    /// still proceeds.
+    pub(crate) fn may_restrict(&self, filters: &[Filter]) -> bool {
+        !self.restricted_kinds.is_empty()
+            && filters.iter().any(|filter| {
+                !filter.is_impossible()
+                    && filter
+                        .kinds()
+                        .is_none_or(|kinds| kinds.iter().any(|kind| self.is_restricted(*kind)))
+            })
     }
 
     /// Whether every filter is fully restricted — restricted kinds are
@@ -251,6 +273,25 @@ mod tests {
     }
 
     #[test]
+    fn may_restrict() {
+        let rules = auth_rules("", &[4, 1059], true);
+        let f = |json: &str| Filter::parse(json).unwrap();
+        // No `kinds` or a listed restricted kind may match one.
+        assert!(rules.may_restrict(&[f(r#"{"kinds":[1,1059]}"#)]));
+        assert!(rules.may_restrict(&[f(
+            r##"{"#p":["0000000000000000000000000000000000000000000000000000000000000000"]}"##
+        )]));
+        assert!(rules.may_restrict(&[f("{}")]));
+        assert!(rules.may_restrict(&[f(r#"{"kinds":[4]}"#)]));
+        // Only public kinds, an impossible filter, and no restricted
+        // kinds configured can never match one.
+        assert!(!rules.may_restrict(&[f(r#"{"kinds":[1]}"#)]));
+        assert!(!rules.may_restrict(&[f(r#"{"kinds":[]}"#)]));
+        assert!(!rules.may_restrict(&[]));
+        assert!(!auth_rules("", &[], true).may_restrict(&[f("{}")]));
+    }
+
+    #[test]
     fn gate_allows() {
         let author = [1u8; 32];
         let tagged = [2u8; 32];
@@ -275,6 +316,23 @@ mod tests {
             gate(&open, &[other]).allows(packed),
             "involved_only = false"
         );
+    }
+
+    #[test]
+    fn default_restricts_dms_and_wraps() {
+        assert_eq!(
+            AuthConfig::default().restricted_read_kinds,
+            vec![4, 1059, 21059],
+            "DMs plus stored and ephemeral gift wraps"
+        );
+        let rules = auth_rules(
+            "wss://relay.example",
+            &AuthConfig::default().restricted_read_kinds,
+            true,
+        );
+        for kind in [4, 1059, 21059] {
+            assert!(rules.is_restricted(kind), "kind {kind}");
+        }
     }
 
     #[test]

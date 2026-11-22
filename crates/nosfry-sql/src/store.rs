@@ -4,7 +4,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use nosfry_core::auth::ReadGate;
-use nosfry_core::deletion::DeletionTarget;
+use nosfry_core::deletion::{self, DeletionTarget};
 use nosfry_core::event::{Event, EventId, PublicKey, UnverifiedEvent, supersedes};
 use nosfry_core::filter::Filter;
 use nosfry_core::hll::Hll;
@@ -364,19 +364,15 @@ impl<E: Executor> SqlStore<E> {
         if event.kind().0 == 62 && self.vanish_request_superseded(event)? {
             return Ok(WriteOutcome::Superseded);
         }
-        // NIP-09: an id covered by a stored same-author kind 5 stays
-        // deleted; a kind 5 itself is never blocked, and a kind 62
-        // request to vanish is never blocked either (NIP-62).
-        let pubkey = event.pubkey().0;
-        if event.kind().0 != 5
-            && event.kind().0 != 62
-            && self.exists(
-                "SELECT 1 FROM deletions WHERE target = ?1 AND author = ?2 LIMIT 1",
-                &[Param::Blob(&id), Param::Blob(&pubkey)],
-            )?
-        {
+        // NIP-09: an id covered by a stored kind 5 of any of its
+        // blockers stays deleted — the event's author, or a `p`-tagged
+        // recipient of a kind-1059 wrap (NIP-59). A kind 5 itself is
+        // never blocked, and a kind 62 request to vanish is never
+        // blocked either (NIP-62).
+        if event.kind().0 != 5 && event.kind().0 != 62 && self.deletion_blocked(event)? {
             return Ok(WriteOutcome::Deleted);
         }
+        let pubkey = event.pubkey().0;
         // NIP-09: an `a` deletion blocks equal-or-older versions.
         let created = int(event.created_at());
         if let Some(address) = event.address()
@@ -944,10 +940,11 @@ impl<E: Executor> SqlStore<E> {
         Ok(())
     }
 
-    /// Delete the `e`-tagged event `id` when it is `author`'s own and
-    /// neither a kind 5 (NIP-09: a deletion request cannot delete a
-    /// deletion request) nor a kind 62 (NIP-62: a request to vanish
-    /// cannot be deleted).
+    /// Delete the `e`-tagged event `id` when `author` may delete it —
+    /// the event's own author, or a `p`-tagged recipient of a
+    /// kind-1059 gift wrap (NIP-59). Kinds 5 and 62 are never
+    /// deletable (NIP-09: a deletion request cannot delete a deletion
+    /// request; NIP-62: a request to vanish cannot be deleted).
     fn delete_event_target(&self, id: &EventId, author: &PublicKey) -> Result<(), StoreError> {
         let Some(row) = self.row(
             "SELECT seq, packed FROM events WHERE id = ?1",
@@ -959,12 +956,27 @@ impl<E: Executor> SqlStore<E> {
         let seq = uint(&row, 0)?;
         let deletable = {
             let packed = record(&row, 1)?;
-            packed.pubkey() == *author && packed.kind().0 != 5 && packed.kind().0 != 62
+            deletion::deletes(packed, author)
         };
         if deletable {
             self.delete_seq(seq)?;
         }
         Ok(())
+    }
+
+    /// Whether a `deletions` row covers `event`'s id under any of its
+    /// blocker keys — the author, plus every packed `p` value of a
+    /// kind-1059 wrap (NIP-59).
+    fn deletion_blocked(&self, event: &Event) -> Result<bool, StoreError> {
+        for blocker in deletion::blockers(event.packed()) {
+            if self.exists(
+                "SELECT 1 FROM deletions WHERE target = ?1 AND author = ?2 LIMIT 1",
+                &[Param::Blob(&event.id().0), Param::Blob(&blocker)],
+            )? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Delete the stored version at `address` when it is `author`'s

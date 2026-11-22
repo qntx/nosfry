@@ -32,6 +32,19 @@ const DIVERGENCES: &[(&str, &str)] = &[(
     "empty `#` value lists make the filter impossible (NIP-01 MUST), so the      intrinsic limit is 0 rather than unbounded",
 )];
 
+/// `(filter JSON substring, why)` — oracle SDK cases the relay rejects
+/// outright rather than resolving.
+const REJECTIONS: &[(&str, &str)] = &[
+    (
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "NIP-01 01.md: `ids`/`authors`/`#e`/`#p` values must be exact lowercase hex",
+    ),
+    (
+        "90A80DB6EB294B9EAB0B4E8DDFA3EFE7263458CE2D07566DF4E6C58868FEEF23",
+        "NIP-01 01.md: `ids`/`authors`/`#e`/`#p` values must be exact lowercase hex",
+    ),
+];
+
 #[derive(Deserialize)]
 struct Case {
     filter: serde_json::Value,
@@ -45,6 +58,14 @@ fn filter_limit() {
     let mut divergent = 0usize;
     for (i, case) in cases.iter().enumerate() {
         let filter_json = serde_json::to_string(&case.filter).expect("filter json");
+        if let Some((_, why)) = REJECTIONS.iter().find(|(pat, _)| filter_json.contains(pat)) {
+            divergent += 1;
+            assert!(
+                Filter::parse(&filter_json).is_err(),
+                "case {i}: expected relay rejection ({why})"
+            );
+            continue;
+        }
         let filter = Filter::parse(&filter_json)
             .unwrap_or_else(|e| panic!("case {i}: filter parse: {e} ({filter_json})"));
         if DIVERGENCES.iter().any(|(pat, _)| filter_json.contains(pat)) {
@@ -61,5 +82,5 @@ fn filter_limit() {
             "case {i}: {filter_json}"
         );
     }
-    assert_eq!(divergent, DIVERGENCES.len(), "divergence count drift");
+    assert_eq!(divergent, 3, "divergence count drift");
 }

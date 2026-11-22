@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use nosfry_core::event::Event;
 use nosfry_core::filter::Filter;
-use nosfry_core::sign::{event, key};
+use nosfry_core::sign::{event, key, pubkey_hex};
 use nosfry_core::store::WriteOutcome;
 use nosfry_lmdb::{FORMAT_VERSION, Progress, Scan, Store, StoreError, StoreOptions};
 use serde_json::json;
@@ -1821,4 +1821,141 @@ fn count_many_tag_values_dedups() {
         }
     }
     assert_eq!(scan.result().count, 2);
+}
+
+/// Whether `id` is served by an `ids` scan right now.
+fn served_id(store: &Store, id: &str) -> usize {
+    let filters: Arc<[Filter]> =
+        Arc::from([Filter::parse(&format!("{{\"ids\":[\"{id}\"]}}")).unwrap()]);
+    collect(store, filters, store.snapshot().unwrap()).len()
+}
+
+/// NIP-59: a stored kind-1059 gift wrap is deletable by a kind 5 of
+/// any `p`-tagged recipient — including a non-first `p` value —
+/// while a third party's kind 5 has no effect and a `p`-tagged
+/// event of another kind is never deletable by the recipient. The
+/// re-publish block lifts with the carrier kind 5.
+#[test]
+fn gift_wrap_recipient_deletes() {
+    let (_dir, store) = store();
+    let w = key(4); // a NIP-59 wrap signs with a random one-off key
+    let r = key(1);
+    let x = key(3);
+    let wrap = event(&w, 1059, 100, &json!([["p", pubkey_hex(0)]]), "wrap");
+    let wrap2 = event(
+        &w,
+        1059,
+        101,
+        &json!([["p", pubkey_hex(1)], ["p", pubkey_hex(0)]]),
+        "wrap2",
+    );
+    let dm = event(&w, 4, 102, &json!([["p", pubkey_hex(0)]]), "dm");
+    let out = store
+        .write(
+            &[Arc::clone(&wrap), Arc::clone(&wrap2), Arc::clone(&dm)],
+            None,
+        )
+        .unwrap();
+    assert!(
+        out.outcomes
+            .iter()
+            .all(|o| matches!(o, WriteOutcome::Stored { .. })),
+        "{:?}",
+        out.outcomes
+    );
+
+    // A third party's kind 5 on the wraps deletes nothing.
+    let foreign = event(
+        &x,
+        5,
+        200,
+        &json!([
+            ["e", wrap.id().to_string()],
+            ["e", wrap2.id().to_string()],
+            ["k", "1059"]
+        ]),
+        "",
+    );
+    store.write(&[foreign], None).unwrap();
+    assert_eq!(served_id(&store, &wrap.id().to_string()), 1);
+    assert_eq!(served_id(&store, &wrap2.id().to_string()), 1);
+
+    // The `p` recipient's kind 5 deletes both wraps — `wrap2` via
+    // its non-first `p` value — but not the kind-4 DM.
+    let del = event(
+        &r,
+        5,
+        201,
+        &json!([
+            ["e", wrap.id().to_string()],
+            ["e", wrap2.id().to_string()],
+            ["e", dm.id().to_string()],
+            ["k", "1059"],
+            ["k", "4"],
+            ["expiration", "300"]
+        ]),
+        "",
+    );
+    let del_out = store.write(&[del], None).unwrap();
+    assert!(matches!(del_out.outcomes[0], WriteOutcome::Stored { .. }));
+    assert_eq!(
+        served_id(&store, &wrap.id().to_string()),
+        0,
+        "recipient's kind 5 did not delete the wrap"
+    );
+    assert_eq!(
+        served_id(&store, &wrap2.id().to_string()),
+        0,
+        "non-first `p` recipient did not delete the wrap"
+    );
+    assert_eq!(
+        served_id(&store, &dm.id().to_string()),
+        1,
+        "a non-1059 `p`-tagged event must survive"
+    );
+
+    // The block holds for re-publication until the carrier expires.
+    let block_out = store.write(&[Arc::clone(&wrap)], None).unwrap();
+    assert_eq!(block_out.outcomes[0], WriteOutcome::Deleted);
+    store.expire(300, usize::MAX).unwrap();
+    let lift_out = store.write(&[wrap], None).unwrap();
+    assert!(
+        matches!(lift_out.outcomes[0], WriteOutcome::Stored { .. }),
+        "{:?}",
+        lift_out.outcomes
+    );
+}
+
+/// NIP-09: kinds 5 and 62 are never deletable, and an ephemeral
+/// kind never consults deletion blocks (it is never stored).
+#[test]
+fn deletion_immune_kinds_and_ephemeral() {
+    let (_dir, store) = store();
+    let k = key(1);
+    let carrier = event(&k, 5, 100, &json!([["e", "00".repeat(32)]]), "del");
+    let vanish = event(&k, 62, 100, &json!([]), "vanish");
+    let eph = event(&k, 21059, 100, &json!([["p", "00".repeat(32)]]), "eph");
+    store
+        .write(&[Arc::clone(&carrier), Arc::clone(&vanish)], None)
+        .unwrap();
+    // A same-author kind 5 targeting the carrier, the request to
+    // vanish, and the (never stored) ephemeral id deletes nothing.
+    let del = event(
+        &k,
+        5,
+        200,
+        &json!([
+            ["e", carrier.id().to_string()],
+            ["e", vanish.id().to_string()],
+            ["e", eph.id().to_string()]
+        ]),
+        "",
+    );
+    store.write(&[del], None).unwrap();
+    assert_eq!(served_id(&store, &carrier.id().to_string()), 1);
+    assert_eq!(served_id(&store, &vanish.id().to_string()), 1);
+    // The block row exists for the ephemeral id, yet the ephemeral
+    // publish is `Ephemeral`, not `Deleted`.
+    let out = store.write(&[eph], None).unwrap();
+    assert_eq!(out.outcomes[0], WriteOutcome::Ephemeral);
 }

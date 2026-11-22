@@ -31,7 +31,7 @@ use nosfry_core::store::WriteOutcome;
 use nosfry_core::url::RelayUrl;
 use nosfry_lmdb::{CountResult, CountScan, Progress, Scan, Store, StoreOptions};
 use nosfry_testkit::driver::{Count, StoreDriver, StoreRecords, build_case, check};
-use nosfry_testkit::spec::{SERVICE_URL, event_spec_strategy, filter_spec_strategy};
+use nosfry_testkit::spec::{SERVICE_URL, event_specs_strategy, filter_spec_strategy};
 use proptest::prelude::*;
 use serde_json::json;
 
@@ -170,12 +170,20 @@ fn moderation_script() {
     nosfry_testkit::driver::moderation_check(&mut LmdbDriver { store: &store });
 }
 
+/// The shared NIP-09/NIP-59 script replays identically on LMDB.
+#[test]
+fn deletion_script() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+    nosfry_testkit::driver::deletion_check(&mut LmdbDriver { store: &store });
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
     #[test]
     fn scan_matches_model(
-        specs in proptest::collection::vec(event_spec_strategy(), 1..40),
+        specs in event_specs_strategy(),
         batches in proptest::collection::vec(1usize..20, 1..5),
         filter_specs in proptest::collection::vec(filter_spec_strategy(), 1..4),
         max_limit in prop_oneof![Just(3u64), Just(7u64), Just(500u64)],

@@ -30,7 +30,7 @@ use nosfry_core::url::RelayUrl;
 use nosfry_sql::rusqlite::Connection;
 use nosfry_sql::{Executor, SqlStore, Value};
 use nosfry_testkit::driver::{Count, StoreDriver, StoreRecords, build_case, check};
-use nosfry_testkit::spec::{SERVICE_URL, event_spec_strategy, filter_spec_strategy};
+use nosfry_testkit::spec::{SERVICE_URL, event_specs_strategy, filter_spec_strategy};
 use proptest::prelude::*;
 
 /// The SQL store driven through the shared suite.
@@ -133,12 +133,19 @@ fn moderation_script() {
     nosfry_testkit::driver::moderation_check(&mut SqlDriver { store });
 }
 
+/// The shared NIP-09/NIP-59 script replays identically on SQL.
+#[test]
+fn deletion_script() {
+    let store = SqlStore::open(Connection::open_in_memory().unwrap()).unwrap();
+    nosfry_testkit::driver::deletion_check(&mut SqlDriver { store });
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(64))]
 
     #[test]
     fn scan_matches_model(
-        specs in proptest::collection::vec(event_spec_strategy(), 1..40),
+        specs in event_specs_strategy(),
         batches in proptest::collection::vec(1usize..20, 1..5),
         filter_specs in proptest::collection::vec(filter_spec_strategy(), 1..4),
         max_limit in prop_oneof![Just(3u64), Just(7u64), Just(500u64)],
