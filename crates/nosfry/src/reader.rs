@@ -1614,4 +1614,80 @@ mod tests {
         drop(tx);
         reader.join().unwrap();
     }
+
+    /// Reservations must not pause a scan: `pending()` counts queued
+    /// bytes only, so a pending REQ whose buffered matches already
+    /// fill the high-water mark still steps to EOSE and sends its
+    /// `Activate` — the flush that releases the reservations.
+    #[test]
+    fn reservations_do_not_pause_scans() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let events: Vec<Arc<nosfry_core::event::Event>> = (0..3).map(event).collect();
+        store.write(&events, None).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (shard_tx, mut shard_rx) = mpsc::channel(8);
+        let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        // Over the high-water mark through reservations alone —
+        // nothing queued.
+        assert!(out.reserve(2048));
+        let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        tx.send(ReaderMsg::Start {
+            start: Box::new(ScanStart {
+                conn: 1,
+                sub: SubKey {
+                    id: SubId::parse("s").unwrap(),
+                    generation: 1,
+                },
+                kind: ScanKind::Req,
+                filters,
+                gate: ReadGate::default(),
+                snapshot: u64::MAX,
+                out,
+                conn_jobs: unbounded_budget(),
+            }),
+            lease: test_lease(&jobs),
+        })
+        .unwrap();
+        let reader = std::thread::spawn(move || {
+            run(
+                &store,
+                &rx,
+                &[shard_tx],
+                &Tuning {
+                    budget: Duration::from_secs(10),
+                    high_water: 1024,
+                    total_budget: 0,
+                    max_filter_limit: 500,
+                    max_filter_limit_count: 1_000_000,
+                    max_sync_events: 1_000_000,
+                    max_sync_memory_bytes: 0,
+                    sync_memory: Arc::new(AtomicUsize::new(0)),
+                },
+                &Metrics::new(),
+                &watch::channel(false).1,
+            );
+        });
+        // EOSE must arrive; if reservations paused the scan it never
+        // would.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut eose = false;
+        while !eose && Instant::now() < deadline {
+            match out_rx.try_recv() {
+                Some(Out::Frame { ref text, .. }) if text.contains("EOSE") => eose = true,
+                Some(_) | None => std::thread::sleep(Duration::from_millis(1)),
+            }
+        }
+        assert!(eose, "reserved bytes paused the scan");
+        // The finish sends `Activate`: the flush that returns the
+        // reservations can now happen.
+        assert_eq!(
+            shard_rx.blocking_recv().map(|_| ()),
+            Some(()),
+            "no Activate"
+        );
+        drop(tx);
+        reader.join().unwrap();
+    }
 }

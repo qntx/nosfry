@@ -33,12 +33,13 @@ fn map<K, V>() -> Map<K, V> {
 
 /// A subscription registered but not yet activated: its live matches
 /// buffer until the stored scan finishes. Every buffered match holds
-/// an [`Outbound::reserve`] against the connection's pending budget —
-/// buffered bytes already count in `out.pending()` (and in the
-/// process total), so the reader pauses its scan on real memory
-/// pressure. A sub whose reservations alone fill the budget ends at
-/// the per-connection cap with "fell behind" for that sub only —
-/// never a connection kill, never a deadlock.
+/// an [`Outbound::reserve`] against the connection's byte budget —
+/// counted in `reserved` and the process total, never in `pending`:
+/// the reader's high-water pause must not stall the very scan whose
+/// `Activate` flush returns the reservation. A sub whose reservations
+/// alone fill the budget ends at the per-connection cap with "fell
+/// behind" for that sub only — never a connection kill, never a
+/// deadlock.
 #[derive(Debug)]
 struct PendingSub {
     /// Generation the pending state belongs to; `Activate` must match.
@@ -860,7 +861,7 @@ mod tests {
         for _ in 0..PENDING_CAP {
             shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, Arc::clone(&ev))])));
         }
-        let reserved = out.pending();
+        let reserved = out.reserved();
         assert!(reserved > 0, "buffered matches went uncharged");
 
         let batch: crate::channels::Batch = vec![(1u64, event(1, "hi"))];
@@ -872,7 +873,7 @@ mod tests {
             other => panic!("expected overflow Closed, got {other:?}"),
         }
         // The reservations went back; the queue holds only the CLOSED.
-        assert!(out.pending() < reserved, "reservations were not returned");
+        assert_eq!(out.reserved(), 0, "reservations were not returned");
         assert_eq!(charge.load(Ordering::Relaxed), 0);
         // The following Remove stays a no-op.
         shard.handle(ShardMsg::Remove {
@@ -903,7 +904,8 @@ mod tests {
         let ev = event(1, "hi");
         let bytes = event_frame_bytes("s", &ev);
         shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, ev)])));
-        assert_eq!(out.pending(), bytes, "buffered match went uncharged");
+        assert_eq!(out.reserved(), bytes, "buffered match went uncharged");
+        assert_eq!(out.pending(), 0, "a reservation is not queued bytes");
         assert_eq!(total.load(Ordering::Relaxed), bytes);
 
         shard.handle(ShardMsg::Activate {
@@ -912,6 +914,7 @@ mod tests {
         });
         // Unreserved then re-charged by the push: the same bytes, now
         // a queued frame — after it, no reservation may linger.
+        assert_eq!(out.reserved(), 0);
         assert_eq!(out.pending(), bytes);
         assert!(matches!(out_rx.try_recv(), Some(Out::Event { .. })));
         out_rx.written(bytes);
@@ -931,7 +934,7 @@ mod tests {
         let ev = event(1, "hi");
         shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, Arc::clone(&ev))])));
         assert_eq!(
-            out.pending(),
+            out.reserved(),
             event_frame_bytes("s", &ev),
             "buffered match went uncharged"
         );
@@ -940,7 +943,7 @@ mod tests {
             conn: 1,
             sub_id: SubId::parse("s").unwrap(),
         });
-        assert_eq!(out.pending(), 0, "Remove kept the reservation");
+        assert_eq!(out.reserved(), 0, "Remove kept the reservation");
         assert_eq!(total.load(Ordering::Relaxed), 0);
     }
 
@@ -956,13 +959,13 @@ mod tests {
         let ev = event(1, "hi");
         shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, Arc::clone(&ev))])));
         assert_eq!(
-            out.pending(),
+            out.reserved(),
             2 * event_frame_bytes("s", &ev),
             "buffered matches went uncharged"
         );
 
         shard.handle(ShardMsg::RemoveConn { conn: 1 });
-        assert_eq!(out.pending(), 0, "RemoveConn kept the reservations");
+        assert_eq!(out.reserved(), 0, "RemoveConn kept the reservations");
         assert_eq!(total.load(Ordering::Relaxed), 0);
     }
 
@@ -978,15 +981,15 @@ mod tests {
         let ev = event(1, "hi");
         shard.handle(ShardMsg::Batch(Arc::new(vec![(1u64, Arc::clone(&ev))])));
         let bytes = event_frame_bytes("s", &ev);
-        assert_eq!(out.pending(), bytes);
+        assert_eq!(out.reserved(), bytes);
 
         shard.handle(req(1, "s", 2, &out));
-        assert_eq!(out.pending(), 0, "re-Register kept the old reservations");
+        assert_eq!(out.reserved(), 0, "re-Register kept the old reservations");
         assert_eq!(total.load(Ordering::Relaxed), 0);
 
         // Generation 2 buffers and flushes under its own reservation.
         shard.handle(ShardMsg::Batch(Arc::new(vec![(2u64, Arc::clone(&ev))])));
-        assert_eq!(out.pending(), bytes);
+        assert_eq!(out.reserved(), bytes);
         shard.handle(ShardMsg::Activate {
             conn: 1,
             sub: sub_key("s", 2),
@@ -1028,6 +1031,7 @@ mod tests {
             "a refused reserve must not kill the connection"
         );
         // Every reserved byte came back: only the CLOSED is charged.
+        assert_eq!(out.reserved(), 0);
         assert_eq!(out.pending(), total.load(Ordering::Relaxed));
         out_rx.written(out.pending());
         drop(out_rx);
