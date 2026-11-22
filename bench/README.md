@@ -155,6 +155,7 @@ cp /amethyst/quartz/src/commonTest/resources/nostr_vitor_startup_data.json.gz /b
 
 # drivers, relay wrappers, and config variants
 cp /src/nosfry/bench/linux/*.sh /bench/
+cp -r /src/nosfry/bench/linux/relays /bench/relays
 cp -r /src/nosfry/bench/linux/variants /bench/variants
 ```
 
@@ -181,6 +182,9 @@ are environment-overridable. `DEFLATE=1` makes every harness
 connection negotiate permessage-deflate; `PORT`, `RELAY_CPUS`, and
 `HARNESS_CPUS` move the soak off the default port and cores — a soak
 can share the box with a benchmark run this way.
+
+`run-soak-72h.sh` runs the gate workload at those defaults for 72 h;
+[SOAK.md](SOAK.md) is its checklist and pass criteria.
 
 Each `<name>` is a binary in `/bench/bin`; strfry always runs alongside.
 
