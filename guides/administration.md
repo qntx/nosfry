@@ -109,12 +109,12 @@ nosfry-old --config /etc/nosfry/nosfry.toml export --since "$T" | nosfry-new --c
 # 3. Switch the database directory and the binary, then start.
 ```
 
-`--since` selects by `created_at`, so step 2 misses an event published during
-the gap with a backdated `created_at` older than `T` — the relay accepts
-backdating up to `created_at_lower_limit`. For a guaranteed-complete second
-pass, export without `--since`. Events already present are answered as
-duplicates, so the overlap of the two
-passes is harmless, and the downtime is the second pass only.
+Events already present are answered as duplicates, so the overlap of the two
+passes is harmless, and the downtime is the second pass only. `--since`
+selects by `created_at`, not by arrival: an event published between the two
+passes with a `created_at` before `T` (the relay accepts events up to
+`events.reject_events_older_than_seconds` old) is missed. When that matters,
+run the second pass without `--since`, at the cost of a longer downtime.
 
 What an export and import does **not** carry over today:
 
