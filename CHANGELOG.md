@@ -10,8 +10,80 @@ The format is based on [Keep a Changelog]; this project follows
 
 ## [Unreleased]
 
-No on-disk format change in this round; `export`/`import` remains
-the upgrade path and now carries management state.
+<!--
+Release notes for 0.4.0. One branch that lands separately adds its
+entries to the sections below and deletes its marker when it does:
+feat/bounded-server (bounded reader inboxes, the max_connections
+default, the pending-subscription budget, the connection and IP span).
+-->
+
+### Upgrading
+
+- The on-disk format stays at version 4 (unchanged since 0.2.0): to
+  upgrade from 0.2.x or 0.3.x, replace the binary and restart. No
+  export and import is needed.
+- The Linux release binaries now need glibc 2.31 or newer (Debian 11,
+  Ubuntu 20.04, RHEL 9 and newer). The 0.3.0 binaries needed glibc
+  2.38 and did not start on Debian 12 or Ubuntu 22.04.
+- No configuration key was added, removed or renamed.
+  `relay.auth.restricted_read_kinds` now defaults to `[4, 1059,
+  21059]` (was `[4, 1059]`). A config whose
+  `max_websocket_payload_size` is smaller than `max_event_size + 10`
+  is refused at load and at reload — check this pair if you raised
+  `max_event_size`.
+  <!-- feat/bounded-server: state the new max_connections default and
+  any new key here. -->
+- `nosfry export` now also writes the persisted NIP-86 management
+  state and NIP-62 vanish points as versioned
+  `{"nosfry_state":1,…}` lines that `nosfry import` applies;
+  `export --events-only` writes events only, for piping into strfry
+  or another relay.
+- Behaviour an operator may notice: NIP-86 bans and allow lists now
+  also hide events stored before the entry was added; only the newest
+  request to vanish per author is kept; AUTH events are accepted within
+  10 minutes of the relay's time in both directions.
+- Breaking behaviour: with AUTH disabled (empty `service_url`),
+  publishes of the restricted kinds are refused with `restricted:` —
+  set `restricted_read_kinds = []` to accept and serve them openly.
+  `ids`, `authors`, `#e` and `#p` filter values must be 64 lowercase
+  hex characters (anything else is `invalid:`; strfry accepts
+  uppercase and a `0x` prefix). `nostr_events_total{kind}` now counts
+  events persisted to the store with at most 256 own kind series —
+  dashboards built on the old verified-publish numbers change.
+
+### Security
+
+- NIP-86 `banpubkey`, `disallowkind` and the allow lists only refused
+  new publishes: events stored before the entry was added were still
+  served to every `REQ`, `COUNT` and `NEG-OPEN`. They are now hidden at
+  read time, in both editions, and stay hidden after a Workers
+  hibernation restore. The events stay in the database and reappear
+  when the entry is removed; `banevent` still deletes the event.
+- Kind 21059 (NIP-59 ephemeral gift wraps) was broadcast to every
+  matching subscriber, including unauthenticated ones, because it was
+  not in `restricted_read_kinds`. It is restricted by default now:
+  with AUTH on it is delivered only to authenticated involved readers,
+  and with AUTH off it is refused on write.
+- The Workers edition keyed its per-IP connection cap and shared
+  per-address rate buckets by the exact client address, so an IPv6
+  client could bypass both by rotating addresses inside its /64. It now
+  groups IPv6 by /64 and folds IPv4-mapped addresses, as the native
+  edition does. The NIP-86 IP block list still matches exact addresses.
+- A stored scan crossing one `created_at` shared by many events
+  buffered every match in that tie group, so a client that
+  published many events with one timestamp could make each query of it
+  allocate without bound. The buffer is now bounded by the filter's
+  remaining `limit`.
+- A `NEG-OPEN` scan was charged against `max_sync_memory_bytes` only
+  once its session sealed, so concurrent syncs could collect past the
+  budget. The scan is now charged while it collects and refused with
+  `blocked: sync capacity exhausted` when the budget is spent.
+- The HTML landing page now sends `Content-Security-Policy`,
+  `X-Content-Type-Options` and `Referrer-Policy`
+  (`site::LANDING_HEADERS`), in both editions.
+
+<!-- feat/bounded-server: security-relevant fixes go here, most
+severe first. -->
 
 ### Added
 
@@ -31,9 +103,19 @@ the upgrade path and now carries management state.
   relays (native).
 - `nosfry_event_outcomes_total{outcome}` counts verified publishes
   by outcome (native).
-- The HTML landing page sends `Content-Security-Policy`,
-  `X-Content-Type-Options`, and `Referrer-Policy`
-  (`site::LANDING_HEADERS`), in both editions.
+- Release artifacts that can be verified: every archive comes with a
+  `.sha256` file (all of them also in `SHA256SUMS`), a CycloneDX SBOM,
+  and a GitHub build provenance attestation; the container image carries
+  its own provenance attestation and SBOM
+  (`gh attestation verify <archive> --repo qntx/nosfry`). Before anything
+  is published, the release workflow runs the full CI gate on the tagged
+  commit, starts every Linux binary in Debian 11, Debian 12 and Ubuntu
+  22.04, and smoke-tests the image on both architectures. The crates are
+  published with crates.io trusted publishing.
+- Operator guides in [`guides/`](guides/README.md): install,
+  configuration reference, deployment (a hardened systemd unit and an
+  nginx site in [`contrib/`](contrib)), administration, security model,
+  Tor, the Workers edition, and a test relay for client CI.
 
 ### Changed
 
@@ -59,6 +141,9 @@ the upgrade path and now carries management state.
   window (`created_at` within ~10 minutes of the relay's time, per
   NIP-42) instead of the ephemeral-age rules that limited them to
   60 s in the past.
+- Only the newest kind-62 request to vanish per author is stored
+  (NIP-62 bookkeeping); an older or equal-dated incoming request is
+  answered `duplicate: have a newer version` instead of accumulating.
 - Idle WebSocket connections now hold a few words instead of a
   channel buffer block: the per-connection outbound queue is a
   mutex-guarded deque with a waker (~2.4 KiB less per connection),
@@ -66,37 +151,21 @@ the upgrade path and now carries management state.
 - Writer transactions take every queued publish (bounded by the
   65,536-request / 64 MiB writer inbox) instead of at most 1,024
   events, amortizing commit cost on large databases.
-- Only the newest kind-62 request to vanish per author is stored
-  (NIP-62 bookkeeping); an older or equal-dated incoming request is
-  answered `duplicate: have a newer version` instead of accumulating.
 - COUNT's tag-cover check binary-searches the sorted earlier values
   instead of scanning them against every packed tag.
+- The container image's Rust and distroless base images are pinned by
+  digest.
 
 ### Fixed
 
 - The native relay refused a WebSocket frame of exactly
   `max_websocket_payload_size` bytes (yawc's limit is exclusive);
   the limit is now inclusive on both editions.
-- The Workers edition now groups IPv6 clients by /64 and folds
-  IPv4-mapped addresses for the per-IP connection cap and the shared
-  per-address rate buckets (`AddressKey` in `nosfry-core::limits`),
-  matching native; the NIP-86 IP block list still matches exact
-  addresses.
 - `import` no longer buffers a whole input line before the `max_line`
   check: it reads at most `max_line + 1` bytes, rejects a longer line
   once, and consumes the rest without allocating it.
-- A scan crossing one `created_at` shared by many events no longer
-  buffers the whole tie group: it keeps only `limit - taken`
-  smallest ids, bounded per filter.
-- An in-progress `NEG-OPEN` scan now charges `max_sync_memory_bytes`
-  while it collects records and is refused with `blocked: sync
-  capacity exhausted` instead of running unbudgeted until the
-  session seals.
-- NIP-86 bans and allow/disallow lists now hide matching stored
-  events at read time: a REQ, COUNT, or NEG-OPEN taken after a
-  `banpubkey`, `disallowkind`, or allow-list change no longer serves
-  the moderated events, and the entries hide again after a Workers
-  hibernation restore. `banevent` still deletes the stored event.
+- The write-policy plugin's modification-time check no longer blocks a
+  runtime worker thread with synchronous file I/O.
 
 ## [0.3.0] - 2026-10-23
 
