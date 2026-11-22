@@ -23,9 +23,10 @@ nosfry-sql  = { path = "crates/nosfry-sql", version = "0.3.0" }
 serde      = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.151", features = ["raw_value"] }
 heed       = { version = "0.22", default-features = false }
-rusqlite   = "0.42.0"
-tempfile   = "3.24"
-thiserror  = "2.0.21"
+# Held at 0.40.x: Arti 0.48 tor-dirmgr needs rusqlite <0.41 (qntx/nosfry#116).
+rusqlite  = "0.40.2"
+tempfile  = "3.24"
+thiserror = "2.0.21"
 
 # Crypto
 secp256k1  = { version = "0.33.1", default-features = false, features = ["std"] }
@@ -40,6 +41,15 @@ getrandom = "0.4"
 
 # NIP-77 set reconciliation (relay side only)
 negentropy = "=0.5.3"
+
+# Embedded onion service (nosfry feature "onion" only)
+arti-client   = { version = "=0.48.0", default-features = false, features = ["tokio", "rustls", "onion-service-service", "static-sqlite"] }
+tor-cell      = "=0.48.0"
+tor-hsservice = "=0.48.0"
+tor-keymgr    = "=0.48.0"
+tor-proto     = "=0.48.0"
+tor-rtcompat  = "=0.48.0"
+safelog       = "=0.10.1"
 
 # Testing
 proptest  = "1.12.0"

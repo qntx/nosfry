@@ -168,7 +168,7 @@ impl Relay {
             .iter()
             .find_map(|listen| match &listen.address {
                 ListenAddress::Unix(path) => Some(path.clone()),
-                ListenAddress::Tcp(_) => None,
+                _ => None,
             });
         let (tx, rx) = oneshot::channel();
         let (reload_tx, reload_rx) = watch::channel(config.clone());

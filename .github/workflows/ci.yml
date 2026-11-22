@@ -41,6 +41,7 @@ jobs:
       deny: true
       doc: true
       package-check: true
+      each-feature: true
 
   toolchain:
     runs-on: ubuntu-latest
@@ -153,9 +154,31 @@ jobs:
             echo "- gzip: $(gzip -c "$WASM" | wc -c) bytes"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  default-features:
+    name: default build has no Arti
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: default-features
+      - name: Assert the default build links no Arti crates
+        run: |
+          if cargo tree -p nosfry -e normal --prefix none | grep -E '^(arti-|tor-)'; then
+            echo "::error::Arti crates in nosfry's default dependency graph; the onion feature must be the only path to them"
+            exit 1
+          fi
+      - run: cargo clippy -p nosfry --all-targets -- -D warnings
+      - run: cargo test -p nosfry --lib
+
   gate:
     if: always()
-    needs: [taplo, ci, toolchain, nightly-lint, wasm32, fuzz, conformance-native, conformance-worker]
+    needs: [taplo, ci, toolchain, nightly-lint, wasm32, fuzz, conformance-native, conformance-worker, default-features]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}

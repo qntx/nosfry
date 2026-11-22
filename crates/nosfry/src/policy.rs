@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nosfry_core::event::{Event, PublicKey};
 use nosfry_core::policy::{
-    Decision, ResponseError, parse_response, request_line, request_line_sync, request_line_unix,
+    Decision, ResponseError, parse_response, request_line, request_line_listener, request_line_sync,
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -73,12 +73,19 @@ impl WritePolicy {
             Peer::Ip(ip) => request_line(json, received_at, *ip, authed),
             // The listener id is `unix:<path>`; the plugin sees the
             // socket path.
-            Peer::Listener(id) => request_line_unix(
+            Peer::Listener(id) => request_line_listener(
                 json,
                 received_at,
+                "Unix",
                 id.strip_prefix("unix:").unwrap_or(id),
                 authed,
             ),
+            // The listener id is `onion:<nickname>`; the plugin sees it
+            // as the source info.
+            #[cfg(feature = "onion")]
+            Peer::Circuit { listener, .. } => {
+                request_line_listener(json, received_at, "Onion", listener, authed)
+            }
         };
         self.send(line, &event.id().to_string()).await
     }

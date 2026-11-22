@@ -27,6 +27,18 @@ pub(crate) enum Peer {
     /// `unix:/run/nosfry/tor.sock`); every connection of such a
     /// listener is the same peer.
     Listener(Arc<str>),
+    /// One rendezvous circuit of an embedded onion listener. `circuit`
+    /// is a process-local number that appears only in debug logs; the
+    /// peer identity is the listener, so caps and buckets bind
+    /// listener-wide — the only bound that holds when circuits are
+    /// free to open.
+    #[cfg(feature = "onion")]
+    Circuit {
+        /// The listener's address string (`onion:<nickname>`).
+        listener: Arc<str>,
+        /// The circuit's process-local number.
+        circuit: u64,
+    },
 }
 
 impl std::fmt::Display for Peer {
@@ -34,6 +46,8 @@ impl std::fmt::Display for Peer {
         match self {
             Self::Ip(ip) => ip.fmt(f),
             Self::Listener(id) => f.write_str(id),
+            #[cfg(feature = "onion")]
+            Self::Circuit { listener, .. } => f.write_str(listener),
         }
     }
 }
@@ -45,6 +59,8 @@ impl Peer {
         match self {
             Self::Ip(ip) => PeerKey::Addr(AddressKey::from(*ip)),
             Self::Listener(id) => PeerKey::Listener(Arc::clone(id)),
+            #[cfg(feature = "onion")]
+            Self::Circuit { listener, .. } => PeerKey::Listener(Arc::clone(listener)),
         }
     }
 }
@@ -78,16 +94,40 @@ pub(crate) struct ListenerInfo {
     pub(crate) last_warn_secs: AtomicU64,
 }
 
+/// How one accepted connection reached the relay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Transport {
+    /// A TCP connection; the socket peer address is the client's.
+    Tcp(SocketAddr),
+    /// A unix-domain socket; carries no client address.
+    Unix,
+    /// One rendezvous circuit of an embedded onion listener; carries
+    /// no client address, only a process-local circuit number.
+    #[cfg(feature = "onion")]
+    Circuit(u64),
+}
+
 /// The request extension the accept path inserts into every
-/// connection: which listener took it, plus the transport peer
-/// address when the transport has one. Replaces `ConnectInfo`.
+/// connection: which listener took it, plus the transport. Replaces
+/// `ConnectInfo`.
 #[derive(Debug, Clone)]
 pub(crate) struct Origin {
     /// The accepting listener.
     pub(crate) listener: Arc<ListenerInfo>,
-    /// The TCP transport peer; `None` for transports without client
-    /// addresses (unix sockets).
-    pub(crate) transport: Option<SocketAddr>,
+    /// The transport the connection arrived on.
+    pub(crate) transport: Transport,
+}
+
+impl Origin {
+    /// Whether the connection arrived over an embedded onion circuit;
+    /// always false in builds without the `onion` feature.
+    pub(crate) const fn is_onion(&self) -> bool {
+        match self.transport {
+            #[cfg(feature = "onion")]
+            Transport::Circuit(_) => true,
+            _ => false,
+        }
+    }
 }
 
 /// The request's peer, plus whether a configured `real_ip_header`
@@ -110,10 +150,15 @@ pub(crate) fn resolve(origin: &Origin, headers: &HeaderMap) -> (Peer, bool) {
     {
         return (Peer::Ip(ip), false);
     }
-    let peer = origin.transport.map_or_else(
-        || Peer::Listener(Arc::clone(&info.id)),
-        |sock| Peer::Ip(sock.ip()),
-    );
+    let peer = match &origin.transport {
+        Transport::Tcp(sock) => Peer::Ip(sock.ip()),
+        Transport::Unix => Peer::Listener(Arc::clone(&info.id)),
+        #[cfg(feature = "onion")]
+        Transport::Circuit(circuit) => Peer::Circuit {
+            listener: Arc::clone(&info.id),
+            circuit: *circuit,
+        },
+    };
     (peer, trust_header)
 }
 
@@ -166,7 +211,7 @@ mod tests {
         })
     }
 
-    fn origin(id: &str, real_ip_header: &str, transport: Option<SocketAddr>) -> Origin {
+    fn origin(id: &str, real_ip_header: &str, transport: Transport) -> Origin {
         Origin {
             listener: listener(id, "default", real_ip_header),
             transport,
@@ -186,7 +231,7 @@ mod tests {
     /// header's address; the last comma-separated value is trusted.
     #[test]
     fn real_ip_header_on_unix_resolves_to_ip() {
-        let origin = origin("unix:/run/x.sock", "x-forwarded-for", None);
+        let origin = origin("unix:/run/x.sock", "x-forwarded-for", Transport::Unix);
         let (peer, fell_back) = resolve(
             &origin,
             &headers("x-forwarded-for", " 1.2.3.4, 203.0.113.7 "),
@@ -199,7 +244,7 @@ mod tests {
     /// identity: every connection of the socket is the same peer.
     #[test]
     fn unix_without_header_is_the_listener_peer() {
-        let origin = origin("unix:/run/x.sock", "", None);
+        let origin = origin("unix:/run/x.sock", "", Transport::Unix);
         assert_eq!(
             resolve(&origin, &HeaderMap::new()),
             (Peer::Listener(Arc::from("unix:/run/x.sock")), false)
@@ -215,7 +260,7 @@ mod tests {
     #[test]
     fn tcp_resolves_to_socket_ip() {
         let sock: SocketAddr = "192.0.2.9:4444".parse().unwrap();
-        let origin = origin("127.0.0.1:7777", "", Some(sock));
+        let origin = origin("127.0.0.1:7777", "", Transport::Tcp(sock));
         assert_eq!(
             resolve(&origin, &HeaderMap::new()),
             (Peer::Ip(IpAddr::from([192, 0, 2, 9])), false)
@@ -226,13 +271,13 @@ mod tests {
     /// identity, TCP → socket address.
     #[test]
     fn malformed_header_falls_back() {
-        let unix = origin("unix:/run/x.sock", "x-forwarded-for", None);
+        let unix = origin("unix:/run/x.sock", "x-forwarded-for", Transport::Unix);
         assert_eq!(
             resolve(&unix, &headers("x-forwarded-for", "not-an-ip")),
             (Peer::Listener(Arc::from("unix:/run/x.sock")), true)
         );
         let sock: SocketAddr = "10.0.0.1:80".parse().unwrap();
-        let tcp = origin("127.0.0.1:7777", "x-forwarded-for", Some(sock));
+        let tcp = origin("127.0.0.1:7777", "x-forwarded-for", Transport::Tcp(sock));
         assert_eq!(
             resolve(&tcp, &headers("x-forwarded-for", "not-an-ip")),
             (Peer::Ip(IpAddr::from([10, 0, 0, 1])), true)
@@ -242,7 +287,7 @@ mod tests {
     /// An absent trusted header falls back the same way, flagged.
     #[test]
     fn missing_header_falls_back() {
-        let origin = origin("unix:/run/x.sock", "x-real-ip", None);
+        let origin = origin("unix:/run/x.sock", "x-real-ip", Transport::Unix);
         assert_eq!(
             resolve(&origin, &HeaderMap::new()),
             (Peer::Listener(Arc::from("unix:/run/x.sock")), true)

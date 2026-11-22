@@ -117,6 +117,23 @@ enum Cmd {
         #[arg(long, default_value_t = 60)]
         timeout: u64,
     },
+    /// Embedded onion service commands (the `onion` feature).
+    #[cfg(feature = "onion")]
+    Onion {
+        #[command(subcommand)]
+        cmd: OnionCmd,
+    },
+}
+
+/// `nosfry onion …` subcommands.
+#[cfg(feature = "onion")]
+#[derive(Subcommand)]
+enum OnionCmd {
+    /// Print the configured onion listeners' `ws://<addr>.onion`
+    /// URLs, one per line. Generates any missing identity key under
+    /// `[relay.onion] state_dir`; never starts the relay or touches
+    /// the network.
+    Address,
 }
 
 fn init_tracing() {
@@ -257,6 +274,16 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             opts.allow_private = allow_private;
             opts.timeout = Duration::from_secs(timeout);
             return sync(&config, opts).await;
+        }
+        #[cfg(feature = "onion")]
+        Cmd::Onion {
+            cmd: OnionCmd::Address,
+        } => {
+            let mut out = stdout();
+            for url in nosfry::onion::addresses(&config)? {
+                writeln!(out, "{url}")?;
+            }
+            Ok(())
         }
     }
     .map(|()| ExitCode::SUCCESS)
