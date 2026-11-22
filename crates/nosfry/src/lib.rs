@@ -784,14 +784,23 @@ pub async fn bind(config: &Config) -> Result<Vec<Listener>, ServerError> {
 }
 
 /// Bind one unix socket path, returning the listener and the guard
-/// that unlinks it on shutdown. A path that already exists is probed
-/// by connecting: a refused connect means a stale socket file, which
-/// is removed and re-bound; a successful connect means a live server
-/// owns it and the bind fails `address in use`; anything else is an
-/// error.
+/// that unlinks it on shutdown. A path that already exists must be a
+/// socket — anything else is an error, never removed (Linux answers a
+/// connect to a regular file `ECONNREFUSED`, so the probe alone would
+/// take it for stale). An existing socket is probed by connecting: a
+/// refused connect means a stale socket file, which is removed and
+/// re-bound; a successful connect means a live server owns it and the
+/// bind fails `address in use`; anything else is an error.
 #[cfg(unix)]
 async fn bind_unix(path: &std::path::Path) -> Result<(UnixListener, UnixSocketGuard), ServerError> {
-    if path.exists() {
+    use std::os::unix::fs::FileTypeExt as _;
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if !meta.file_type().is_socket() {
+            return Err(ServerError::Io(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("{} exists and is not a unix socket", path.display()),
+            )));
+        }
         match tokio::net::UnixStream::connect(path).await {
             Ok(_) => {
                 return Err(ServerError::Io(std::io::Error::new(

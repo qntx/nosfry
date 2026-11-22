@@ -247,7 +247,8 @@ header's value.
 
 The relay creates a unix socket at startup and removes it on shutdown. A socket
 file left by a crashed relay is replaced; if another process still serves the
-path, the relay refuses to start (`unix socket … already in use`). The socket's
+path, the relay refuses to start (`unix socket … already in use`), and any
+other file at the path is an error, never removed. The socket's
 permissions come from the process umask and its directory: there is no mode
 key. [deployment.md](deployment.md#a-unix-socket-instead-of-tcp) has a systemd
 setup that lets nginx or tor connect.
