@@ -276,6 +276,9 @@ The format is based on [Keep a Changelog]; this project follows
   editions, the privacy posture and a members-only variant; the
   conformance suite gained a fourth pass that runs its `marmot_*`
   cases against the shipped profile on both editions.
+- `contrib/test-relay/nosfry-test-relay.sh` starts a seeded local or
+  CI test relay on a temp dir, waits for NIP-11 readiness, and cleans
+  up deterministically on signal (guide: `guides/test-relay.md`).
 
 ### Changed
 

@@ -14,5 +14,6 @@
 | [marmot.md](marmot.md)                 | Running a Marmot (MDK / White Noise) relay: the shipped profile, the Workers translation, privacy, members-only variants, verification.                                    |
 
 The files these guides refer to are in [`contrib/`](../contrib):
-`contrib/systemd/nosfry.service`, `contrib/nginx/nosfry.conf` and
-`contrib/marmot/nosfry.toml`.
+`contrib/systemd/nosfry.service`, `contrib/nginx/nosfry.conf`,
+`contrib/marmot/nosfry.toml` and
+`contrib/test-relay/nosfry-test-relay.sh`.
