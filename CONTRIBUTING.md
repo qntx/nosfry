@@ -101,16 +101,31 @@ bench/                 benchmark and soak harnesses
 
 ## Releases
 
-Maintainers only.
+Maintainers only. `.github/workflows/release.yml` is the whole pipeline.
 
-1. CI is green on `main`, and the crash and fuzz runs above pass.
-2. Move the `[Unreleased]` notes in `CHANGELOG.md` into a dated version section.
-3. Bump the workspace `version` and the path dependency versions in the root
+1. Run it as a dry run first: `gh workflow run release.yml --ref main`. A
+   manual run runs the CI gate, builds every archive (Linux binaries against
+   glibc 2.31 with cargo-zigbuild, macOS natively), starts each Linux binary
+   in Debian 11, Debian 12 and Ubuntu 22.04 containers, builds and tests the
+   container image on both architectures, and publishes nothing. Once
+   release.yml is on `main`, a dry run can also be dispatched on a branch:
+   `gh workflow run release.yml --ref <branch>`.
+2. Run the crash test at 60 cycles, the fuzz targets above, and the 72-hour
+   soak on the candidate commit (bench/SOAK.md).
+3. Move the `[Unreleased]` notes in `CHANGELOG.md` into a dated
+   `## [X.Y.Z] - YYYY-MM-DD` section; that section becomes the release notes.
+4. Bump the workspace `version` and the path dependency versions in the root
    `Cargo.toml`.
-4. Tag and push: `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`.
-5. Confirm the `release` (binaries), `publish` (crates.io: `nosfry-core`,
-   `nosfry-lmdb`, `nosfry`), and `container` (`ghcr.io/qntx/nosfry`) workflows
-   succeed.
+5. Land steps 3 and 4 as one PR through the merge queue
+   (`gh pr merge --squash --auto`); `main` is protected and does not take
+   direct pushes.
+6. Tag the merge commit and push:
+   `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`. The tag run
+   repeats the gate on the tagged commit, then publishes in this order: a
+   draft GitHub release with checksums, SBOMs and attestations, the
+   `ghcr.io/qntx/nosfry` image, the crates (`nosfry-core`, `nosfry-lmdb`,
+   `nosfry`, through crates.io trusted publishing), and finally the public
+   release.
 
 ## Security
 
