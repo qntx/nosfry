@@ -49,10 +49,7 @@ use crate::relay::{Attachment, PolicyCheck, Relay, Socket};
 fn config(env: &Env) -> Result<Config> {
     static PARSED: OnceLock<Result<Config, String>> = OnceLock::new();
     match PARSED.get_or_init(|| {
-        let toml = env
-            .var("NOSFRY_CONFIG")
-            .map(|v| v.to_string())
-            .unwrap_or_default();
+        let toml = env.var("NOSFRY_CONFIG").map_or_default(|v| v.to_string());
         Config::parse(&toml).map_err(|err| err.to_string())
     }) {
         Ok(config) => Ok(config.clone()),

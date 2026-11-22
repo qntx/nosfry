@@ -13,7 +13,7 @@
 # .dockerignore, so the image's Rust base pins the compiler instead of
 # rustup downloading a toolchain during the build. Dependabot's docker
 # ecosystem bumps the tag and digest together.
-FROM rust:1.99-slim-bookworm@sha256:24707e70a4f1e23d9a7b25202ec43126d28a52294b96aad5c670df1fd1f1d400 AS chef
+FROM rust:1.100-slim-bookworm@sha256:7c7d4eb4d05b7781187a327809466cfddf29753f6defdc3d19a0e291951b7a37 AS chef
 ENV CARGO_TERM_COLOR=always
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \

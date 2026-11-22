@@ -6,6 +6,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       protobuf-compiler libsqlite3-dev \
       util-linux netcat-openbsd procps python3 time \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.99.1 --profile minimal
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.100.0 --profile minimal
 ENV PATH=/root/.cargo/bin:$PATH
 WORKDIR /bench
