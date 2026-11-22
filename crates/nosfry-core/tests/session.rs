@@ -722,6 +722,105 @@ fn rate_limited_flag_marks_refusals() {
     assert!(!received.rate_limited);
 }
 
+/// Parse-failure replies spend the REQ budget: the burst buys a
+/// NOTICE each, beyond it a junk frame is dropped silently and only
+/// the `rate_limited` flag reports it.
+#[test]
+fn junk_replies_spend_the_req_budget() {
+    let mut s = session();
+    let t = 1_000u64;
+    for i in 0..150 {
+        let (out, received) = receive(&mut s, t, "[\"NOPE\"]");
+        assert_eq!(received.verb, None, "frame {i}");
+        if i < 100 {
+            let frames = sends(&out);
+            assert_eq!(frames.len(), 1, "frame {i}: {out:?}");
+            assert!(
+                frames[0].starts_with("[\"NOTICE\",\"invalid:"),
+                "{}",
+                frames[0]
+            );
+            assert!(!received.rate_limited, "frame {i}");
+        } else {
+            assert!(out.is_empty(), "frame {i}: {out:?}");
+            assert!(received.rate_limited, "frame {i}");
+        }
+    }
+    // The budget is shared: a valid REQ at the same instant is refused
+    // with the usual rate-limited CLOSED.
+    let (out, received) = receive(&mut s, t, "[\"REQ\",\"a\",{}]");
+    assert!(received.rate_limited);
+    let frames = sends(&out);
+    assert_eq!(frames.len(), 1, "{out:?}");
+    assert!(
+        frames[0].contains("\"CLOSED\"") && frames[0].contains("rate-limited: slow down"),
+        "{}",
+        frames[0]
+    );
+}
+
+/// A refused parse failure still tears down the subscription under
+/// its id — only the reply frame is dropped, not the accounting.
+#[test]
+fn refused_malformed_req_still_drops_the_sub() {
+    let mut s = session();
+    let t = 1_000u64;
+    let out = feed_ms(&mut s, t, "[\"REQ\",\"keep\",{}]");
+    assert!(
+        matches!(out.as_slice(), [Command::Subscribe { .. }]),
+        "{out:?}"
+    );
+    // Spend the rest of the REQ burst on junk.
+    for _ in 0..99 {
+        feed_ms(&mut s, t, "[\"NOPE\"]");
+    }
+    // A malformed REQ reusing the open id, over budget: no reply
+    // frame, but the old subscription is still unsubscribed.
+    let (out, received) = receive(&mut s, t, "[\"REQ\",\"keep\",{\"kinds\":\"nope\"}]");
+    assert!(received.rate_limited);
+    assert_eq!(received.verb, Some(ClientVerb::Req));
+    assert!(
+        matches!(out.as_slice(), [Command::Unsubscribe { sub_id }] if sub_id.as_str() == "keep"),
+        "{out:?}"
+    );
+    // `keep` is gone for good: its CLOSE is a no-op.
+    let out = feed_ms(&mut s, t, "[\"CLOSE\",\"keep\"]");
+    assert!(out.is_empty(), "{out:?}");
+}
+
+/// The `unknown verb` echo is bounded at 32 bytes, cut on a char
+/// boundary and marked with an ellipsis.
+#[test]
+fn unknown_verb_echo_is_bounded() {
+    let mut s = session();
+    // 100 ASCII bytes: the echo keeps the first 32 plus `…`.
+    let verb = "X".repeat(100);
+    let out = feed_ms(&mut s, 1_000, &format!("[\"{verb}\"]"));
+    let frames = sends(&out);
+    assert_eq!(frames.len(), 1, "{out:?}");
+    let shown = "X".repeat(32);
+    assert!(
+        frames[0].contains(&format!("unknown verb `{shown}…`")),
+        "{}",
+        frames[0]
+    );
+    // A char straddling byte 32 is dropped whole, not split.
+    let verb = format!("{}€{}", "X".repeat(31), "Y".repeat(10));
+    let out = feed_ms(&mut s, 1_000, &format!("[\"{verb}\"]"));
+    let frames = sends(&out);
+    assert_eq!(frames.len(), 1, "{out:?}");
+    let shown = "X".repeat(31);
+    assert!(
+        frames[0].contains(&format!("unknown verb `{shown}…`")),
+        "{}",
+        frames[0]
+    );
+    // A short verb still echoes whole, without the mark.
+    let out = feed_ms(&mut s, 1_000, "[\"BOGUS\",\"x\"]");
+    let frames = sends(&out);
+    assert!(frames[0].contains("unknown verb `BOGUS`"), "{}", frames[0]);
+}
+
 /// Session under auth rules: `url` empty disables AUTH; `kinds` are
 /// the restricted read kinds.
 fn session_auth(url: &str, kinds: &[u16], involved_only: bool) -> Session {

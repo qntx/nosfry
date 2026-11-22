@@ -249,6 +249,16 @@ impl Session {
             Err(error) => {
                 let verb = error.verb();
                 self.drop_refused(&error, out);
+                // The reply is what a junk flood buys, so failed parses
+                // spend the REQ budget too. Past it the frame is
+                // dropped silently: nothing parsed, so no protocol
+                // state needs an answer; the teardown above still ran.
+                if self.req_charge(now_ms).is_err() {
+                    return Received {
+                        verb,
+                        rate_limited: true,
+                    };
+                }
                 out.push(rejection(error));
                 return Received {
                     verb,

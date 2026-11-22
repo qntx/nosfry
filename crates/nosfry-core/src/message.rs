@@ -13,6 +13,11 @@ use crate::hex;
 /// Maximum subscription id length in chars (NIP-01).
 pub const SUB_ID_MAX_CHARS: usize = 64;
 
+/// The `unknown verb` echo quotes at most this many bytes of the
+/// client's verb string, cut on a char boundary — otherwise the frame
+/// cap is the only bound on a string the error repeats back.
+const VERB_ECHO_MAX: usize = 32;
+
 /// A validated subscription id (1..=64 Unicode scalar values).
 ///
 /// Stores the original string plus its pre-escaped JSON form behind one
@@ -368,7 +373,10 @@ impl<'a> ClientMessage<'a> {
             .and_then(|raw| serde_json::from_str::<&str>(raw.get()).ok())
             .ok_or_else(|| MessageError::invalid("expected [verb, ...] array".to_owned()))?;
         let Ok(verb) = verb_str.parse::<ClientVerb>() else {
-            return Err(MessageError::invalid(format!("unknown verb `{verb_str}`")));
+            return Err(MessageError::invalid(format!(
+                "unknown verb `{}`",
+                verb_echo(verb_str)
+            )));
         };
         let message: Result<Self, MessageError> = match verb {
             ClientVerb::Event => {
@@ -506,6 +514,18 @@ fn parse_sub(items: &[&RawValue], index: usize, verb: ClientVerb) -> Result<SubI
             message: format!("{} subscription id must be a string", verb.as_str()),
         })?;
     SubId::parse(raw.as_ref())
+}
+
+/// `verb` shortened to at most [`VERB_ECHO_MAX`] bytes on a char
+/// boundary, `…` marking the cut.
+fn verb_echo(verb: &str) -> Cow<'_, str> {
+    if verb.len() <= VERB_ECHO_MAX {
+        return Cow::Borrowed(verb);
+    }
+    let mut echo = String::with_capacity(VERB_ECHO_MAX + '…'.len_utf8());
+    echo.push_str(&verb[..verb.floor_char_boundary(VERB_ECHO_MAX)]);
+    echo.push('…');
+    Cow::Owned(echo)
 }
 
 fn parse_filters(
