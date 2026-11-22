@@ -82,7 +82,9 @@ const fn classify_v4(ip: Ipv4Addr) -> Scope {
 
 /// Two u16 segments as an IPv4 address.
 const fn v4_of(hi: u16, lo: u16) -> Ipv4Addr {
-    Ipv4Addr::new((hi >> 8) as u8, hi as u8, (lo >> 8) as u8, lo as u8)
+    let [a, b] = hi.to_be_bytes();
+    let [c, d] = lo.to_be_bytes();
+    Ipv4Addr::new(a, b, c, d)
 }
 
 /// Classify an IPv6 address; addresses that embed an IPv4 are
