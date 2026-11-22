@@ -57,18 +57,19 @@ the condition holds; `relay.info.supported_nips` replaces the list verbatim.
 A test (`crates/nosfry/tests/docs.rs`) checks this table against the list the
 code computes.
 
-| NIP                                                            | Feature                    | Advertised                             |
-| -------------------------------------------------------------- | -------------------------- | -------------------------------------- |
-| [01](https://github.com/nostr-protocol/nips/blob/master/01.md) | Basic protocol             | always                                 |
-| [09](https://github.com/nostr-protocol/nips/blob/master/09.md) | Event deletion requests    | always                                 |
-| [11](https://github.com/nostr-protocol/nips/blob/master/11.md) | Relay information document | always                                 |
-| [40](https://github.com/nostr-protocol/nips/blob/master/40.md) | Expiration timestamp       | always                                 |
-| [42](https://github.com/nostr-protocol/nips/blob/master/42.md) | Authentication of clients  | when `relay.service_url` is set        |
-| [45](https://github.com/nostr-protocol/nips/blob/master/45.md) | Event counts (with HLL)    | when `max_filter_limit_count` is not 0 |
-| [62](https://github.com/nostr-protocol/nips/blob/master/62.md) | Request to vanish          | always                                 |
-| [70](https://github.com/nostr-protocol/nips/blob/master/70.md) | Protected events           | always                                 |
-| [77](https://github.com/nostr-protocol/nips/blob/master/77.md) | Negentropy syncing         | when `max_sync_events` is not 0        |
-| [86](https://github.com/nostr-protocol/nips/blob/master/86.md) | Relay management API       | when `relay.management.admins` is set  |
+| NIP                                                            | Feature                    | Advertised                                                                        |
+| -------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------- |
+| [01](https://github.com/nostr-protocol/nips/blob/master/01.md) | Basic protocol             | always                                                                            |
+| [09](https://github.com/nostr-protocol/nips/blob/master/09.md) | Event deletion requests    | always                                                                            |
+| [11](https://github.com/nostr-protocol/nips/blob/master/11.md) | Relay information document | always                                                                            |
+| [40](https://github.com/nostr-protocol/nips/blob/master/40.md) | Expiration timestamp       | always                                                                            |
+| [42](https://github.com/nostr-protocol/nips/blob/master/42.md) | Authentication of clients  | when `relay.service_url` is set                                                   |
+| [45](https://github.com/nostr-protocol/nips/blob/master/45.md) | Event counts (with HLL)    | when `max_filter_limit_count` is not 0                                            |
+| [59](https://github.com/nostr-protocol/nips/blob/master/59.md) | Gift wrap deletion         | when `relay.service_url` is set and `relay.auth.restricted_read_kinds` holds 1059 |
+| [62](https://github.com/nostr-protocol/nips/blob/master/62.md) | Request to vanish          | always                                                                            |
+| [70](https://github.com/nostr-protocol/nips/blob/master/70.md) | Protected events           | always                                                                            |
+| [77](https://github.com/nostr-protocol/nips/blob/master/77.md) | Negentropy syncing         | when `max_sync_events` is not 0                                                   |
+| [86](https://github.com/nostr-protocol/nips/blob/master/86.md) | Relay management API       | when `relay.management.admins` is set                                             |
 
 NIP-98 authorizes the NIP-86 calls. strfry's write-policy plugins and
 `strfry export` dumps work unchanged ([guides/administration.md](guides/administration.md)).
