@@ -9,6 +9,7 @@ use nosfry_core::auth::ReadGate;
 use nosfry_core::event::{EventId, cmp_newest_first};
 use nosfry_core::filter::Filter;
 use nosfry_core::packed::PackedRef;
+use nosfry_core::store::Completion;
 
 use crate::{Index, Reader, Store, StoreError};
 
@@ -134,6 +135,10 @@ struct PlanState {
     /// values reaching it) share the `(created_at, seq)` suffix and
     /// therefore pop consecutively.
     last_seq: Option<u64>,
+    /// The first match provably left unsent: a group entry dropped
+    /// over `remaining`, an `Ids` truncation, or the limit-stopping
+    /// head when it passes the candidate checks.
+    witness: Option<u64>,
     limit: u64,
 }
 
@@ -144,6 +149,9 @@ struct Plan {
     mode: Option<Mode>,
     state: PlanState,
     finished: bool,
+    /// The filter's candidates ran dry with no limit cut — impossible
+    /// filters count. Meaningful once `finished`.
+    exhausted: bool,
 }
 
 #[derive(Debug)]
@@ -262,9 +270,11 @@ impl Scan {
                         group: BinaryHeap::new(),
                         taken: 0,
                         last_seq: None,
+                        witness: None,
                         limit,
                     },
                     finished,
+                    exhausted: filter.is_impossible(),
                 }
             })
             .collect();
@@ -352,6 +362,41 @@ impl Scan {
             Progress::Pending
         })
     }
+
+    /// The NIP-67 completeness summary; [`Completion::default`]
+    /// (know nothing) until the scan reports [`Progress::Done`]. A
+    /// witness seq already emitted by another filter is not unsent.
+    #[must_use]
+    pub fn completion(&self) -> Completion {
+        if !self.done {
+            return Completion::default();
+        }
+        let mut completion = Completion {
+            exhausted: true,
+            more: false,
+        };
+        for plan in &self.plans {
+            if plan.exhausted {
+                continue;
+            }
+            completion.exhausted = false;
+            if let Some(seq) = plan.state.witness
+                && !self.emitted.contains(&seq)
+            {
+                completion.more = true;
+            }
+        }
+        completion
+    }
+
+    /// The NIP-67 `auth` hint for this scan's filters: true exactly
+    /// when the session issued the lazy AUTH challenge for the REQ —
+    /// the gate's REQ-time authenticated set decides, so the flag
+    /// never reveals whether hidden events exist.
+    #[must_use]
+    pub fn auth_hint(&self) -> bool {
+        self.gate.auth_hint(&self.filters)
+    }
 }
 
 /// Where a finished match goes: the canonical JSON payload for REQ
@@ -413,9 +458,14 @@ fn run_plan(step: &mut Step<'_, '_>, filter: &Filter, plan: &mut Plan) -> Result
         return Ok(());
     };
     match mode {
-        Mode::Ids { pending } => {
-            scan_ids(step, filter, &mut plan.state, pending, &mut plan.finished)
-        }
+        Mode::Ids { pending } => scan_ids(
+            step,
+            filter,
+            &mut plan.state,
+            pending,
+            &mut plan.finished,
+            &mut plan.exhausted,
+        ),
         Mode::Ranges { db, cursors } => scan_ranges(
             step,
             filter,
@@ -423,6 +473,7 @@ fn run_plan(step: &mut Step<'_, '_>, filter: &Filter, plan: &mut Plan) -> Result
             *db,
             cursors,
             &mut plan.finished,
+            &mut plan.exhausted,
         ),
     }
 }
@@ -434,6 +485,7 @@ fn scan_ids(
     state: &mut PlanState,
     pending: &mut VecDeque<[u8; 32]>,
     finished: &mut bool,
+    exhausted: &mut bool,
 ) -> Result<(), StoreError> {
     while let Some(id) = pending.pop_front() {
         step.processed += 1;
@@ -446,7 +498,8 @@ fn scan_ids(
             return Ok(());
         }
     }
-    finalize(step, &mut state.collected, state.limit)?;
+    state.witness = finalize(step, &mut state.collected, state.limit)?;
+    *exhausted = state.witness.is_none();
     *finished = true;
     Ok(())
 }
@@ -461,6 +514,7 @@ fn scan_ranges(
     index: Index,
     cursors: &mut [Cursor],
     finished: &mut bool,
+    exhausted: &mut bool,
 ) -> Result<(), StoreError> {
     let db = step.store.db(index);
     // One live reverse iterator per cursor, seeded at the saved
@@ -502,6 +556,13 @@ fn scan_ranges(
         if state.group.peek().is_some_and(|m| head.created_at < m.0) {
             flush_group(step, state)?;
             if state.taken >= state.limit {
+                // The head that proved more candidates remain is
+                // itself a witness when it survives the candidate
+                // checks — a hidden event never counts.
+                state.witness = match state.witness {
+                    w @ Some(_) => w,
+                    None => stop_witness(step, filter, &mut state.last_seq, head.seq)?,
+                };
                 *finished = true;
                 return Ok(());
             }
@@ -512,8 +573,11 @@ fn scan_ranges(
             let remaining =
                 usize::try_from(state.limit.saturating_sub(state.taken)).unwrap_or(usize::MAX);
             state.group.push(m);
-            if state.group.len() > remaining {
-                state.group.pop();
+            if state.group.len() > remaining
+                && let Some(dropped) = state.group.pop()
+                && state.witness.is_none()
+            {
+                state.witness = Some(dropped.2);
             }
         }
         if budget_elapsed(step) {
@@ -522,6 +586,7 @@ fn scan_ranges(
         }
     }
     flush_group(step, state)?;
+    *exhausted = state.witness.is_none();
     *finished = true;
     Ok(())
 }
@@ -603,15 +668,29 @@ fn try_candidate(
     Ok(None)
 }
 
+/// The merge head that stops a scan on `limit` is a witness when it
+/// survives the candidate checks — a hidden event never counts.
+fn stop_witness(
+    step: &Step<'_, '_>,
+    filter: &Filter,
+    last_seq: &mut Option<u64>,
+    seq: u64,
+) -> Result<Option<u64>, StoreError> {
+    Ok(try_candidate(step, filter, last_seq, seq)?.map(|m| m.2))
+}
+
 /// Sort collected matches newest-first, truncate to the limit, emit the
-/// payloads, and record the seqs so later filters skip them.
+/// payloads, and record the seqs so later filters skip them. Answers
+/// the first truncated match's seq — the provable unsent witness.
 fn finalize(
     step: &mut Step<'_, '_>,
     collected: &mut Vec<Match>,
     limit: u64,
-) -> Result<(), StoreError> {
+) -> Result<Option<u64>, StoreError> {
     collected.sort_by(|a, b| cmp_newest_first((a.0, &a.1), (b.0, &b.1)));
-    collected.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    let witness = collected.get(limit).map(|m| m.2);
+    collected.truncate(limit);
     for m in collected.drain(..) {
         // An earlier filter may already have emitted this seq: it still
         // counts toward this filter's limit boundary, but is not sent
@@ -621,7 +700,7 @@ fn finalize(
         }
         emit_match(step, m)?;
     }
-    Ok(())
+    Ok(witness)
 }
 
 /// `created_at` = the 8 bytes right before the trailing seq.

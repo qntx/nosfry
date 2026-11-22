@@ -9,7 +9,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nosfry_core::event::EventId;
 use nosfry_core::hll::Hll;
 use nosfry_core::message::{
-    RelayVerb, SubId, count_frame, eose_frame, event_frame, neg_err_frame,
+    EoseHints, RelayVerb, SubId, count_frame, eose_frame, event_frame, neg_err_frame,
     neg_err_frame_with_limit, neg_msg_frame,
 };
 use nosfry_core::session::SubKey;
@@ -447,7 +447,10 @@ fn step(
                     out.push(Out::Frame {
                         sub: Some(sub.clone()),
                         verb: RelayVerb::Eose,
-                        text: eose_frame(&sub.id),
+                        text: eose_frame(
+                            &sub.id,
+                            EoseHints::new(scan.completion(), scan.auth_hint()),
+                        ),
                     });
                     drop(route(shards, conn).blocking_send(ShardMsg::Activate { conn, sub }));
                 }

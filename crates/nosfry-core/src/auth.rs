@@ -122,6 +122,16 @@ impl AuthRules {
             })
     }
 
+    /// Whether this read earns the lazy AUTH challenge: AUTH enabled,
+    /// no authenticated pubkey on the connection, and the filters may
+    /// match restricted kinds. The session sends `Command::Send(AUTH)`
+    /// before the operation whenever this holds, so it is also the
+    /// NIP-67 `auth` hint's truth condition — it never inspects stored
+    /// data.
+    pub(crate) fn challenges(&self, authed: &[PublicKey], filters: &[Filter]) -> bool {
+        self.enabled() && authed.is_empty() && self.may_restrict(filters)
+    }
+
     /// Whether every filter is fully restricted — restricted kinds are
     /// configured, there is at least one filter, and every filter lists
     /// only restricted kinds (strfry `isFilterGroupFullyRestricted`).
@@ -198,6 +208,16 @@ impl ReadGate {
                         .iter()
                         .any(|pubkey| pubkey.0.as_slice() == value)
             })
+    }
+
+    /// The NIP-67 `auth` hint for `filters`: true exactly when the
+    /// session issued the lazy AUTH challenge for this read — AUTH
+    /// enabled, no pubkey authenticated at REQ time, and the filters
+    /// may match restricted kinds. Data-independent: it never reveals
+    /// whether hidden events exist.
+    #[must_use]
+    pub fn auth_hint(&self, filters: &[Filter]) -> bool {
+        self.rules.challenges(&self.authed, filters)
     }
 }
 

@@ -184,6 +184,12 @@ The format is based on [Keep a Changelog]; this project follows
 - An AUTH challenge is sent whenever an unauthenticated REQ, COUNT,
   or NEG-OPEN filter could match a restricted kind; restricted
   events stay hidden until AUTH.
+- `EOSE` now carries NIP-67 completeness hints, in both editions:
+  `["EOSE", <sub>, ["finish"]]` when every stored match was sent so
+  the client need not paginate, `["more"]` when a matching stored
+  event provably remains, and `["auth"]` when the request could
+  match restricted kinds — the AUTH challenge precedes that EOSE.
+  NIP-11 lists 67 unconditionally.
 - The NIP-01 `rate-limited:` retry hint (milliseconds until the
   bucket refills) on `OK` and `CLOSED`.
 - NIP-59 in `supported_nips` when AUTH is on and 1059 is restricted.

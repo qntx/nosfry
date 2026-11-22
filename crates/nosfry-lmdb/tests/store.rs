@@ -24,7 +24,7 @@ use std::time::Duration;
 use nosfry_core::event::Event;
 use nosfry_core::filter::Filter;
 use nosfry_core::sign::{event, key, pubkey_hex};
-use nosfry_core::store::WriteOutcome;
+use nosfry_core::store::{Completion, WriteOutcome};
 use nosfry_core::url::RelayNames;
 use nosfry_lmdb::{FORMAT_VERSION, Progress, Scan, Store, StoreError, StoreOptions};
 use serde_json::json;
@@ -2067,4 +2067,226 @@ fn deletion_immune_kinds_and_ephemeral() {
     // publish is `Ephemeral`, not `Deleted`.
     let out = store.write(&[eph], &RelayNames::default()).unwrap();
     assert_eq!(out.outcomes[0], WriteOutcome::Ephemeral);
+}
+
+/// Run `filters` to completion under `gate`, answering the emitted
+/// JSONs and the scan's NIP-67 [`Completion`].
+fn collect_completion(
+    store: &Store,
+    filters: &[&str],
+    gate: nosfry_core::auth::ReadGate,
+    snapshot: u64,
+) -> (Vec<String>, Completion) {
+    let filters: Arc<[Filter]> = filters.iter().map(|f| Filter::parse(f).unwrap()).collect();
+    let mut scan = Scan::new(filters, gate, snapshot, 500, 0);
+    let out = RefCell::new(Vec::new());
+    loop {
+        let progress = scan
+            .step(store, Duration::ZERO, &mut |_seq, json| {
+                out.borrow_mut().push(json.to_owned());
+            })
+            .unwrap();
+        if progress == Progress::Done {
+            break;
+        }
+    }
+    (out.into_inner(), scan.completion())
+}
+
+/// NIP-67 `finish`: an `ids` lookup that serves every match reports
+/// `exhausted` and no `more`.
+#[test]
+fn scan_completion_ids_lookup_is_exhausted() {
+    let (_dir, store) = store();
+    let ev = event(&key(1), 1, 100, &json!([]), "x");
+    let snap = store
+        .write(&[Arc::clone(&ev)], &RelayNames::default())
+        .map(|_| store.snapshot().unwrap())
+        .unwrap();
+    let filter = format!("{{\"ids\":[\"{}\"]}}", ev.id());
+    let (emitted, completion) = collect_completion(
+        &store,
+        &[&filter],
+        nosfry_core::auth::ReadGate::default(),
+        snap,
+    );
+    assert_eq!(emitted, vec![ev.json().to_owned()]);
+    assert_eq!(
+        completion,
+        Completion {
+            exhausted: true,
+            more: false
+        }
+    );
+}
+
+/// Three stored events under `limit: 2` prove an unsent match: `more`,
+/// never `exhausted`.
+#[test]
+fn scan_completion_limit_cut_reports_more() {
+    let (_dir, store) = store();
+    let k = key(1);
+    let events = [
+        event(&k, 1, 100, &json!([]), "a"),
+        event(&k, 1, 200, &json!([]), "b"),
+        event(&k, 1, 300, &json!([]), "c"),
+    ];
+    let snap = store
+        .write(&events, &RelayNames::default())
+        .map(|_| store.snapshot().unwrap())
+        .unwrap();
+    let (emitted, completion) = collect_completion(
+        &store,
+        &["{\"limit\":2}"],
+        nosfry_core::auth::ReadGate::default(),
+        snap,
+    );
+    assert_eq!(emitted.len(), 2, "{emitted:?}");
+    assert_eq!(
+        completion,
+        Completion {
+            exhausted: false,
+            more: true
+        }
+    );
+}
+
+/// Fewer matches than the limit: the merge ran dry — `exhausted`.
+#[test]
+fn scan_completion_under_limit_is_exhausted() {
+    let (_dir, store) = store();
+    let k = key(1);
+    let events = [
+        event(&k, 1, 100, &json!([]), "a"),
+        event(&k, 1, 200, &json!([]), "b"),
+    ];
+    let snap = store
+        .write(&events, &RelayNames::default())
+        .map(|_| store.snapshot().unwrap())
+        .unwrap();
+    let (_, completion) = collect_completion(
+        &store,
+        &["{\"limit\":5}"],
+        nosfry_core::auth::ReadGate::default(),
+        snap,
+    );
+    assert_eq!(
+        completion,
+        Completion {
+            exhausted: true,
+            more: false
+        }
+    );
+}
+
+/// The limit reached exactly at the end of the data still ran dry —
+/// `exhausted`, no `more`.
+#[test]
+fn scan_completion_limit_at_end_is_exhausted() {
+    let (_dir, store) = store();
+    let k = key(1);
+    let events = [
+        event(&k, 1, 100, &json!([]), "a"),
+        event(&k, 1, 200, &json!([]), "b"),
+        event(&k, 1, 300, &json!([]), "c"),
+    ];
+    let snap = store
+        .write(&events, &RelayNames::default())
+        .map(|_| store.snapshot().unwrap())
+        .unwrap();
+    let (emitted, completion) = collect_completion(
+        &store,
+        &["{\"limit\":3}"],
+        nosfry_core::auth::ReadGate::default(),
+        snap,
+    );
+    assert_eq!(emitted.len(), 3, "{emitted:?}");
+    assert_eq!(
+        completion,
+        Completion {
+            exhausted: true,
+            more: false
+        }
+    );
+}
+
+/// A hidden (restricted) event beyond the limit is never a `more`
+/// witness: the emitted events equal the store without it.
+#[test]
+fn scan_completion_hidden_event_is_never_a_witness() {
+    let rules = Arc::new(nosfry_core::auth::AuthRules::new(
+        RelayNames::default(),
+        &[4],
+        true,
+    ));
+    let gate = nosfry_core::auth::ReadGate::new(rules, Arc::from(&[][..]));
+    let k = key(1);
+    let v1 = event(&k, 1, 200, &json!([]), "v1");
+    let v2 = event(&k, 1, 300, &json!([]), "v2");
+    let hidden = event(&k, 4, 100, &json!([]), "hidden");
+
+    let (_dir1, with_hidden) = store();
+    let snap1 = with_hidden
+        .write(
+            &[Arc::clone(&v1), Arc::clone(&v2), Arc::clone(&hidden)],
+            &RelayNames::default(),
+        )
+        .map(|_| with_hidden.snapshot().unwrap())
+        .unwrap();
+    let (emitted_with, completion_with) =
+        collect_completion(&with_hidden, &["{\"limit\":2}"], gate.clone(), snap1);
+
+    let (_dir2, without_hidden) = store();
+    let snap2 = without_hidden
+        .write(&[Arc::clone(&v1), Arc::clone(&v2)], &RelayNames::default())
+        .map(|_| without_hidden.snapshot().unwrap())
+        .unwrap();
+    let (emitted_without, completion_without) =
+        collect_completion(&without_hidden, &["{\"limit\":2}"], gate, snap2);
+
+    assert_eq!(emitted_with, emitted_without);
+    assert!(!completion_with.more, "{completion_with:?}");
+    // The hidden head-check candidate is unproven below the cut:
+    // the scan can only report the cut, not exhaustion.
+    assert!(!completion_with.exhausted, "{completion_with:?}");
+    assert_eq!(
+        completion_without,
+        Completion {
+            exhausted: true,
+            more: false
+        }
+    );
+}
+
+/// Filter 2's limit-cut witness was already emitted by filter 1:
+/// `more` must not fire for an event the client received.
+#[test]
+fn scan_completion_emitted_witness_is_not_more() {
+    let (_dir, store) = store();
+    let k = key(1);
+    let events = [
+        event(&k, 1, 100, &json!([]), "a"),
+        event(&k, 1, 200, &json!([]), "b"),
+        event(&k, 1, 300, &json!([]), "c"),
+    ];
+    let snap = store
+        .write(&events, &RelayNames::default())
+        .map(|_| store.snapshot().unwrap())
+        .unwrap();
+    let (emitted, completion) = collect_completion(
+        &store,
+        &["{\"kinds\":[1]}", "{\"kinds\":[1],\"limit\":2}"],
+        nosfry_core::auth::ReadGate::default(),
+        snap,
+    );
+    assert_eq!(emitted.len(), 3, "{emitted:?}");
+    // Filter 2 was cut (`exhausted` falls) but its witness is in the
+    // emitted union, so `more` does not fire.
+    assert_eq!(
+        completion,
+        Completion {
+            exhausted: false,
+            more: false
+        }
+    );
 }

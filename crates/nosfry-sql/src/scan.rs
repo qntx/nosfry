@@ -17,6 +17,7 @@ use nosfry_core::event::{EventId, cmp_newest_first};
 use nosfry_core::filter::Filter;
 use nosfry_core::hll::Hll;
 use nosfry_core::packed::PackedRef;
+use nosfry_core::store::Completion;
 
 use crate::StoreError;
 use crate::exec::{Executor, Param, Value};
@@ -36,19 +37,32 @@ type Match = (u64, EventId, u64);
 
 /// What one `query` reports: the matching events themselves are
 /// streamed to the caller's sink, so `Scan` only carries the
-/// budget flag.
+/// budget flag and the NIP-67 completeness summary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Scan {
     /// The `max_rows` budget stopped the scan early; the emitted
     /// hits are what complete `created_at` groups yielded before
     /// exhaustion.
     pub budget_exhausted: bool,
+    /// NIP-67 `finish`/`more` inputs; [`Completion::default`]
+    /// (know nothing) when the budget cut the scan.
+    pub completion: Completion,
 }
 
 /// One payload statement binds at most this many winning seqs; the
 /// sink drains each chunk before the next fetch, so a `query` never
 /// holds more than one chunk of event JSON.
 const PAYLOAD_CHUNK: usize = 64;
+
+/// One filter's end state for the NIP-67 summary: whether its
+/// candidates ran dry with no limit cut, and the first match
+/// provably left unsent.
+#[derive(Debug)]
+struct FilterOutcome {
+    exhausted: bool,
+    /// `None` while nothing proves unsent matches.
+    witness: Option<u64>,
+}
 
 /// One matching stored event.
 #[derive(Debug)]
@@ -478,7 +492,7 @@ fn scan_ids<E: Executor>(
     seen: &mut usize,
     max_rows: usize,
     budget: &mut bool,
-) -> Result<Vec<Match>, StoreError> {
+) -> Result<(Vec<Match>, FilterOutcome), StoreError> {
     let list = format!(
         "[{}]",
         ids.iter()
@@ -515,11 +529,21 @@ fn scan_ids<E: Executor>(
         return Err(err);
     }
     collected.sort_by(|a, b| cmp_newest_first((a.0, &a.1), (b.0, &b.1)));
-    collected.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
-    Ok(collected
+    let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+    // A match dropped by the limit is a provable unsent witness.
+    let witness = collected.get(limit).map(|m| m.2);
+    collected.truncate(limit);
+    let found = collected
         .into_iter()
         .filter(|m| emitted.insert(m.2))
-        .collect())
+        .collect();
+    Ok((
+        found,
+        FilterOutcome {
+            exhausted: witness.is_none(),
+            witness,
+        },
+    ))
 }
 
 /// The k-way merge over a `Ranges` mode's cursors: heap-pop the
@@ -544,7 +568,7 @@ fn scan_ranges<E: Executor>(
     seen: &mut usize,
     max_rows: usize,
     budget: &mut bool,
-) -> Result<Vec<Match>, StoreError> {
+) -> Result<(Vec<Match>, FilterOutcome), StoreError> {
     let mut heap = BinaryHeap::new();
     for (i, cursor) in cursors.iter_mut().enumerate() {
         if let Some(row) = cursor.next(exec, since, until, seen, max_rows, budget)? {
@@ -554,6 +578,7 @@ fn scan_ranges<E: Executor>(
     let mut group: BinaryHeap<Match> = BinaryHeap::new();
     let mut taken = 0u64;
     let mut last_seq = None;
+    let mut witness: Option<u64> = None;
     let mut out = Vec::new();
     while let Some(head) = heap.pop() {
         let Some(cursor) = cursors.get_mut(head.cursor) else {
@@ -570,7 +595,23 @@ fn scan_ranges<E: Executor>(
         if group.peek().is_some_and(|m| head.row.created_at < m.0) {
             flush_group(&mut group, &mut taken, emitted, &mut out);
             if taken >= limit {
-                return Ok(out);
+                // The head that proved more candidates remain is
+                // itself a witness when it survives the candidate
+                // checks — a hidden event never counts.
+                let packed = PackedRef::new(&head.row.packed)
+                    .ok_or(StoreError::Corrupt("bad packed record"))?;
+                witness = match witness {
+                    w @ Some(_) => w,
+                    None => try_candidate(filter, gate, now, head.row.seq, packed, &mut last_seq)
+                        .map(|m| m.2),
+                };
+                return Ok((
+                    out,
+                    FilterOutcome {
+                        exhausted: false,
+                        witness,
+                    },
+                ));
             }
         }
         let packed =
@@ -580,15 +621,24 @@ fn scan_ranges<E: Executor>(
             // while one group fills; drop the largest id beyond it.
             let remaining = usize::try_from(limit.saturating_sub(taken)).unwrap_or(usize::MAX);
             group.push(m);
-            if group.len() > remaining {
-                group.pop();
+            if group.len() > remaining
+                && let Some(dropped) = group.pop()
+                && witness.is_none()
+            {
+                witness = Some(dropped.2);
             }
         }
     }
     if !*budget {
         flush_group(&mut group, &mut taken, emitted, &mut out);
     }
-    Ok(out)
+    Ok((
+        out,
+        FilterOutcome {
+            exhausted: witness.is_none(),
+            witness,
+        },
+    ))
 }
 
 /// The canonical JSON of the winning seqs, streamed to `sink` in
@@ -643,19 +693,26 @@ fn scan_matches<E: Executor>(
     now: u64,
     max_limit: u64,
     max_rows: usize,
-) -> Result<(Vec<Match>, bool), StoreError> {
+) -> Result<(Vec<Match>, bool, Completion), StoreError> {
     let mut matches = Vec::new();
     let mut emitted = HashSet::new();
     let mut seen = 0usize;
     let mut budget_exhausted = false;
+    let mut exhausted = true;
+    let mut witnesses = Vec::new();
     for filter in filters {
         let limit = filter.effective_limit(max_limit);
-        if filter.is_impossible() || limit == 0 {
+        if filter.is_impossible() {
+            continue;
+        }
+        if limit == 0 {
+            // A cut with no witness: nothing scanned, nothing proven.
+            exhausted = false;
             continue;
         }
         let since = filter.since().unwrap_or(0);
         let until = filter.until().unwrap_or(u64::MAX);
-        let found = match plan(filter, limit) {
+        let (found, outcome) = match plan(filter, limit) {
             Mode::Ids(ids) => scan_ids(
                 exec,
                 filter,
@@ -684,11 +741,22 @@ fn scan_matches<E: Executor>(
             )?,
         };
         matches.extend(found);
+        exhausted &= outcome.exhausted;
+        witnesses.extend(outcome.witness);
         if budget_exhausted {
             break;
         }
     }
-    Ok((matches, budget_exhausted))
+    // A witness seq another filter already emitted is not unsent.
+    let completion = if budget_exhausted {
+        Completion::default()
+    } else {
+        Completion {
+            exhausted,
+            more: witnesses.iter().any(|seq| !emitted.contains(seq)),
+        }
+    };
+    Ok((matches, budget_exhausted, completion))
 }
 
 /// [`scan_matches`] plus the chunked payload fetch, streamed.
@@ -701,10 +769,14 @@ pub(crate) fn scan<E: Executor>(
     max_rows: usize,
     sink: &mut dyn FnMut(Hit),
 ) -> Result<Scan, StoreError> {
-    let (matches, budget_exhausted) = scan_matches(exec, filters, gate, now, max_limit, max_rows)?;
+    let (matches, budget_exhausted, completion) =
+        scan_matches(exec, filters, gate, now, max_limit, max_rows)?;
     let seqs: Vec<u64> = matches.iter().map(|m| m.2).collect();
     fetch_jsons(exec, &seqs, sink)?;
-    Ok(Scan { budget_exhausted })
+    Ok(Scan {
+        budget_exhausted,
+        completion,
+    })
 }
 
 /// [`scan_matches`] alone: the records a `NEG-OPEN` syncs, without
@@ -717,7 +789,8 @@ pub(crate) fn records<E: Executor>(
     max_limit: u64,
     max_rows: usize,
 ) -> Result<Records, StoreError> {
-    let (matches, budget_exhausted) = scan_matches(exec, filters, gate, now, max_limit, max_rows)?;
+    let (matches, budget_exhausted, _) =
+        scan_matches(exec, filters, gate, now, max_limit, max_rows)?;
     Ok(Records {
         records: matches.into_iter().map(|m| (m.0, m.1)).collect(),
         budget_exhausted,

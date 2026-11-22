@@ -68,6 +68,7 @@ code computes.
 | [45](https://github.com/nostr-protocol/nips/blob/master/45.md) | Event counts (with HLL)    | when `max_filter_limit_count` is not 0                                            |
 | [59](https://github.com/nostr-protocol/nips/blob/master/59.md) | Gift wrap deletion         | when `relay.service_url` is set and `relay.auth.restricted_read_kinds` holds 1059 |
 | [62](https://github.com/nostr-protocol/nips/blob/master/62.md) | Request to vanish          | always                                                                            |
+| [67](https://github.com/nostr-protocol/nips/blob/master/67.md) | EOSE completeness hints    | always                                                                            |
 | [70](https://github.com/nostr-protocol/nips/blob/master/70.md) | Protected events           | always                                                                            |
 | [77](https://github.com/nostr-protocol/nips/blob/master/77.md) | Negentropy syncing         | when `max_sync_events` is not 0                                                   |
 | [86](https://github.com/nostr-protocol/nips/blob/master/86.md) | Relay management API       | when `relay.management.admins` is set                                             |

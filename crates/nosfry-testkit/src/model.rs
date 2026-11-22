@@ -2,13 +2,14 @@
 //! against: `Store::write` with NIP-09, scans, and NIP-40 expiry,
 //! expressed without indexes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::sync::Arc;
 
 use nosfry_core::auth::ReadGate;
 use nosfry_core::deletion::{self, DeletionTarget};
 use nosfry_core::event::{Event, EventId, PublicKey, cmp_newest_first, supersedes};
 use nosfry_core::filter::Filter;
+use nosfry_core::store::Completion;
 use nosfry_core::url::RelayNames;
 
 /// The store's state model: stored events plus the deletion blocks a
@@ -263,9 +264,31 @@ pub fn model_expire(m: &mut Model, now: u64) {
 }
 
 /// The per-filter match list [`model_scan`] and [`model_records`]
-/// share: match, sort newest first, truncate to the effective limit.
-/// Events with `expiration <= now` are hidden and never counted, and
-/// `gate` filters every candidate like the real scans do.
+/// share: match and sort newest first. Events with
+/// `expiration <= now` are hidden and never counted, and `gate`
+/// filters every candidate like the real scans do.
+fn model_matches<S: std::hash::BuildHasher>(
+    stored: &HashMap<u64, Arc<Event>, S>,
+    filter: &Filter,
+    snapshot: u64,
+    gate: &ReadGate,
+    now: u64,
+) -> Vec<(u64, EventId, u64)> {
+    let mut matched: Vec<(u64, EventId, u64)> = stored
+        .iter()
+        .filter(|(seq, ev)| {
+            **seq <= snapshot
+                && ev.expiration().is_none_or(|exp| exp > now)
+                && gate.allows(ev.packed())
+                && filter.matches(ev.packed())
+        })
+        .map(|(seq, ev)| (ev.created_at(), ev.id(), *seq))
+        .collect();
+    matched.sort_by(|a, b| cmp_newest_first((a.0, &a.1), (b.0, &b.1)));
+    matched
+}
+
+/// [`model_matches`] truncated to the effective limit.
 fn model_matched<S: std::hash::BuildHasher>(
     stored: &HashMap<u64, Arc<Event>, S>,
     filter: &Filter,
@@ -278,17 +301,7 @@ fn model_matched<S: std::hash::BuildHasher>(
     if filter.is_impossible() || limit == 0 {
         return Vec::new();
     }
-    let mut matched: Vec<(u64, EventId, u64)> = stored
-        .iter()
-        .filter(|(seq, ev)| {
-            **seq <= snapshot
-                && ev.expiration().is_none_or(|exp| exp > now)
-                && gate.allows(ev.packed())
-                && filter.matches(ev.packed())
-        })
-        .map(|(seq, ev)| (ev.created_at(), ev.id(), *seq))
-        .collect();
-    matched.sort_by(|a, b| cmp_newest_first((a.0, &a.1), (b.0, &b.1)));
+    let mut matched = model_matches(stored, filter, snapshot, gate, now);
     matched.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
     matched
 }
@@ -370,4 +383,196 @@ pub fn model_union<S: std::hash::BuildHasher>(
         }
     }
     seen.len()
+}
+
+/// Whether `ev` has an index row under the cursor set `filter` scans —
+/// the engines' shape pick (`authors`+`kinds`, `authors`, smallest tag
+/// set, `kinds`, `created_at`), window-bound. `filter` must not be
+/// `ids`-mode.
+fn index_hit(filter: &Filter, ev: &Event) -> bool {
+    let created_at = ev.created_at();
+    if created_at < filter.since().unwrap_or(0) || created_at > filter.until().unwrap_or(u64::MAX) {
+        return false;
+    }
+    let tag = filter.tags().iter().min_by_key(|(_, values)| values.len());
+    match (filter.authors(), filter.kinds(), tag) {
+        (Some(authors), Some(kinds), _)
+            if (authors.len() as u64).saturating_mul(kinds.len() as u64) <= 256 =>
+        {
+            authors.contains(&ev.pubkey().0) && kinds.contains(&ev.kind().0)
+        }
+        (Some(authors), _, _) => authors.contains(&ev.pubkey().0),
+        (None, _, Some((name, values))) => ev
+            .packed()
+            .tags()
+            .any(|(n, v)| n == *name && values.iter().any(|value| value.as_bytes() == v)),
+        (None, Some(kinds), _) => kinds.contains(&ev.kind().0),
+        (None, None, _) => true,
+    }
+}
+
+/// One filter's engine outcome: `dry` — its candidates ran out with
+/// no limit cut (impossible filters count); `witness` — the first
+/// match provably left unsent.
+fn filter_outcome<S: std::hash::BuildHasher>(
+    stored: &HashMap<u64, Arc<Event>, S>,
+    filter: &Filter,
+    snapshot: u64,
+    gate: &ReadGate,
+    max_limit: u64,
+    now: u64,
+) -> (bool, Option<u64>) {
+    let limit = filter.effective_limit(max_limit);
+    if filter.is_impossible() {
+        return (true, None);
+    }
+    if limit == 0 {
+        // A cut with no witness: nothing scanned, nothing proven.
+        return (false, None);
+    }
+    let matched = model_matches(stored, filter, snapshot, gate, now);
+    let cut = usize::try_from(limit).unwrap_or(usize::MAX);
+    if filter.ids().is_some() {
+        // The pending id queue always drains; a match the sort drops
+        // is the witness.
+        return if matched.len() > cut {
+            (false, Some(matched[cut].2))
+        } else {
+            (true, None)
+        };
+    }
+    if matched.len() < cut {
+        // `taken` never reaches `limit` — the merge drains.
+        return (true, None);
+    }
+    // Ranges: the group holding position `limit - 1` is the last the
+    // merge completes. Entries past `limit` inside it pop off the
+    // bounded heap (a witness); when it fills `limit` exactly the
+    // merge stops at the next lower head — a witness only when that
+    // candidate itself survives the checks — or runs dry when no
+    // candidate sits below.
+    let group_ca = matched[cut - 1].0;
+    let group_start = matched.iter().position(|m| m.0 == group_ca).unwrap_or(0);
+    let group: Vec<(u64, EventId, u64)> = matched
+        .iter()
+        .copied()
+        .filter(|m| m.0 == group_ca)
+        .collect();
+    let remaining = limit - group_start as u64;
+    if group.len() as u64 > remaining {
+        // Replay the pushes in candidate order — seq descending at
+        // one created_at — and record the first bounded-heap pop.
+        let mut heap = BinaryHeap::new();
+        let remaining = usize::try_from(remaining).unwrap_or(usize::MAX);
+        let mut by_seq = group;
+        by_seq.sort_by_key(|m| std::cmp::Reverse(m.2));
+        let mut witness = None;
+        for m in by_seq {
+            heap.push(m);
+            if heap.len() > remaining {
+                witness = heap.pop().map(|d| d.2);
+                break;
+            }
+        }
+        (false, witness)
+    } else {
+        // The group filled `limit` exactly: the merge stops at the
+        // first index hit below it (a cut — a witness only when that
+        // candidate itself matches) or drains (ran dry).
+        let matched_seqs: HashSet<u64> = matched.iter().map(|m| m.2).collect();
+        let head = stored
+            .iter()
+            .filter(|(_, ev)| index_hit(filter, ev))
+            .map(|(seq, ev)| (ev.created_at(), *seq))
+            .filter(|(ca, _)| *ca < group_ca)
+            .max();
+        match head {
+            None => (true, None),
+            Some((_, seq)) => (false, matched_seqs.contains(&seq).then_some(seq)),
+        }
+    }
+}
+
+/// The [`Completion`] both engines must report for this scan.
+///
+/// The same per-filter outcomes the LMDB and SQL scans compute:
+/// `exhausted` when every filter's candidates ran dry with no limit
+/// cut, `more` when a match was provably left unsent.
+#[must_use]
+pub fn model_completion<S: std::hash::BuildHasher>(
+    stored: &HashMap<u64, Arc<Event>, S>,
+    filters: &[Filter],
+    snapshot: u64,
+    gate: &ReadGate,
+    max_limit: u64,
+    now: u64,
+) -> Completion {
+    // The cross-filter emitted set: each filter's truncated list
+    // (the limit applies before dedup).
+    let mut emitted = HashSet::new();
+    for filter in filters {
+        for (_, _, seq) in model_matched(stored, filter, snapshot, gate, max_limit, now) {
+            emitted.insert(seq);
+        }
+    }
+    let mut completion = Completion {
+        exhausted: true,
+        more: false,
+    };
+    for filter in filters {
+        let (dry, witness) = filter_outcome(stored, filter, snapshot, gate, max_limit, now);
+        if !dry {
+            completion.exhausted = false;
+        }
+        if let Some(seq) = witness
+            && !emitted.contains(&seq)
+        {
+            completion.more = true;
+        }
+    }
+    completion
+}
+
+/// The `finish` hint's truth condition: every filter's visible-match
+/// count fits its effective limit (the limit must be positive), or
+/// the filter is impossible.
+#[must_use]
+pub fn model_finish<S: std::hash::BuildHasher>(
+    stored: &HashMap<u64, Arc<Event>, S>,
+    filters: &[Filter],
+    snapshot: u64,
+    gate: &ReadGate,
+    max_limit: u64,
+    now: u64,
+) -> bool {
+    filters.iter().all(|filter| {
+        let limit = filter.effective_limit(max_limit);
+        filter.is_impossible()
+            || (limit > 0
+                && model_matches(stored, filter, snapshot, gate, now).len() as u64 <= limit)
+    })
+}
+
+/// The `more` hint's truth condition: some visible match of some
+/// filter is not in the emitted union.
+#[must_use]
+pub fn model_more<S: std::hash::BuildHasher>(
+    stored: &HashMap<u64, Arc<Event>, S>,
+    filters: &[Filter],
+    snapshot: u64,
+    gate: &ReadGate,
+    max_limit: u64,
+    now: u64,
+) -> bool {
+    let mut emitted = HashSet::new();
+    for filter in filters {
+        for (_, _, seq) in model_matched(stored, filter, snapshot, gate, max_limit, now) {
+            emitted.insert(seq);
+        }
+    }
+    filters.iter().any(|filter| {
+        model_matches(stored, filter, snapshot, gate, now)
+            .iter()
+            .any(|(_, _, seq)| !emitted.contains(seq))
+    })
 }
