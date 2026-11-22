@@ -222,7 +222,10 @@ async fn check(
         && let Some(policy) = ctx.policy
         && !matches!(policy.check_sync(&event, ctx.url).await, Decision::Accept)
     {
-        return Err(Refusal::local(Some(id), "rejected by write policy".to_owned()));
+        return Err(Refusal::local(
+            Some(id),
+            "rejected by write policy".to_owned(),
+        ));
     }
     Ok(event)
 }

@@ -311,7 +311,10 @@ async fn up_skips_restricted_and_protected() {
     assert_eq!(report.outcome, Outcome::Complete);
     assert_eq!(report.stats.skipped, 2, "{:?}", report.stats);
     assert_eq!(report.stats.uploaded, 1, "{:?}", report.stats);
-    assert_eq!(remote_ids(&peer).await, BTreeSet::from([note.id().to_string()]));
+    assert_eq!(
+        remote_ids(&peer).await,
+        BTreeSet::from([note.id().to_string()])
+    );
     peer.stop().await;
 }
 
@@ -628,8 +631,7 @@ async fn neg_script(
         match frame[0].as_str().unwrap_or("") {
             "NEG-OPEN" => {
                 neg_sub = frame[1].as_str().unwrap().to_owned();
-                let mut storage =
-                    negentropy::NegentropyStorageVector::with_capacity(records.len());
+                let mut storage = negentropy::NegentropyStorageVector::with_capacity(records.len());
                 for (ts, id) in &records {
                     storage
                         .insert(*ts, negentropy::Id::from_byte_array(*id))

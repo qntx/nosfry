@@ -62,7 +62,8 @@ const fn classify_v4(ip: Ipv4Addr) -> Scope {
         || (a & 0xf0) == 0xf0 // 240.0.0.0/4 reserved (covers broadcast)
         || (a == 192 && b == 0 && c == 2) // 192.0.2.0/24 TEST-NET-1
         || (a == 198 && b == 51 && c == 100) // 198.51.100.0/24 TEST-NET-2
-        || (a == 203 && b == 0 && c == 113) // 203.0.113.0/24 TEST-NET-3
+        || (a == 203 && b == 0 && c == 113)
+    // 203.0.113.0/24 TEST-NET-3
     {
         return Scope::Forbidden;
     }
@@ -71,7 +72,8 @@ const fn classify_v4(ip: Ipv4Addr) -> Scope {
         || ip.is_link_local()
         || (a == 100 && (b & 0b1100_0000) == 0b0100_0000) // 100.64.0.0/10 CGNAT
         || (a == 192 && b == 0 && c == 0) // 192.0.0.0/24 IETF protocol assignments
-        || (a == 198 && (b & 0xfe) == 18) // 198.18.0.0/15 benchmarking
+        || (a == 198 && (b & 0xfe) == 18)
+    // 198.18.0.0/15 benchmarking
     {
         return Scope::Private;
     }
@@ -111,7 +113,8 @@ const fn classify_v6(ip: Ipv6Addr) -> Scope {
     }
     if ip.is_loopback()
         || (s0 & 0xfe00) == 0xfc00 // fc00::/7 unique-local
-        || (s0 & 0xffc0) == 0xfe80 // fe80::/10 link-local
+        || (s0 & 0xffc0) == 0xfe80
+    // fe80::/10 link-local
     {
         return Scope::Private;
     }
@@ -309,7 +312,10 @@ pub(crate) async fn dial(target: &Target, timeout: Duration) -> io::Result<Strea
         return Ok(Stream::Plain(tcp));
     }
     let Some(host) = target.url.host() else {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "URL has no host"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "URL has no host",
+        ));
     };
     let name = server_name(&host)?;
     let tls = tokio::time::timeout(timeout, TlsConnector::from(tls_config()).connect(name, tcp))
@@ -327,14 +333,12 @@ fn server_name<S: AsRef<str>>(host: &url::Host<S>) -> Result<ServerName<'static>
     match host {
         url::Host::Ipv4(ip) => Ok(ServerName::IpAddress((*ip).into())),
         url::Host::Ipv6(ip) => Ok(ServerName::IpAddress((*ip).into())),
-        url::Host::Domain(name) => {
-            ServerName::try_from(name.as_ref().to_owned()).map_err(|err| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("invalid DNS server name {:?}: {err}", name.as_ref()),
-                )
-            })
-        }
+        url::Host::Domain(name) => ServerName::try_from(name.as_ref().to_owned()).map_err(|err| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid DNS server name {:?}: {err}", name.as_ref()),
+            )
+        }),
     }
 }
 
