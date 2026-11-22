@@ -125,6 +125,7 @@ EOF
                     { print }
                     /^\[relay\]$/ {
                         print "service_url = \"" url "\""
+                        print "service_url_aliases = [\"wss://alias.nosfry.test\"]"
                     }
                 ' "$tmpdir/config-$pass.toml" >"$tmpdir/config-$pass.toml.tmp"
                 mv "$tmpdir/config-$pass.toml.tmp" "$tmpdir/config-$pass.toml"
@@ -133,6 +134,7 @@ EOF
 
 [relay]
 service_url = "$NOSFRY_URL"
+service_url_aliases = ["wss://alias.nosfry.test"]
 EOF
             fi
             cat >>"$tmpdir/config-$pass.toml" <<EOF
@@ -159,6 +161,7 @@ EOF
 
 [relay]
 service_url = "$NOSFRY_URL"
+service_url_aliases = ["wss://alias.nosfry.test"]
 EOF
         fi
         # Give the relay a POLICY service binding without carrying the

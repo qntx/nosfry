@@ -600,6 +600,85 @@ async fn nip42_restricted_reads() {
     assert_eq!(got[0]["id"], involved.id().to_string());
 }
 
+/// NIP-42: the AUTH `relay` tag may name a configured alias —
+/// `run.sh` injects `service_url_aliases = ["wss://alias.nosfry.test"]`
+/// in the main pass, standing in for the onion/iroh names a relay
+/// answers to under other transports.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn auth_accepts_a_relay_alias() {
+    let author = key();
+    let reader = key();
+    let involved = sign::event(
+        &author,
+        4,
+        now() - 5,
+        &json!([["p", pubkey(&reader)]]),
+        "restricted dm",
+    );
+    {
+        let mut publisher = connect().await;
+        let (ok, reason) = publish(&mut publisher, &involved).await;
+        assert!(ok, "restricted publish: {reason}");
+    }
+
+    let mut ws = connect().await;
+    let filter = format!("{{\"kinds\":[4],\"authors\":[\"{}\"]}}", pubkey(&author));
+    let frames = req(&mut ws, "r", &filter).await;
+    let challenge = frames
+        .iter()
+        .find(|v| v[0] == "AUTH")
+        .map(|v| v[1].as_str().unwrap().to_owned())
+        .expect("no AUTH challenge sent");
+    let auth = sign::event(
+        &reader,
+        22242,
+        now(),
+        &json!([
+            ["relay", "wss://alias.nosfry.test"],
+            ["challenge", challenge]
+        ]),
+        "",
+    );
+    send(&mut ws, &format!("[\"AUTH\",{}]", auth.json())).await;
+    let ok = collect_until(&mut ws, |v| v[0] == "OK").await;
+    assert_eq!(ok.last().unwrap()[2], true, "alias AUTH rejected");
+
+    let frames = req(&mut ws, "s", &filter).await;
+    let got = events(&frames);
+    assert_eq!(got.len(), 1, "restricted event not served: {frames:?}");
+    assert_eq!(got[0]["id"], involved.id().to_string());
+}
+
+/// NIP-42: an AUTH `relay` tag naming a host the relay does not
+/// answer to stays refused.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn auth_rejects_an_unknown_relay_name() {
+    let mut ws = connect().await;
+    let frames = req(&mut ws, "r", "{\"kinds\":[4]}").await;
+    let challenge = frames
+        .iter()
+        .find(|v| v[0] == "AUTH")
+        .map(|v| v[1].as_str().unwrap().to_owned())
+        .expect("no AUTH challenge sent");
+    let auth = sign::event(
+        &key(),
+        22242,
+        now(),
+        &json!([
+            ["relay", "wss://not-this-relay.invalid"],
+            ["challenge", challenge]
+        ]),
+        "",
+    );
+    send(&mut ws, &format!("[\"AUTH\",{}]", auth.json())).await;
+    let ok = collect_until(&mut ws, |v| v[0] == "OK").await;
+    let frame = ok.last().unwrap();
+    assert_eq!(frame[2], false, "foreign-name AUTH accepted: {frame}");
+    assert_eq!(frame[3].as_str().unwrap(), "invalid: relay tag mismatch");
+}
+
 #[tokio::test]
 #[ignore = "needs NOSFRY_URL"]
 async fn nip70_protected_events() {
@@ -816,6 +895,47 @@ async fn request_to_vanish_sweeps_and_blocks() {
     assert_eq!(reason, "blocked: request to vanish", "{reason}");
 }
 
+/// NIP-62: a request to vanish may name a configured alias — the
+/// relay honors `["relay","wss://alias.nosfry.test"]` like the
+/// canonical name.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn request_to_vanish_accepts_a_relay_alias() {
+    let author = key();
+    let mut ws = connect().await;
+    let ev = sign::event(&author, 1, now() - 20, &json!([]), "alias vanish");
+    let (ok, reason) = publish(&mut ws, &ev).await;
+    assert!(ok, "publish: {reason}");
+    let vanish = sign::event(
+        &author,
+        62,
+        now(),
+        &json!([["relay", "wss://alias.nosfry.test"]]),
+        "",
+    );
+    let (ok, reason) = publish(&mut ws, &vanish).await;
+    assert!(ok, "vanish publish: {reason}");
+
+    // Poll until the author's stream holds only the request — the
+    // sweep is asynchronous on both editions.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    let author_filter = format!("{{\"authors\":[\"{}\"]}}", pubkey(&author));
+    let mut round = 0;
+    loop {
+        round += 1;
+        let frames = req(&mut ws, &format!("a{round}"), &author_filter).await;
+        let got = events(&frames);
+        if got.len() == 1 && got[0]["kind"] == 62 {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "alias-named vanish was not honored: {got:?}"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
 // NIP-86: the management RPC over HTTP POST. Mutations stay scoped to
 // fresh keys and ids so parallel tests are undisturbed.
 
@@ -829,6 +949,12 @@ fn admin() -> Keypair {
 /// covering `hashed` as its `payload` tag (pass a body the request
 /// does not carry to exercise the hash check).
 fn nip98(signer: &Keypair, hashed: &[u8]) -> String {
+    nip98_at(signer, hashed, &url())
+}
+
+/// [`nip98`] naming `u` instead of the service URL — used to sign a
+/// `u` tag against a configured service-URL alias.
+fn nip98_at(signer: &Keypair, hashed: &[u8], u: &str) -> String {
     use base64::Engine as _;
     use sha2::Digest as _;
     let digest = faster_hex::hex_string(&sha2::Sha256::digest(hashed));
@@ -836,7 +962,7 @@ fn nip98(signer: &Keypair, hashed: &[u8]) -> String {
         signer,
         27_235,
         now(),
-        &json!([["u", url()], ["method", "POST"], ["payload", digest],]),
+        &json!([["u", u], ["method", "POST"], ["payload", digest],]),
         "",
     );
     format!(
@@ -988,6 +1114,21 @@ async fn nip86_requires_nip98() {
     let (status, text) = manage_call(&body, Some(&nip98(&key(), &bytes))).await;
     assert_eq!(status, 401, "{text}");
     assert!(text.contains("pubkey is not an admin"), "{text}");
+}
+
+/// NIP-98: the `u` tag may name a configured alias — its scheme and
+/// trailing slash normalize away exactly like the canonical name's.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn nip86_accepts_an_alias_u_tag() {
+    let body = json!({"method": "supportedmethods", "params": []});
+    let bytes = serde_json::to_vec(&body).unwrap();
+    let (status, text) = manage_call(
+        &body,
+        Some(&nip98_at(&admin(), &bytes, "http://alias.nosfry.test/")),
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
 }
 
 #[tokio::test]
