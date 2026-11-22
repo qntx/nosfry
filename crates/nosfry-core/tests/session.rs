@@ -30,7 +30,7 @@ use nosfry_core::kind::Kind;
 use nosfry_core::limits::{AddressBuckets, Limits};
 use nosfry_core::message::{ClientVerb, SubId};
 use nosfry_core::session::{Command, Received, Session, SubKey};
-use nosfry_core::url::RelayUrl;
+use nosfry_core::url::RelayNames;
 use secp256k1::Keypair;
 use secp256k1::schnorr;
 
@@ -824,11 +824,11 @@ fn unknown_verb_echo_is_bounded() {
 /// Session under auth rules: `url` empty disables AUTH; `kinds` are
 /// the restricted read kinds.
 fn session_auth(url: &str, kinds: &[u16], involved_only: bool) -> Session {
-    let service_url = (!url.is_empty()).then(|| RelayUrl::parse(url).expect("service url"));
+    let names = RelayNames::parse(url, &[]).expect("service url");
     Session::new(
         Arc::new(Limits {
             auth: Arc::new(nosfry_core::auth::AuthRules::new(
-                service_url,
+                names,
                 kinds,
                 involved_only,
             )),
@@ -1248,7 +1248,7 @@ fn auth_charges_event_bucket() {
     let mut s = Session::new(
         Arc::new(Limits {
             auth: Arc::new(nosfry_core::auth::AuthRules::new(
-                Some(RelayUrl::parse("wss://relay.example.com").expect("service url")),
+                RelayNames::parse("wss://relay.example.com", &[]).expect("service url"),
                 &[4],
                 true,
             )),
@@ -1888,15 +1888,11 @@ fn neg_and_req_share_id_not_state() {
 #[test]
 fn resumed_session_keeps_authed_pubkeys() {
     let t = 1_700_000_000u64;
-    let service_url = RelayUrl::parse("wss://relay.example.com").expect("service url");
+    let names = RelayNames::parse("wss://relay.example.com", &[]).expect("service url");
     let authed: Arc<[PublicKey]> = Arc::from([PublicKey::from_hex(&pubkey_hex([9; 32])).unwrap()]);
     let mut s = Session::resume(
         Arc::new(Limits {
-            auth: Arc::new(nosfry_core::auth::AuthRules::new(
-                Some(service_url),
-                &[4],
-                true,
-            )),
+            auth: Arc::new(nosfry_core::auth::AuthRules::new(names, &[4], true)),
             ..Limits::default()
         }),
         "challenge".to_owned(),
@@ -1921,14 +1917,10 @@ fn resumed_session_keeps_authed_pubkeys() {
 /// it again.
 #[test]
 fn resumed_session_does_not_resend_challenge() {
-    let service_url = RelayUrl::parse("wss://relay.example.com").expect("service url");
+    let names = RelayNames::parse("wss://relay.example.com", &[]).expect("service url");
     let mut s = Session::resume(
         Arc::new(Limits {
-            auth: Arc::new(nosfry_core::auth::AuthRules::new(
-                Some(service_url),
-                &[4],
-                true,
-            )),
+            auth: Arc::new(nosfry_core::auth::AuthRules::new(names, &[4], true)),
             ..Limits::default()
         }),
         "challenge".to_owned(),

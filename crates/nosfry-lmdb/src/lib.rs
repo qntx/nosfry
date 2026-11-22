@@ -52,7 +52,7 @@ use nosfry_core::event::{Event, EventId, PublicKey, UnverifiedEvent, supersedes}
 use nosfry_core::moderation::{ModOp, Moderation};
 use nosfry_core::packed::PackedRef;
 use nosfry_core::store::WriteOutcome;
-use nosfry_core::url::RelayUrl;
+use nosfry_core::url::RelayNames;
 
 mod count;
 mod scan;
@@ -402,18 +402,14 @@ impl Store {
     }
 
     /// Apply `events` in arrival order inside a single write
-    /// transaction. `service_url` is the relay's own URL for NIP-62
-    /// (`None` honors only `ALL_RELAYS` requests).
+    /// transaction. `names` is the relay's own names for NIP-62
+    /// (empty honors only `ALL_RELAYS` requests).
     ///
     /// # Errors
     ///
     /// [`StoreError::Heed`] on LMDB failure, [`StoreError::Corrupt`] on a
     /// broken index invariant.
-    pub fn write(
-        &self,
-        events: &[Arc<Event>],
-        service_url: Option<&RelayUrl>,
-    ) -> Result<Written, StoreError> {
+    pub fn write(&self, events: &[Arc<Event>], names: &RelayNames) -> Result<Written, StoreError> {
         let mut txn = self.env.write_txn()?;
         let mut next_seq = self.next_seq(&txn)?;
         let mut written = Written {
@@ -428,7 +424,7 @@ impl Store {
             // A kind 62 has no address, so `Superseded` here means the
             // newest-only bookkeeping rule — honoring the request is
             // independent of keeping it (NIP-62 MUST).
-            if event.requests_vanish(service_url)
+            if event.requests_vanish(names)
                 && matches!(
                     outcome,
                     WriteOutcome::Stored { .. }
@@ -1524,7 +1520,9 @@ mod tests {
         let signer = key(1);
         let old = event(&signer, 0, 100, &json!([["t", "x"]]), "old");
         let new = event(&signer, 0, 200, &json!([["t", "x"]]), "new");
-        let outcomes = store.write(&[Arc::clone(&old), new], None).unwrap();
+        let outcomes = store
+            .write(&[Arc::clone(&old), new], &RelayNames::default())
+            .unwrap();
         assert_eq!(
             outcomes.outcomes,
             vec![
@@ -1611,7 +1609,10 @@ mod tests {
             "",
         );
         let written = store
-            .write(&[Arc::clone(&target), Arc::clone(&kind5)], None)
+            .write(
+                &[Arc::clone(&target), Arc::clone(&kind5)],
+                &RelayNames::default(),
+            )
             .unwrap();
         assert_eq!(written.deleted, vec![1]);
         assert_seq_gone(&store, 1);
@@ -1645,7 +1646,9 @@ mod tests {
             &json!([["d", long_d], ["expiration", "150"], ["t", "x"]]),
             "v",
         );
-        store.write(&[Arc::clone(&target)], None).unwrap();
+        store
+            .write(&[Arc::clone(&target)], &RelayNames::default())
+            .unwrap();
         assert_eq!(store.expire(200, 10).unwrap(), 1);
         assert_seq_gone(&store, 1);
         let txn = store.read_txn().unwrap();

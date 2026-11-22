@@ -23,6 +23,7 @@ use common::{
 };
 use futures_util::{SinkExt, StreamExt};
 use nosfry_core::event::Event;
+use nosfry_core::url::RelayNames;
 use serde_json::{Value, json};
 use sha2::Digest as _;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -4564,7 +4565,7 @@ async fn req_flood_does_not_starve_victims() {
             let batch: Vec<_> = (base..(base + 500).min(5_000))
                 .map(|i| common::event(&k, 1, 1_000_000 + i, &json!([]), "f"))
                 .collect();
-            store.write(&batch, None).unwrap();
+            store.write(&batch, &RelayNames::default()).unwrap();
         }
     }
     let mut config = common::config();

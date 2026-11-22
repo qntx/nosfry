@@ -112,9 +112,9 @@ pub enum ServerError {
     /// TOML parse failure.
     #[error("config: {0}")]
     Config(#[from] toml::de::Error),
-    /// Invalid `[relay] service_url`.
+    /// Invalid `[relay] service_url` or `service_url_aliases` entry.
     #[error("config: relay.service_url: {0}")]
-    ServiceUrl(#[from] nosfry_core::url::RelayUrlError),
+    ServiceUrl(#[from] nosfry_core::url::RelayNamesError),
     /// Invalid `[relay.management] admins` entry.
     #[error("config: relay.management.admins: {0}: not a 64-hex pubkey")]
     Admins(String),
@@ -664,7 +664,7 @@ fn tune<S: std::os::fd::AsFd>(tcp: &S, keepalive: bool) {
 }
 
 /// One bound `[[relay.listen]]` entry: the socket plus the fixed
-/// [`ListenerInfo`] every connection it accepts carries.
+/// listener info every connection it accepts carries.
 #[derive(Debug)]
 pub struct Listener(ListenerKind);
 

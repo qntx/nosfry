@@ -8,7 +8,7 @@ use nosfry_core::limits::{
     FilterValidationConfig, FilterValidationError, Limits, RateLimits, ReqLimits,
 };
 use nosfry_core::management::{AdminsError, ManagementConfig};
-use nosfry_core::url::RelayUrlError;
+use nosfry_core::url::RelayNamesError;
 use serde::Deserialize;
 
 /// The `NOSFRY_CONFIG` document. Every section rejects unknown keys,
@@ -34,6 +34,12 @@ pub struct Relay {
     /// kinds are refused on write and never served, and protected
     /// events are rejected.
     pub service_url: String,
+    /// Other `ws://`/`wss://` URLs the relay answers to — an onion
+    /// address, an old domain. An AUTH `relay` tag, NIP-62 `relay`
+    /// tag or NIP-98 `u` tag may name any of them; they require a
+    /// canonical `service_url`.
+    #[serde(default)]
+    pub service_url_aliases: Vec<String>,
     /// Maximum inbound WebSocket payload in bytes.
     pub max_websocket_payload_size: usize,
     /// Maximum simultaneous WebSocket connections (0 = unlimited).
@@ -111,6 +117,7 @@ impl Default for Relay {
     fn default() -> Self {
         Self {
             service_url: String::new(),
+            service_url_aliases: Vec::new(),
             max_websocket_payload_size: 131_072,
             max_connections: 5_000,
             max_connections_per_ip: 128,
@@ -143,9 +150,10 @@ pub enum ConfigError {
     /// TOML syntax error or an unknown key.
     #[error("config: {0}")]
     Toml(#[from] toml::de::Error),
-    /// `[relay] service_url` is not a `ws://`/`wss://` URL.
+    /// `[relay] service_url` or a `service_url_aliases` entry is not
+    /// a `ws://`/`wss://` URL.
     #[error(transparent)]
-    ServiceUrl(#[from] RelayUrlError),
+    ServiceUrl(#[from] RelayNamesError),
     /// `[worker] max_scan_rows` is 0 — every REQ/COUNT would return
     /// nothing, so the configuration is refused.
     #[error("[worker] max_scan_rows must be at least 1")]
@@ -222,15 +230,14 @@ impl Config {
     /// # Errors
     ///
     /// [`ConfigError::ServiceUrl`] on an invalid
-    /// `[relay] service_url`.
+    /// `[relay] service_url` or `service_url_aliases` entry.
     pub fn auth_rules(&self) -> Result<std::sync::Arc<AuthRules>, ConfigError> {
-        let service_url = if self.relay.service_url.is_empty() {
-            None
-        } else {
-            Some(nosfry_core::url::RelayUrl::parse(&self.relay.service_url)?)
-        };
+        let names = nosfry_core::url::RelayNames::parse(
+            &self.relay.service_url,
+            &self.relay.service_url_aliases,
+        )?;
         Ok(std::sync::Arc::new(AuthRules::new(
-            service_url,
+            names,
             &self.relay.auth.restricted_read_kinds,
             self.relay.auth.restrict_read_to_involved,
         )))

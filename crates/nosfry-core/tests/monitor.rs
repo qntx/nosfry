@@ -23,12 +23,12 @@ use nosfry_core::message::SubId;
 use nosfry_core::monitor::Monitors;
 use nosfry_core::packed::PackedEvent;
 use nosfry_core::session::SubKey;
-use nosfry_core::url::RelayUrl;
+use nosfry_core::url::RelayNames;
 
 #[test]
 fn restricted_event_reaches_only_involved_authed_subs() {
     let rules = Arc::new(AuthRules::new(
-        Some(RelayUrl::parse("wss://relay.example.com").unwrap()),
+        RelayNames::parse("wss://relay.example.com", &[]).unwrap(),
         &[4],
         true,
     ));

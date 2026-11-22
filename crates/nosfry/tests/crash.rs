@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 use common::{event, event_wire, key, req_wire, send_text};
 use futures_util::{SinkExt, StreamExt};
 use nosfry_core::event::{EventLimits, UnverifiedEvent};
+use nosfry_core::url::RelayNames;
 use nosfry_lmdb::{Store, StoreOptions};
 use secp256k1::Keypair;
 use serde_json::{Value, json};
@@ -185,7 +186,7 @@ fn seed_events(store: &Store, count: u64) {
         let batch: Vec<_> = (base..(base + 500).min(count))
             .map(|i| event(&k, 1, 1_000_000 + i, &json!([]), &format!("{content}-{i}")))
             .collect();
-        store.write(&batch, None).unwrap();
+        store.write(&batch, &RelayNames::default()).unwrap();
     }
 }
 

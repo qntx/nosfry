@@ -51,6 +51,11 @@ max_tag_val_size = 1024
 # served, and protected events are rejected (vanish requests to
 # ALL_RELAYS are still honored).
 service_url = ""
+# Other ws:// / wss:// URLs the relay answers to — an onion address
+# torrc forwards, an iroh name, an old domain. An AUTH "relay" tag,
+# NIP-62 "relay" tag or NIP-98 "u" tag may name any of them; each
+# entry requires a canonical service_url and parses like it.
+# service_url_aliases = ["ws://exampleabc.onion"]
 # Raise the soft open-file limit at startup up to this value, capped by
 # the hard limit; 0 leaves it unchanged (restart-only).
 nofiles = 1000000

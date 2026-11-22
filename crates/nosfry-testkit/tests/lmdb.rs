@@ -28,7 +28,7 @@ use nosfry_core::hll::Hll;
 use nosfry_core::moderation::{ModOp, Moderation};
 use nosfry_core::sign::{event, keys};
 use nosfry_core::store::WriteOutcome;
-use nosfry_core::url::RelayUrl;
+use nosfry_core::url::RelayNames;
 use nosfry_lmdb::{CountResult, CountScan, Progress, Scan, Store, StoreOptions};
 use nosfry_testkit::driver::{Count, StoreDriver, StoreRecords, build_case, check};
 use nosfry_testkit::spec::{SERVICE_URL, event_specs_strategy, filter_spec_strategy};
@@ -91,8 +91,8 @@ struct LmdbDriver<'a> {
 
 impl StoreDriver for LmdbDriver<'_> {
     fn write(&mut self, events: &[Arc<Event>]) -> Vec<WriteOutcome> {
-        let url = RelayUrl::parse(SERVICE_URL).unwrap();
-        self.store.write(events, Some(&url)).unwrap().outcomes
+        let names = RelayNames::parse(SERVICE_URL, &[]).unwrap();
+        self.store.write(events, &names).unwrap().outcomes
     }
 
     fn snapshot(&mut self) -> u64 {
@@ -216,7 +216,7 @@ fn count_budget_marks_approximate() {
             )
         })
         .collect();
-    store.write(&events, None).unwrap();
+    store.write(&events, &RelayNames::default()).unwrap();
 
     let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
     let snapshot = store.snapshot().unwrap();

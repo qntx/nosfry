@@ -522,7 +522,7 @@ impl<E: Executor, S: Socket> Relay<E, S> {
             body,
             now,
             &self.config.events,
-            self.limits.auth.relay(),
+            self.limits.auth.names(),
             &self.admins,
         ) {
             return managed(
@@ -896,13 +896,13 @@ impl<E: Executor, S: Socket> Relay<E, S> {
         effects: &mut Effects,
     ) {
         if event.kind() != AUTH_KIND
-            && !event.requests_vanish(self.limits.auth.relay())
+            && !event.requests_vanish(self.limits.auth.names())
             && let Some(reason) = self.moderation.blocked_reason(event)
         {
             self.send(conn, &ok_frame(&event.id(), false, reason));
             return;
         }
-        if self.policy && !event.requests_vanish(self.limits.auth.relay()) {
+        if self.policy && !event.requests_vanish(self.limits.auth.names()) {
             let ip = self
                 .conns
                 .get(&conn)
@@ -962,7 +962,7 @@ impl<E: Executor, S: Socket> Relay<E, S> {
         }
         match self
             .store
-            .write(std::slice::from_ref(event), self.limits.auth.relay())
+            .write(std::slice::from_ref(event), self.limits.auth.names())
         {
             Ok(written) => {
                 let Some(&outcome) = written.outcomes.first() else {

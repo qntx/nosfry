@@ -12,7 +12,7 @@ use nosfry_core::event::{Event, EventLimits, UnverifiedEvent};
 use nosfry_core::filter::{Filter, FilterError};
 use nosfry_core::state::{STATE_PREFIX, StateRecord};
 use nosfry_core::store::WriteOutcome;
-use nosfry_core::url::RelayUrl;
+use nosfry_core::url::RelayNames;
 use nosfry_lmdb::{Progress, Scan, Store, StoreError};
 
 /// Events per write transaction on import (strfry's import batch).
@@ -125,7 +125,7 @@ pub fn export(
 pub fn import(
     store: &Store,
     limits: &EventLimits,
-    service_url: Option<&RelayUrl>,
+    names: &RelayNames,
     max_line: usize,
     mut input: impl BufRead,
     show_rejected: bool,
@@ -134,7 +134,7 @@ pub fn import(
     let mut importer = Importer {
         store,
         limits,
-        service_url,
+        names,
         max_line,
         show_rejected,
         no_verify,
@@ -213,9 +213,9 @@ fn skip_line_remainder(input: &mut impl BufRead) -> Result<(), AdminError> {
 struct Importer<'a> {
     store: &'a Store,
     limits: &'a EventLimits,
-    /// `[relay] service_url`, applied to NIP-62 requests to vanish in
-    /// the imported set.
-    service_url: Option<&'a RelayUrl>,
+    /// The relay's configured names, applied to NIP-62 requests to
+    /// vanish in the imported set.
+    names: &'a RelayNames,
     max_line: usize,
     show_rejected: bool,
     /// Skip the BIP-340 signature check only (trusted input).
@@ -315,7 +315,7 @@ impl Importer<'_> {
         if self.batch.is_empty() {
             return Ok(());
         }
-        for outcome in self.store.write(&self.batch, self.service_url)?.outcomes {
+        for outcome in self.store.write(&self.batch, self.names)?.outcomes {
             match outcome {
                 WriteOutcome::Stored { .. } => self.stats.added += 1,
                 WriteOutcome::Duplicate => self.stats.duplicates += 1,

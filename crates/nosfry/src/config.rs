@@ -62,6 +62,12 @@ pub struct Relay {
     /// vanish. Empty disables AUTH: restricted kinds are refused on
     /// write and never served, and protected events are rejected.
     pub service_url: String,
+    /// Other `ws://`/`wss://` URLs the relay answers to — an onion
+    /// address torrc forwards, an iroh name, an old domain. An AUTH
+    /// `relay` tag, NIP-62 `relay` tag or NIP-98 `u` tag may name any
+    /// of them; they require a canonical `service_url`.
+    #[serde(default)]
+    pub service_url_aliases: Vec<String>,
     /// Soft open-file limit to raise to at startup, capped by the hard
     /// limit (0 = leave unchanged).
     pub nofiles: u64,
@@ -340,6 +346,7 @@ impl Default for Relay {
             listen: default_listen(),
             profiles: BTreeMap::from([("default".to_owned(), Profile::default())]),
             service_url: String::new(),
+            service_url_aliases: Vec::new(),
             nofiles: 1_000_000,
             max_websocket_payload_size: 131_072,
             auto_ping_seconds: 55,
@@ -432,11 +439,10 @@ impl Config {
             &self.events,
         )
         .map_err(|e| ServerError::RelayValue(e.to_string()))?;
-        let service_url = if self.relay.service_url.is_empty() {
-            None
-        } else {
-            Some(nosfry_core::url::RelayUrl::parse(&self.relay.service_url)?)
-        };
+        let names = nosfry_core::url::RelayNames::parse(
+            &self.relay.service_url,
+            &self.relay.service_url_aliases,
+        )?;
         self.relay
             .management
             .admin_keys()
@@ -453,7 +459,7 @@ impl Config {
                 .get("default")
                 .map_or_else(RateLimits::default, |profile| profile.rate_limits),
             auth: std::sync::Arc::new(nosfry_core::auth::AuthRules::new(
-                service_url,
+                names,
                 &self.relay.auth.restricted_read_kinds,
                 self.relay.auth.restrict_read_to_involved,
             )),
@@ -634,6 +640,26 @@ mod tests {
             Config::load(&path),
             Err(ServerError::ServiceUrl(_))
         ));
+    }
+
+    /// `[relay] service_url_aliases` validates like `service_url` —
+    /// every entry must be a `ws://`/`wss://` URL, and aliases
+    /// require a canonical `service_url`.
+    #[test]
+    fn service_url_aliases_validate() {
+        let mut config = Config::default();
+        config.relay.service_url = "wss://relay.example.com".into();
+        config.relay.service_url_aliases = vec!["ws://abcdef.onion".into()];
+        let limits = config.limits().unwrap();
+        assert!(limits.auth.names().matches("wss://relay.example.com"));
+        assert!(limits.auth.names().matches("ws://abcdef.onion"));
+
+        config.relay.service_url_aliases = vec!["http://bad".into()];
+        assert!(matches!(config.limits(), Err(ServerError::ServiceUrl(_))));
+
+        config.relay.service_url = String::new();
+        config.relay.service_url_aliases = vec!["ws://abcdef.onion".into()];
+        assert!(matches!(config.limits(), Err(ServerError::ServiceUrl(_))));
     }
 
     /// `Config::load` validates `[relay.info]` too: a `pubkey` or

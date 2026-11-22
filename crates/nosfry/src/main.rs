@@ -270,7 +270,7 @@ fn import(
     nosfry::admin::import(
         &store,
         &config.events,
-        limits.auth.relay(),
+        limits.auth.names(),
         config.relay.max_websocket_payload_size,
         stdin.lock(),
         show_rejected,

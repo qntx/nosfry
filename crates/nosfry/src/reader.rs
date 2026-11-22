@@ -834,6 +834,7 @@ mod tests {
     use nosfry_core::auth::ReadGate;
     use nosfry_core::filter::Filter;
     use nosfry_core::message::SubId;
+    use nosfry_core::url::RelayNames;
     use nosfry_lmdb::StoreOptions;
     use tokio::sync::mpsc;
 
@@ -893,7 +894,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..10).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let (shard_tx, _shard_rx) = mpsc::channel(8);
         let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
@@ -1028,7 +1029,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..3).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         // Pre-inflated shared total: over any tiny budget.
         let total = Arc::new(AtomicUsize::new(2));
         let (tx, rx) = std::sync::mpsc::channel();
@@ -1123,7 +1124,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..4_000).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         // Every finishing scan `blocking_send`s an `Activate`; keep the
         // inbox bigger than the flood.
@@ -1362,7 +1363,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..100).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         // One charge step (1024 records x 40 B) already exceeds it.
         let (tx, counter, reader) = spawn_reader(store, Duration::from_secs(10), 1_000);
         let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
@@ -1392,7 +1393,7 @@ mod tests {
         // A zero-time step budget yields ~1 record per step, so the
         // scan is still in flight when the cancel lands.
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..5_000).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         let (tx, counter, reader) = spawn_reader(store, Duration::ZERO, 0);
         let (out, _out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
@@ -1412,7 +1413,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..100).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         let (tx, counter, reader) = spawn_reader(store, Duration::from_secs(10), 0);
         let (outbound, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
@@ -1448,7 +1449,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..10).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         let (tx, _counter, reader) = spawn_reader(store, Duration::from_secs(10), 0);
         let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let jobs = Arc::new(JobBudget::new(usize::MAX));
@@ -1493,7 +1494,7 @@ mod tests {
         // A zero-time step budget keeps the scans in flight while the
         // cancels land.
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..5_000).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         let (tx, _counter, reader) = spawn_reader(store, Duration::ZERO, 0);
         let (out, _out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let jobs = Arc::new(JobBudget::new(usize::MAX));
@@ -1538,7 +1539,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..10).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         let (tx, _counter, reader) = spawn_reader(store, Duration::from_secs(10), 0);
         let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let jobs = Arc::new(JobBudget::new(usize::MAX));
@@ -1568,7 +1569,7 @@ mod tests {
         // A zero-time step budget keeps the scans in flight while the
         // cancel lands.
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..5_000).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         let (tx, _counter, reader) = spawn_reader(store, Duration::ZERO, 0);
         let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let conn_jobs = Arc::new(JobBudget::new(4));
@@ -1624,7 +1625,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
         let events: Vec<Arc<nosfry_core::event::Event>> = (0..3).map(event).collect();
-        store.write(&events, None).unwrap();
+        store.write(&events, &RelayNames::default()).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
         let (shard_tx, mut shard_rx) = mpsc::channel(8);
         let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));

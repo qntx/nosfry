@@ -26,7 +26,7 @@ use nosfry_core::filter::Filter;
 use nosfry_core::hll::Hll;
 use nosfry_core::moderation::{ModOp, Moderation};
 use nosfry_core::store::WriteOutcome;
-use nosfry_core::url::RelayUrl;
+use nosfry_core::url::RelayNames;
 use nosfry_sql::rusqlite::Connection;
 use nosfry_sql::{Executor, SqlStore, Value};
 use nosfry_testkit::driver::{Count, StoreDriver, StoreRecords, build_case, check};
@@ -40,8 +40,8 @@ struct SqlDriver {
 
 impl StoreDriver for SqlDriver {
     fn write(&mut self, events: &[Arc<Event>]) -> Vec<WriteOutcome> {
-        let url = RelayUrl::parse(SERVICE_URL).unwrap();
-        self.store.write(events, Some(&url)).unwrap().outcomes
+        let names = RelayNames::parse(SERVICE_URL, &[]).unwrap();
+        self.store.write(events, &names).unwrap().outcomes
     }
 
     fn snapshot(&mut self) -> u64 {

@@ -301,7 +301,7 @@ impl<'a> Connection<'a> {
     /// relay are exempt — a banned author may still vanish.
     fn moderation_allows(&self, event: &nosfry_core::event::Event) -> bool {
         if event.kind() == AUTH_KIND
-            || event.requests_vanish(self.handle.live.borrow().limits.auth.relay())
+            || event.requests_vanish(self.handle.live.borrow().limits.auth.names())
         {
             return true;
         }
@@ -333,7 +333,7 @@ impl<'a> Connection<'a> {
         let live = self.handle.live.borrow().clone();
         // NIP-62: a request to vanish naming this relay must not be
         // filtered by the write policy (restricted relays MUST comply).
-        if event.requests_vanish(live.limits.auth.relay()) {
+        if event.requests_vanish(live.limits.auth.names()) {
             return true;
         }
         let Some(policy) = &live.policy else {

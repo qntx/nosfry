@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 
 use crate::event::{EventId, EventLimits, PublicKey, UnverifiedEvent};
 use crate::moderation::{InfoField, ModOp, Moderation};
-use crate::url::RelayUrl;
+use crate::url::RelayNames;
 
 /// The content type a NIP-86 request must carry.
 pub const CONTENT_TYPE: &str = "application/nostr+json+rpc";
@@ -225,8 +225,8 @@ pub fn action(request: &Request<'_>, m: &Moderation) -> Result<Action, String> {
 ///
 /// `kind 27235`, `created_at` within ±60 s of `now`, `method` =
 /// `POST`, `payload` = the SHA-256 of the raw `body`, `u` matching
-/// `service_url` host-normalized, pubkey in `admins`, and a valid
-/// BIP-340 signature.
+/// any of the relay's `names` host-normalized, pubkey in `admins`,
+/// and a valid BIP-340 signature.
 ///
 /// # Errors
 ///
@@ -236,7 +236,7 @@ pub fn authorize(
     body: &[u8],
     now: u64,
     events: &EventLimits,
-    service_url: Option<&RelayUrl>,
+    names: &RelayNames,
     admins: &[PublicKey],
 ) -> Result<(), AuthError> {
     let Some(value) = authorization else {
@@ -272,10 +272,14 @@ pub fn authorize(
         }
         Some(_) => {}
     }
-    let Some(url) = service_url else {
+    if names.is_empty() {
         return Err(AuthError::NoServiceUrl);
-    };
-    if !event.tag_values("u").next().is_some_and(|u| url.matches(u)) {
+    }
+    if !event
+        .tag_values("u")
+        .next()
+        .is_some_and(|u| names.matches(u))
+    {
         return Err(AuthError::UrlMismatch);
     }
     let pubkey = event.pubkey();

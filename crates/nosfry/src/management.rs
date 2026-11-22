@@ -68,13 +68,13 @@ async fn answer(state: &AppState, origin: &Origin, headers: HeaderMap, body: Byt
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let service_url = live.limits.auth.relay();
+    let names = live.limits.auth.names();
     let auth = nosfry_core::management::authorize(
         authorization,
         &body,
         now,
         &live.config.events,
-        service_url,
+        names,
         &live.admins,
     );
     if matches!(auth, Err(AuthError::NoServiceUrl))
