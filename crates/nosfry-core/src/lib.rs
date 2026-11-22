@@ -17,6 +17,7 @@
 mod hex;
 
 pub mod auth;
+pub mod client;
 pub mod deletion;
 pub mod event;
 pub mod filter;
