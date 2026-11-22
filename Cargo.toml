@@ -39,7 +39,7 @@ slab      = "0.4.12"
 getrandom = "0.4"
 
 # NIP-77 set reconciliation (relay side only)
-negentropy = "=0.5.2"
+negentropy = "=0.5.3"
 
 # Testing
 proptest  = "1.12.0"
