@@ -224,9 +224,9 @@ struct Plan {
     /// Filter object without `since`/`until`/`limit` — per-window
     /// bounds are inserted per window.
     base: Map<String, Value>,
-    /// Compiled base filter (for `since`/`until` extraction done at
-    /// validate time only).
+    /// Reconciled range lower bound.
     lo: u64,
+    /// Reconciled range upper bound.
     hi: u64,
 }
 
@@ -333,9 +333,7 @@ pub async fn run(
         .limits()
         .map_err(|err| SyncError::Config(Box::new(err)))?;
     let plan = validate(&opts, &limits)?;
-    let target = dial::resolve(&opts.url, opts.allow_private).await?;
-    let peer = peer_limits(&target, opts.timeout).await;
-    let frame_limit = nosfry_core::client::neg_frame_limit(peer.max_message_length)?;
+    // Fail fast on a bad key file, before any network work.
     let key = opts
         .auth_key_file
         .as_deref()
@@ -347,6 +345,9 @@ pub async fn run(
             "auth key loaded"
         );
     }
+    let target = dial::resolve(&opts.url, opts.allow_private).await?;
+    let peer = peer_limits(&target, opts.timeout).await;
+    let frame_limit = nosfry_core::client::neg_frame_limit(peer.max_message_length)?;
     let io = dial::dial(&target, opts.timeout)
         .await
         .map_err(|err| SyncError::Connect(err.to_string()))?;

@@ -283,6 +283,39 @@ async fn up_converges() {
 }
 
 #[tokio::test]
+async fn up_skips_restricted_and_protected() {
+    // Local AUTH enabled: restricted kinds and protected events must
+    // still never leave the relay — the peer is not an authenticated
+    // author or recipient.
+    let peer = peer().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, store) = local(dir.path());
+    config.relay.service_url = "wss://local.example".to_owned();
+    config.relay.auth.restricted_read_kinds = vec![4];
+    let t = now_secs() - 60;
+    let dm_pk = faster_hex::hex_string(&key(6).x_only_public_key().0.to_byte_array());
+    let dm = event(&key(5), 4, t, &json!([["p", dm_pk]]), "a direct message");
+    let repost = event(
+        &key(5),
+        16,
+        t + 1,
+        &json!([]),
+        "repost of {\"tags\":[[\"-\"]]}",
+    );
+    let note = event(&key(5), 1, t + 2, &json!([]), "public");
+    let evs = vec![Arc::clone(&dm), Arc::clone(&repost), Arc::clone(&note)];
+    seed(&store, &config, &evs);
+    let report = nosfry::sync::run(&store, &config, relay_opts(&peer, Direction::Up))
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Complete);
+    assert_eq!(report.stats.skipped, 2, "{:?}", report.stats);
+    assert_eq!(report.stats.uploaded, 1, "{:?}", report.stats);
+    assert_eq!(remote_ids(&peer).await, BTreeSet::from([note.id().to_string()]));
+    peer.stop().await;
+}
+
+#[tokio::test]
 async fn both_converges_and_is_idempotent() {
     let peer = peer().await;
     let dir = tempfile::tempdir().unwrap();
@@ -569,8 +602,106 @@ async fn silent_peer_stalls() {
     o.timeout = Duration::from_secs(2);
     let start = Instant::now();
     let err = nosfry::sync::run(&store, &config, o).await.err().unwrap();
-    assert!(err.to_string().contains("stall"), "{err}");
+    // A peer that never answers the first NEG-OPEN probably does not
+    // speak NIP-77 — the error says so and names the wait.
+    assert!(err.to_string().contains("NIP-77"), "{err}");
+    assert!(err.to_string().contains("no reply to NEG-OPEN"), "{err}");
     assert!(start.elapsed() < Duration::from_secs(20));
+}
+
+/// A real NIP-77 responder over `records`: on NEG-OPEN it answers
+/// rounds until the diff is done; REQ gets `downloads` + EOSE. When
+/// `notice` is set a NOTICE goes out right after the first NEG-MSG.
+async fn neg_script(
+    mut ws: FakeWs,
+    records: Vec<(u64, [u8; 32])>,
+    downloads: Vec<String>,
+    notice: bool,
+) {
+    let mut neg: Option<negentropy::Negentropy<'static, negentropy::NegentropyStorageVector>> =
+        None;
+    let mut neg_sub = String::new();
+    while let Some(text) = ws.recv().await {
+        let Ok(frame) = serde_json::from_str::<Value>(&text) else {
+            continue;
+        };
+        match frame[0].as_str().unwrap_or("") {
+            "NEG-OPEN" => {
+                neg_sub = frame[1].as_str().unwrap().to_owned();
+                let mut storage =
+                    negentropy::NegentropyStorageVector::with_capacity(records.len());
+                for (ts, id) in &records {
+                    storage
+                        .insert(*ts, negentropy::Id::from_byte_array(*id))
+                        .unwrap();
+                }
+                storage.seal().unwrap();
+                let mut n = negentropy::Negentropy::owned(storage, 500_000).unwrap();
+                let mut buf = vec![0u8; frame[3].as_str().unwrap().len() / 2];
+                faster_hex::hex_decode(frame[3].as_str().unwrap().as_bytes(), &mut buf).unwrap();
+                let reply = n.reconcile(&buf).unwrap();
+                neg = Some(n);
+                ws.send(&format!(
+                    "[\"NEG-MSG\",\"{neg_sub}\",\"{}\"]",
+                    faster_hex::hex_string(&reply)
+                ))
+                .await;
+                if notice {
+                    ws.send("[\"NOTICE\",\"thanks for syncing\"]").await;
+                }
+            }
+            "NEG-MSG" => {
+                let Some(n) = neg.as_mut() else { continue };
+                let hex = frame[2].as_str().unwrap();
+                let mut buf = vec![0u8; hex.len() / 2];
+                faster_hex::hex_decode(hex.as_bytes(), &mut buf).unwrap();
+                let reply = n.reconcile(&buf).unwrap();
+                if reply.len() > 1 {
+                    ws.send(&format!(
+                        "[\"NEG-MSG\",\"{neg_sub}\",\"{}\"]",
+                        faster_hex::hex_string(&reply)
+                    ))
+                    .await;
+                }
+            }
+            "REQ" => {
+                let sub = frame[1].as_str().unwrap().to_owned();
+                for json in &downloads {
+                    ws.send(&format!("[\"EVENT\",\"{sub}\",{json}]")).await;
+                }
+                ws.send(&format!("[\"EOSE\",\"{sub}\"]")).await;
+            }
+            _ => {}
+        }
+    }
+}
+
+#[tokio::test]
+async fn notice_after_first_neg_msg_is_ignored() {
+    // NIP-77 detection is run-level: once the first NEG-MSG proves
+    // the peer speaks it, a stray NOTICE is noise, not fatal.
+    let good = events(3, 1, now_secs() - 60, 10);
+    let records: Vec<(u64, [u8; 32])> =
+        good.iter().map(|ev| (ev.created_at(), ev.id().0)).collect();
+    let downloads: Vec<String> = good.iter().map(|ev| ev.json().to_owned()).collect();
+    let addr = fake_peer(move |ws| {
+        let records = records.clone();
+        let downloads = downloads.clone();
+        neg_script(ws, records, downloads, true)
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let (config, store) = local(dir.path());
+    let report = nosfry::sync::run(
+        &store,
+        &config,
+        opts(format!("ws://{addr}"), Direction::Down),
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.outcome, Outcome::Complete);
+    assert_eq!(report.stats.downloaded, 3);
+    assert_eq!(local_ids(&store).len(), 3);
 }
 
 #[tokio::test]

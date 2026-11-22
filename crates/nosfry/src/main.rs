@@ -219,27 +219,6 @@ fn is_broken_pipe(mut err: &(dyn std::error::Error + 'static)) -> bool {
 
 async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
     let config = Config::load(&cli.config)?;
-    if let Cmd::Sync {
-        ref url,
-        ref filter,
-        dir,
-        since,
-        until,
-        ref auth_key_file,
-        allow_private,
-        timeout,
-    } = cli.command
-    {
-        let mut opts = nosfry::sync::SyncOptions::new(url.clone());
-        opts.filter = filter.clone();
-        opts.direction = dir;
-        opts.since = since;
-        opts.until = until;
-        opts.auth_key_file = auth_key_file.clone();
-        opts.allow_private = allow_private;
-        opts.timeout = Duration::from_secs(timeout);
-        return sync(&config, opts).await;
-    }
     match cli.command {
         Cmd::Relay => relay(config, cli.config).await,
         Cmd::Export {
@@ -259,7 +238,26 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             filter,
         } => delete(&config, filter.as_deref(), age, dry_run),
         Cmd::Compact { dest } => compact(&config, &dest),
-        Cmd::Sync { .. } => unreachable!(),
+        Cmd::Sync {
+            url,
+            filter,
+            dir,
+            since,
+            until,
+            auth_key_file,
+            allow_private,
+            timeout,
+        } => {
+            let mut opts = nosfry::sync::SyncOptions::new(url);
+            opts.filter = filter;
+            opts.direction = dir;
+            opts.since = since;
+            opts.until = until;
+            opts.auth_key_file = auth_key_file;
+            opts.allow_private = allow_private;
+            opts.timeout = Duration::from_secs(timeout);
+            return sync(&config, opts).await;
+        }
     }
     .map(|()| ExitCode::SUCCESS)
 }

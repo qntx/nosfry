@@ -97,14 +97,14 @@ fn drain_vanish(store: &Store) -> Result<(), StoreError> {
 }
 
 /// Count one refused download toward the blaming side.
-fn tally_drop(drop: &Drop, matched: &mut HashSet<EventId>, stats: &mut SyncStats) {
-    if let Some(id) = drop.id {
+fn tally_drop(refusal: &Refusal, matched: &mut HashSet<EventId>, stats: &mut SyncStats) {
+    if let Some(id) = refusal.id {
         matched.insert(id);
-        tracing::debug!(%id, reason = %drop.reason, "refused downloaded event");
+        tracing::debug!(%id, reason = %refusal.reason, "refused downloaded event");
     } else {
-        tracing::debug!(reason = %drop.reason, "refused downloaded event");
+        tracing::debug!(reason = %refusal.reason, "refused downloaded event");
     }
-    if drop.remote {
+    if refusal.remote {
         stats.refused_remote += 1;
     } else {
         stats.refused_local += 1;
@@ -112,7 +112,7 @@ fn tally_drop(drop: &Drop, matched: &mut HashSet<EventId>, stats: &mut SyncStats
 }
 
 /// A refused event and which side to blame.
-struct Drop {
+struct Refusal {
     /// The parsed id when known (a delivered-but-refused event still
     /// counts as delivered).
     id: Option<EventId>,
@@ -122,7 +122,7 @@ struct Drop {
     remote: bool,
 }
 
-impl Drop {
+impl Refusal {
     const fn remote(id: Option<EventId>, reason: String) -> Self {
         Self {
             id,
@@ -150,51 +150,51 @@ async fn check(
     filter: &Filter,
     now: u64,
     moderation: &nosfry_core::moderation::Moderation,
-) -> Result<Arc<Event>, Drop> {
+) -> Result<Arc<Event>, Refusal> {
     // (1) Canonical parse + event limits.
     let unverified = UnverifiedEvent::parse(json, &ctx.limits.event)
-        .map_err(|err| Drop::remote(None, err.reason()))?;
+        .map_err(|err| Refusal::remote(None, err.reason()))?;
     // (2) The id must have been requested.
     let id = unverified.id();
     if !requested.contains(&id) {
-        return Err(Drop::remote(Some(id), "unrequested event id".to_owned()));
+        return Err(Refusal::remote(Some(id), "unrequested event id".to_owned()));
     }
     // (3) Not too far in the future (no past bound: backfill is the
     // purpose).
     if unverified.created_at()
         > now.saturating_add(ctx.limits.event.reject_events_newer_than_seconds)
     {
-        return Err(Drop::local(
+        return Err(Refusal::local(
             Some(id),
             "created_at is too far in the future".to_owned(),
         ));
     }
     // (4) AUTH kind, ephemeral kinds, already-expired events.
     if unverified.kind() == AUTH_KIND {
-        return Err(Drop::local(Some(id), "kind 22242".to_owned()));
+        return Err(Refusal::local(Some(id), "kind 22242".to_owned()));
     }
     if unverified.kind().is_ephemeral() {
-        return Err(Drop::local(Some(id), "ephemeral kind".to_owned()));
+        return Err(Refusal::local(Some(id), "ephemeral kind".to_owned()));
     }
     if unverified.expiration().is_some_and(|at| at <= now) {
-        return Err(Drop::local(Some(id), "event has expired".to_owned()));
+        return Err(Refusal::local(Some(id), "event has expired".to_owned()));
     }
     // (5) NIP-70 protected events and reposts embedding them.
     if unverified.is_protected() {
-        return Err(Drop::local(
+        return Err(Refusal::local(
             Some(id),
             "event marked as protected".to_owned(),
         ));
     }
     if unverified.embeds_protected() {
-        return Err(Drop::local(
+        return Err(Refusal::local(
             Some(id),
             "reposts can't embed protected events".to_owned(),
         ));
     }
     // (6) Restricted kinds while local AUTH is off have no reader.
     if !ctx.limits.auth.enabled() && ctx.limits.auth.is_restricted(unverified.kind().0) {
-        return Err(Drop::local(
+        return Err(Refusal::local(
             Some(id),
             "kind is only served to authenticated readers and AUTH is disabled".to_owned(),
         ));
@@ -202,10 +202,10 @@ async fn check(
     // (7) The BIP-340 signature — never skipped.
     let event = unverified
         .verify(&ctx.limits.event)
-        .map_err(|err| Drop::remote(Some(id), err.reason()))?;
+        .map_err(|err| Refusal::remote(Some(id), err.reason()))?;
     // (8) The window filter.
     if !filter.matches(event.packed()) {
-        return Err(Drop::remote(
+        return Err(Refusal::remote(
             Some(id),
             "event does not match the window filter".to_owned(),
         ));
@@ -215,14 +215,14 @@ async fn check(
     let vanish = event.requests_vanish(ctx.limits.auth.names());
     // (9) NIP-86 moderation.
     if !vanish && let Some(reason) = moderation.blocked_reason(&event) {
-        return Err(Drop::local(Some(id), reason.to_owned()));
+        return Err(Refusal::local(Some(id), reason.to_owned()));
     }
     // (10) The write-policy plugin, `sourceType` `Sync`.
     if !vanish
         && let Some(policy) = ctx.policy
         && !matches!(policy.check_sync(&event, ctx.url).await, Decision::Accept)
     {
-        return Err(Drop::local(Some(id), "rejected by write policy".to_owned()));
+        return Err(Refusal::local(Some(id), "rejected by write policy".to_owned()));
     }
     Ok(event)
 }

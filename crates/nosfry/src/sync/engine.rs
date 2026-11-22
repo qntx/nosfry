@@ -145,6 +145,9 @@ pub(crate) struct Engine<'a, S> {
     stack: Vec<Window>,
     /// Windows requeued after an auth advance.
     requeued: VecDeque<Window>,
+    /// The first `NEG-MSG` of the run proves the peer speaks NIP-77;
+    /// before it, a NOTICE/CLOSED/stall is fatal `NoNip77`.
+    first_neg_msg: bool,
     /// Fresh subscription ids.
     sub_seq: u64,
     stats: SyncStats,
@@ -189,6 +192,7 @@ where
                 reauthed: false,
             }],
             requeued: VecDeque::new(),
+            first_neg_msg: false,
             sub_seq: 0,
             stats: SyncStats::default(),
             last_log: Instant::now(),
@@ -384,7 +388,6 @@ where
             .send(&open.to_string())
             .await
             .map_err(Retry::Fatal)?;
-        let mut got_msg = false;
         loop {
             let msg = match self.conn.recv(self.opts.timeout).await {
                 Ok(Msg::Neg { sub: s, msg }) if s == sub => msg,
@@ -392,8 +395,13 @@ where
                     sub: s,
                     message,
                     limit,
-                }) if s == sub => return Err(Self::neg_err(&message, limit)),
-                Ok(Msg::Notice { message }) if !got_msg => {
+                }) if s == sub => return Err(neg_err(&message, limit)),
+                // NIP-77 is a run-level property: before the first
+                // NEG-MSG a NOTICE or a CLOSED on the neg sub is a
+                // peer that does not speak it; afterwards a NOTICE is
+                // just noise (conn already warned) and a CLOSED is a
+                // transient retry.
+                Ok(Msg::Notice { message }) if !self.first_neg_msg => {
                     return Err(Retry::Fatal(SyncError::NoNip77(format!(
                         "NOTICE {:?}",
                         trunc(&message)
@@ -401,16 +409,25 @@ where
                 }
                 Ok(Msg::Closed {
                     sub: s, message, ..
-                }) if s == sub && !got_msg => {
+                }) if s == sub && !self.first_neg_msg => {
                     return Err(Retry::Fatal(SyncError::NoNip77(format!(
                         "CLOSED {:?}",
                         trunc(&message)
                     ))));
                 }
+                Ok(Msg::Closed { sub: s, .. }) if s == sub => {
+                    return Err(Retry::Backoff);
+                }
                 Ok(_) => continue,
+                Err(SyncError::Stalled(_)) if !self.first_neg_msg => {
+                    return Err(Retry::Fatal(SyncError::NoNip77(format!(
+                        "no reply to NEG-OPEN within {} s",
+                        self.opts.timeout.as_secs()
+                    ))));
+                }
                 Err(err) => return Err(Retry::Fatal(err)),
             };
-            got_msg = true;
+            self.first_neg_msg = true;
             let mut have_ids = Vec::new();
             let mut need_ids = Vec::new();
             let reply = neg
@@ -443,19 +460,6 @@ where
                     return Ok(Step::Done);
                 }
             }
-        }
-    }
-
-    /// Map a `NEG-ERR` to the retry decision.
-    fn neg_err(message: &str, limit: Option<u64>) -> Retry {
-        let prefix = reason_prefix(message);
-        if limit.is_some() || (prefix == "blocked" && message.contains("too many")) {
-            return Retry::Split;
-        }
-        match prefix {
-            "blocked" | "rate-limited" | "closed" | "error" => Retry::Backoff,
-            "auth-required" => Retry::AuthNeeded,
-            _ => Retry::Fatal(SyncError::Refused(trunc(message).to_owned())),
         }
     }
 
@@ -795,19 +799,89 @@ fn backoff(attempt: u8) -> Duration {
     Duration::from_secs(secs.min(30))
 }
 
-/// Whether a stored event may be uploaded: never NIP-70 protected,
-/// never a restricted kind the local relay itself cannot serve.
+/// Whether a stored event may be uploaded: never NIP-70 protected
+/// (the event itself or one it embeds), never a restricted kind —
+/// the local relay serves those only to authenticated authors and
+/// recipients, and the peer is neither.
 fn uploadable(unverified: &UnverifiedEvent<'_>, limits: &Limits) -> bool {
     !unverified.is_protected()
-        && (limits.auth.enabled() || !limits.auth.is_restricted(unverified.kind().0))
+        && !unverified.embeds_protected()
+        && !limits.auth.is_restricted(unverified.kind().0)
+}
+
+/// Map a `NEG-ERR` to the retry decision: `blocked` with a limit
+/// element or "too many" splits the window, "capacity" is transient
+/// and backs off, every other `blocked` refuses the sync outright.
+fn neg_err(message: &str, limit: Option<u64>) -> Retry {
+    let prefix = reason_prefix(message);
+    if prefix == "blocked" && (limit.is_some() || message.contains("too many")) {
+        return Retry::Split;
+    }
+    match prefix {
+        "blocked" if message.contains("capacity") => Retry::Backoff,
+        "rate-limited" | "closed" | "error" => Retry::Backoff,
+        "auth-required" => Retry::AuthNeeded,
+        _ => Retry::Fatal(SyncError::Refused(trunc(message).to_owned())),
+    }
 }
 
 /// The `Scan` step sink for uploads: parse each record and keep it
-/// only when the event may leave the relay.
+/// only when the event may leave the relay. Stored JSON may predate
+/// a tightened `max_num_tags`/`max_tag_val_size`, so parse
+/// structurally — a stored event must never be dropped for a newer
+/// bound.
 fn push_uploadable(out: &mut Vec<(EventId, String)>, json: &str, limits: &Limits) {
-    if let Ok(unverified) = UnverifiedEvent::parse(json, &limits.event)
+    if let Ok(unverified) = UnverifiedEvent::parse_structural(json)
         && uploadable(&unverified, limits)
     {
         out.push((unverified.id(), json.to_owned()));
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "unit tests may panic on failure"
+)]
+mod tests {
+    use super::*;
+
+    /// `blocked:` splits or backs off only on the two transient
+    /// reasons; everything else refuses.
+    #[test]
+    fn neg_err_maps_reasons() {
+        assert!(matches!(
+            neg_err("blocked: sync capacity exhausted", None),
+            Retry::Backoff
+        ));
+        assert!(matches!(
+            neg_err("blocked: too many query results", None),
+            Retry::Split
+        ));
+        assert!(matches!(neg_err("blocked: limit", Some(10)), Retry::Split));
+        // A limit element only splits on `blocked:`.
+        assert!(matches!(
+            neg_err("rate-limited: slow down", Some(10)),
+            Retry::Backoff
+        ));
+        assert!(matches!(
+            neg_err("blocked: you are banned", None),
+            Retry::Fatal(_)
+        ));
+        for msg in [
+            "rate-limited: slow down",
+            "closed: closing",
+            "error: something",
+        ] {
+            assert!(matches!(neg_err(msg, None), Retry::Backoff), "{msg}");
+        }
+        assert!(matches!(
+            neg_err("auth-required: who are you", None),
+            Retry::AuthNeeded
+        ));
+        for msg in ["restricted: nope", "invalid: bad frame", "unknown: huh"] {
+            assert!(matches!(neg_err(msg, None), Retry::Fatal(_)), "{msg}");
+        }
     }
 }
