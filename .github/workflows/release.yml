@@ -335,23 +335,20 @@ jobs:
     needs: [plan, image-publish]
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # crates.io trusted publishing: each crate trusts this workflow in this
-    # environment, and the token lives only for this job.
+    # The organization's crates.io token, readable only by this job in the
+    # tag-restricted release environment.
     environment: release
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - id: auth
-        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
       # Dependency order; cargo publish waits until each crate is in the
       # index before the next one resolves it.
       - name: Publish nosfry-core, nosfry-lmdb, nosfry
         env:
-          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
           set -euo pipefail
           for p in nosfry-core nosfry-lmdb nosfry; do
