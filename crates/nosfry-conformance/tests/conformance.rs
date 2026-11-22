@@ -1710,3 +1710,38 @@ async fn alt_restricted_kinds_refused_without_auth() {
     assert!(!nips.contains(&42), "NIP-42 advertised: {nips:?}");
     assert!(!nips.contains(&59), "NIP-59 advertised: {nips:?}");
 }
+
+/// Parse-failure replies spend the REQ budget too: the burst buys a
+/// NOTICE each, then the junk flood stops earning replies. The
+/// connection stays usable — the trailing REQ gets an answer.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn junk_flood_is_rate_limited() {
+    let mut ws = connect().await;
+    for _ in 0..150 {
+        send(&mut ws, "[\"NOPE\"]").await;
+    }
+    send(&mut ws, &req_wire("after", "{\"limit\":1}")).await;
+    // The REQ burst is 100 refilling at 20/s: more than the burst may
+    // answer but never all 150, and every reply precedes the REQ's
+    // EOSE/CLOSED (frames process in order).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let mut notices = 0usize;
+    let mut answered = false;
+    while let Ok(Some(frame)) = tokio::time::timeout_at(deadline, ws.next()).await {
+        if frame.opcode() != yawc::OpCode::Text {
+            continue;
+        }
+        let v: Value = serde_json::from_slice(frame.payload()).unwrap();
+        match v[0].as_str().unwrap() {
+            "NOTICE" => notices += 1,
+            "EOSE" | "CLOSED" if v[1].as_str() == Some("after") => {
+                answered = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+    assert!((100..150).contains(&notices), "NOTICE count {notices}");
+    assert!(answered, "the REQ after the flood got no reply");
+}
