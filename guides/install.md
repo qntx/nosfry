@@ -53,9 +53,9 @@ docker run -d --name nosfry \
 gh attestation verify oci://ghcr.io/qntx/nosfry:latest --repo qntx/nosfry
 ```
 
-The bundled configuration only sets `db.path = "/data/nosfry-db"` and
-`relay.bind = "0.0.0.0"`. To change anything else, mount your own file over
-`/etc/nosfry/nosfry.toml` and keep those two keys:
+The bundled configuration only sets `db.path = "/data/nosfry-db"` and one
+listener on `0.0.0.0:7777`. To change anything else, mount your own file over
+`/etc/nosfry/nosfry.toml` and keep both:
 
 ```bash
 docker run -d --name nosfry \

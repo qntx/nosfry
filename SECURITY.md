@@ -38,7 +38,7 @@ unless you ask otherwise, when the fixed release is out.
 - `relay.max_connections` is always finite, but its default is derived from
   the open-file limit (874,936 at the default `relay.nofiles`) and bounds
   descriptors, not memory. On a public relay size it to the host, keep
-  `max_connections_per_ip` and the rate limits on, and put the relay behind
+  `max_connections_per_peer` and the rate limits on, and put the relay behind
   a reverse proxy.
 - One panic aborts the process (`panic = "abort"`); run the relay under a
   supervisor that restarts it.
@@ -47,12 +47,16 @@ unless you ask otherwise, when the fixed release is out.
 - The NIP-86 management API relies on NIP-98 signatures and a 60-second
   window. A captured request can be replayed inside that window, so serve
   the relay over TLS.
-- `relay.real_ip_header` trusts the header's last comma-separated value.
+- A listener's `real_ip_header` trusts the header's last comma-separated value.
   Set it only behind a proxy that sets or appends that header; otherwise
   clients choose their own address, and with it their rate-limit and
   connection-cap bucket.
+- A unix-socket listener without `real_ip_header` counts all of its
+  connections as one peer, and anyone who can connect to the socket uses
+  that listener's profile. Its permissions come from the umask and the
+  socket's directory; there is no mode key.
 - HTTP routes have no request-rate limit of their own. WebSocket messages
-  are rate-limited (`relay.rate_limits`), HTTP requests are not; a NIP-86
+  are rate-limited (each listener profile's `rate_limits`), HTTP requests are not; a NIP-86
   request that passes its cheap checks costs one signature verification.
   Put the relay behind a reverse proxy that rate-limits HTTP.
 - A write-policy plugin runs as a child process with the relay's

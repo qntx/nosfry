@@ -48,6 +48,10 @@ location_hint = "weur"
 Keys that differ from native:
 
 - `[relay] max_connections` defaults to 5,000.
+- There are no `[[relay.listen]]` or `[relay.profiles]` tables: the
+  per-address connection cap is `[relay] max_connections_per_ip` (default 128)
+  and the rate limits are `[relay.rate_limits]`, with the keys of a native
+  `[relay.profiles.<name>.rate_limits]`.
 - `[relay] max_sync_memory_bytes` defaults to 32 MiB.
 - `[worker] max_scan_rows` (default 100,000) bounds the rows any one scan reads, including COUNT and negentropy.
 - `[worker] max_subscription_bytes` (default 32 MiB) bounds the estimated memory (`Filter::approx_bytes`, the native estimate) of every open subscription in the object. A REQ past it answers `blocked: subscription capacity exhausted`.

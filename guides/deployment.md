@@ -12,9 +12,10 @@ HTTP, and passes the client address. nosfry has no TLS of its own.
       about 7.2 KiB (100,000 connections, about 0.7 GiB). Unset, it is derived
       from the open-file limit (874,936 at the default `nofiles`), which bounds
       descriptors, not memory.
-- [ ] `relay.bind` stays `127.0.0.1`; only the proxy reaches the relay.
+- [ ] The relay listens on `127.0.0.1` or a unix socket; only the proxy
+      reaches it.
 - [ ] The proxy rate-limits HTTP, overwrites `X-Forwarded-For`, and the relay
-      sets `relay.real_ip_header = "X-Forwarded-For"`.
+      sets `real_ip_header = "X-Forwarded-For"` on the proxy's listener.
 - [ ] `/metrics` is not reachable from the internet.
 - [ ] The open-file hard limit leaves room for `max_connections`: the relay
       refuses to start when `max_connections` exceeds `limit - 64 - limit/8`
@@ -85,8 +86,10 @@ With that site, configure the relay with:
 
 ```toml
 [relay]
-bind = "127.0.0.1"
 service_url = "wss://relay.example.com"
+
+[[relay.listen]]
+address = "127.0.0.1:7777"
 real_ip_header = "X-Forwarded-For"
 ```
 
@@ -94,6 +97,42 @@ Any proxy works if it does the same five things: TLS, WebSocket upgrade, a
 client-address header it overwrites, HTTP rate limiting, and a read timeout
 above 55 s. Caddy needs the third-party `caddy-ratelimit` module for the rate
 limit.
+
+### A unix socket instead of TCP
+
+A proxy on the same host can reach the relay over a unix socket, which keeps
+the relay off every network interface. Point the listener at a socket under a
+runtime directory, and keep `real_ip_header` on it so limits key on the real
+client:
+
+```toml
+[relay]
+service_url = "wss://relay.example.com"
+
+[[relay.listen]]
+address = "unix:/run/nosfry/relay.sock"
+real_ip_header = "X-Forwarded-For"
+```
+
+In the nginx site, replace `proxy_pass http://127.0.0.1:7777;` with
+`proxy_pass http://unix:/run/nosfry/relay.sock:;`.
+
+The relay creates the socket with its umask, and the unit's `UMask=0077` would
+let only the `nosfry` user connect. A drop-in
+(`systemctl edit nosfry`) creates the directory and opens the socket to the
+`nosfry` group; the database stays private because `StateDirectoryMode=0700`
+closes its directory:
+
+```ini
+[Service]
+RuntimeDirectory=nosfry
+RuntimeDirectoryMode=0750
+UMask=0007
+```
+
+Then add the proxy's user to the group (`usermod -aG nosfry www-data`, or
+`debian-tor` for an [onion service](tor.md)) and restart both. Listeners are
+restart-only: a reload does not add, remove or move a socket.
 
 ## Container
 

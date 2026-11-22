@@ -18,9 +18,58 @@ The format is based on [Keep a Changelog]; this project follows
 - The Linux release binaries now need glibc 2.31 or newer (Debian 11,
   Ubuntu 20.04, RHEL 9 and newer). The 0.3.0 binaries needed glibc
   2.38 and did not start on Debian 12 or Ubuntu 22.04.
-- No configuration key was added, removed or renamed.
-  `relay.auth.restricted_read_kinds` now defaults to `[4, 1059,
-  21059]` (was `[4, 1059]`). A config whose
+- **The listener and per-address limit keys moved (native), with no
+  aliases.** A 0.3 configuration that sets `[relay] bind`, `port`,
+  `real_ip_header` or `max_connections_per_ip`, or has a
+  `[relay.rate_limits]` table, stops the relay at startup with an
+  `unknown field` error. Move them by hand; a configuration that sets
+  none of them needs no change. Before (0.3):
+
+  ```toml
+  [relay]
+  bind = "127.0.0.1"
+  port = 7777
+  real_ip_header = "X-Forwarded-For"
+  max_connections_per_ip = 128
+
+  [relay.rate_limits]
+  events_per_second = 20
+  ```
+
+  After (0.4):
+
+  ```toml
+  [[relay.listen]]
+  address = "127.0.0.1:7777"
+  real_ip_header = "X-Forwarded-For"
+
+  [relay.profiles.default]
+  max_connections_per_peer = 128
+
+  [relay.profiles.default.rate_limits]
+  events_per_second = 20
+  ```
+
+  Every `[relay.rate_limits]` key keeps its name and default under
+  `[relay.profiles.default.rate_limits]`. A listener may also be a
+  Unix-domain socket with its own profile, for a proxy on the same
+  host or a torrc `HiddenServicePort 80 unix:/run/nosfry/onion.sock`
+  (see `guides/tor.md`):
+
+  ```toml
+  [[relay.listen]]
+  address = "unix:/run/nosfry/onion.sock"
+  profile = "onion"
+
+  [relay.profiles.onion]
+  max_connections_per_peer = 10000
+  ```
+
+  `nosfry.example.toml` lists every key. The Workers edition keeps
+  `[relay] max_connections_per_ip` and `[relay.rate_limits]`.
+- `[relay] service_url_aliases` is new (both editions); no other key
+  was added. `relay.auth.restricted_read_kinds` now defaults to
+  `[4, 1059, 21059]` (was `[4, 1059]`). A config whose
   `max_websocket_payload_size` is smaller than `max_event_size + 10`
   is refused at load and at reload — check this pair if you raised
   `max_event_size`.
