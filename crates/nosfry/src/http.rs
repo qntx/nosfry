@@ -12,6 +12,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodFilter, get};
 use nosfry_core::moderation::Moderation;
 use tokio::sync::watch;
+use tracing::Instrument as _;
 use yawc::{IncomingUpgrade, Options};
 
 use crate::Live;
@@ -280,7 +281,7 @@ async fn websocket(state: &AppState, parts: &mut Parts, peer: SocketAddr) -> Opt
     // the log.
     let ip = client_ip(&live.config, &parts.headers, peer.ip());
     let Some(permit) = state.limiter.try_acquire(ip) else {
-        tracing::debug!(?ip, "connection cap reached");
+        tracing::debug!(target: "nosfry::conn", peer = %ip, "connection cap reached");
         state.metrics.connection_rejected();
         return Some((StatusCode::TOO_MANY_REQUESTS, "too many connections").into_response());
     };
@@ -288,18 +289,26 @@ async fn websocket(state: &AppState, parts: &mut Parts, peer: SocketAddr) -> Opt
         return Some(StatusCode::BAD_REQUEST.into_response());
     };
     let buckets = permit.buckets();
+    let conn = connection::next_conn_id();
+    // INFO level so the span exists under the default `info` filter:
+    // nothing logs at info inside it, but every warn/error/debug line
+    // of this connection then carries id and peer.
+    let span = tracing::info_span!(target: "nosfry::conn", "conn", id = conn, peer = %ip);
     let handle = state.conn.clone();
     let tracker = handle.tracker.clone();
-    tracker.spawn(async move {
-        let _permit = permit;
-        match fut.await {
-            Ok(mut ws) => {
-                tracing::debug!(?ip, "connection open");
-                connection::run(&mut ws, &handle, ip, buckets).await;
+    tracker.spawn(
+        async move {
+            let _permit = permit;
+            match fut.await {
+                Ok(mut ws) => {
+                    tracing::debug!(target: "nosfry::conn", "connection open");
+                    connection::run(&mut ws, &handle, conn, ip, buckets).await;
+                }
+                Err(err) => tracing::debug!(target: "nosfry::conn", %err, "upgrade failed"),
             }
-            Err(err) => tracing::debug!(%err, "upgrade failed"),
         }
-    });
+        .instrument(span),
+    );
     Some(response.into_response())
 }
 

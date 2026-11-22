@@ -58,6 +58,13 @@ pub(crate) struct Handle {
 /// Global connection counter.
 static NEXT_CONN: AtomicU64 = AtomicU64::new(1);
 
+/// Allocate the connection id. Called where the `conn` span is
+/// created (http.rs `websocket`) so span, shard routing, and reader
+/// logs share the id.
+pub(crate) fn next_conn_id() -> ConnId {
+    NEXT_CONN.fetch_add(1, Ordering::Relaxed)
+}
+
 /// Frames batched into one socket flush after the first `Out` arrives.
 const BATCH_MAX_FRAMES: usize = 64;
 /// Byte cap for one batched flush.
@@ -109,16 +116,21 @@ impl<'a> Connection<'a> {
     /// other connection of this client address.
     fn new(
         handle: &'a Handle,
+        conn: ConnId,
         peer: IpAddr,
         address: Arc<AddressBuckets>,
     ) -> Option<(Self, OutboundRx)> {
-        let conn = NEXT_CONN.fetch_add(1, Ordering::Relaxed);
         // Limits and the outbound budget are fixed at connect time;
         // reloads apply to the next connection.
         let live = handle.live.borrow().clone();
         let mut challenge = [0u8; 16];
         if let Err(err) = getrandom::fill(&mut challenge) {
-            tracing::error!(%err, conn, "cannot generate an AUTH challenge");
+            tracing::error!(%err, "cannot generate an AUTH challenge");
+            tracing::debug!(
+                target: "nosfry::conn",
+                reason = "auth challenge unavailable",
+                "connection closed"
+            );
             return None;
         }
         let (out, out_rx) = Outbound::new(
@@ -168,7 +180,6 @@ impl<'a> Connection<'a> {
                 };
                 tracing::trace!(
                     target: "nosfry::inbound",
-                    conn = self.conn,
                     msg = text,
                     "inbound message"
                 );
@@ -212,11 +223,11 @@ impl<'a> Connection<'a> {
         match flushed {
             Ok(Ok(())) => true,
             Ok(Err(err)) => {
-                tracing::debug!(%err, conn = self.conn, "pong write failed");
+                tracing::debug!(%err, "pong write failed");
                 false
             }
             Err(_) => {
-                tracing::debug!(conn = self.conn, "pong write stalled");
+                tracing::debug!("pong write stalled");
                 false
             }
         }
@@ -481,11 +492,11 @@ impl<'a> Connection<'a> {
         match self.write_batch(ws, first, out_rx).await {
             Ok(()) => true,
             Err(WriteError::Socket(err)) => {
-                tracing::debug!(%err, conn = self.conn, "websocket write failed");
+                tracing::debug!(%err, "websocket write failed");
                 false
             }
             Err(WriteError::Stalled) => {
-                tracing::debug!(conn = self.conn, "websocket write stalled");
+                tracing::debug!("websocket write stalled");
                 false
             }
         }
@@ -521,12 +532,7 @@ impl<'a> Connection<'a> {
         ws.feed(Frame::text(text.into_bytes())).await?;
         self.handle.metrics.relay_message(verb);
         if let Some(frame) = frame {
-            tracing::debug!(
-                target: "nosfry::ingest",
-                conn = self.conn,
-                frame = %frame,
-                "sent"
-            );
+            tracing::debug!(target: "nosfry::ingest", frame = %frame, "sent");
         }
         Ok(())
     }
@@ -615,13 +621,34 @@ impl<'a> Connection<'a> {
         match tokio::time::timeout(self.ping_interval, ws.send(Frame::ping(&[][..]))).await {
             Ok(Ok(())) => true,
             Ok(Err(err)) => {
-                tracing::debug!(%err, conn = self.conn, "ping failed");
+                tracing::debug!(%err, "ping failed");
                 false
             }
             Err(_) => {
-                tracing::debug!(conn = self.conn, "ping write stalled");
+                tracing::debug!("ping write stalled");
                 false
             }
+        }
+    }
+
+    /// One select-loop tick: `Some(reason)` ends the connection.
+    async fn step(
+        &mut self,
+        ws: &mut HttpWebSocket,
+        out_rx: &OutboundRx,
+        ping: &mut tokio::time::Interval,
+        last_inbound: &mut Instant,
+        shutdown: &mut watch::Receiver<bool>,
+    ) -> Option<&'static str> {
+        tokio::select! {
+            frame = ws.next() => (!self.inbound(ws, frame, last_inbound).await)
+                .then_some("client closed or read failed"),
+            first = out_rx.recv() => (!self.write_out(ws, first, out_rx).await)
+                .then_some("write failed or stalled"),
+            _ = ping.tick() => {
+                (!self.keepalive(ws, *last_inbound).await).then_some("ping timeout")
+            }
+            _ = shutdown.changed() => self.shutdown_close(ws, shutdown).await.then_some("shutdown"),
         }
     }
 
@@ -667,45 +694,31 @@ impl<'a> Connection<'a> {
 pub(crate) async fn run(
     ws: &mut HttpWebSocket,
     handle: &Handle,
+    conn_id: ConnId,
     peer: IpAddr,
     address: Arc<AddressBuckets>,
 ) {
-    let Some((mut conn, out_rx)) = Connection::new(handle, peer, address) else {
+    let Some((mut conn, out_rx)) = Connection::new(handle, conn_id, peer, address) else {
         return;
     };
     let mut ping = tokio::time::interval(conn.ping_interval);
     let mut last_inbound = Instant::now();
     let mut shutdown = handle.shutdown.clone();
 
-    loop {
-        tokio::select! {
-            frame = ws.next() => {
-                if !conn.inbound(ws, frame, &mut last_inbound).await {
-                    break;
-                }
-            }
-            first = out_rx.recv() => {
-                if !conn.write_out(ws, first, &out_rx).await {
-                    break;
-                }
-            }
-            _ = ping.tick() => {
-                if !conn.keepalive(ws, last_inbound).await {
-                    break;
-                }
-            }
-            _ = shutdown.changed() => {
-                if conn.shutdown_close(ws, &shutdown).await {
-                    break;
-                }
-            }
+    let reason: &'static str = loop {
+        if let Some(reason) = conn
+            .step(ws, &out_rx, &mut ping, &mut last_inbound, &mut shutdown)
+            .await
+        {
+            break reason;
         }
         if conn.out.is_dead() {
             conn.closing(ws, CloseCode::Policy, b"slow consumer").await;
-            break;
+            break "slow consumer";
         }
-    }
+    };
 
     conn.drain_obligated(ws).await;
     conn.teardown().await;
+    tracing::debug!(target: "nosfry::conn", reason, "connection closed");
 }
