@@ -110,20 +110,19 @@ production, also:
 format on the relay port. It is unauthenticated: scrape it from the host, and
 keep it off the proxy.
 
-<!-- fix/protocol-round1 adds metrics: list them here when it lands. -->
-
-| Metric                              | Type    | Meaning                            | Alert on                             |
-| ----------------------------------- | ------- | ---------------------------------- | ------------------------------------ |
-| `nosfry_store_errors_total{op}`     | counter | Failed store operations            | any increase (disk full, I/O errors) |
-| `nosfry_connections`                | gauge   | Live WebSocket connections         | above 80 % of `max_connections`      |
-| `nosfry_connections_rejected_total` | counter | Refused upgrades (caps)            | a sustained rate                     |
-| `nosfry_outbound_pending_bytes`     | gauge   | Process-wide queued outbound bytes | above 50 % of the total budget       |
-| `nosfry_subscription_bytes`         | gauge   | Estimated live-subscription memory | above 80 % of the budget             |
-| `nosfry_sync_memory_bytes`          | gauge   | Memory held by negentropy sessions | above 80 % of the budget             |
-| `nosfry_rate_limited_total{verb}`   | counter | Rate-limit refusals                | informational                        |
-| `nostr_client_messages_total{verb}` | counter | Inbound messages by verb           | informational                        |
-| `nostr_relay_messages_total{verb}`  | counter | Frames written to sockets          | informational                        |
-| `nostr_events_total{kind}`          | counter | Verified events                    | informational                        |
+| Metric                                 | Type    | Meaning                                                                                                                                | Alert on                             |
+| -------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
+| `nosfry_store_errors_total{op}`        | counter | Failed store operations                                                                                                                | any increase (disk full, I/O errors) |
+| `nosfry_connections`                   | gauge   | Live WebSocket connections                                                                                                             | above 80 % of `max_connections`      |
+| `nosfry_connections_rejected_total`    | counter | Refused upgrades (caps)                                                                                                                | a sustained rate                     |
+| `nosfry_outbound_pending_bytes`        | gauge   | Process-wide queued outbound bytes                                                                                                     | above 50 % of the total budget       |
+| `nosfry_subscription_bytes`            | gauge   | Estimated live-subscription memory                                                                                                     | above 80 % of the budget             |
+| `nosfry_sync_memory_bytes`             | gauge   | Memory held by negentropy sessions                                                                                                     | above 80 % of the budget             |
+| `nosfry_rate_limited_total{verb}`      | counter | Rate-limit refusals                                                                                                                    | informational                        |
+| `nostr_client_messages_total{verb}`    | counter | Inbound messages by verb                                                                                                               | informational                        |
+| `nostr_relay_messages_total{verb}`     | counter | Frames written to sockets                                                                                                              | informational                        |
+| `nostr_events_total{kind}`             | counter | Events persisted to the store; at most 256 kinds get an own series, the rest count under `kind="other"`                                | informational                        |
+| `nosfry_event_outcomes_total{outcome}` | counter | Verified publishes by outcome: `stored`, `ephemeral`, `duplicate`, `superseded`, `deleted`, `vanished`, `moderated`, `policy`, `error` | a rising `error` outcome             |
 
 A counter that has never moved prints only its `# HELP` and `# TYPE` lines, so
 treat a missing series as zero. There are no latency or queue-depth metrics

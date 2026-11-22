@@ -11,18 +11,18 @@ systemd unit), and inside the relay's container for the image.
 `--config` is a global flag, so `nosfry --config nosfry.toml <command>` and `nosfry <command> --config nosfry.toml` are equivalent. All commands write logs to stderr; event output goes to stdout.
 
 ```bash
-nosfry export [--since <unix>] [--until <unix>] [--reverse] > dump.jsonl
+nosfry export [--since <unix>] [--until <unix>] [--reverse] [--events-only] > dump.jsonl
 nosfry import [--show-rejected] [--no-verify] < dump.jsonl
 nosfry scan '{"kinds":[1],"limit":10}' [--count]
 nosfry delete [--dry-run] [--age <seconds>] ['{"kinds":[1]}']
 nosfry compact <dest-file>
 ```
 
-- `export` writes every stored event as one JSON line, ordered by `created_at` (newest first with `--reverse`), over a consistent snapshot.
-- `import` verifies each line's signature and stores verified events in batches. Malformed, oversized, or invalid lines are rejected and counted.
+- `export` writes every stored event as one JSON line, ordered by `created_at` (newest first with `--reverse`), over a consistent snapshot. The event lines are followed by `{"nosfry_state":1,…}` lines carrying the persisted NIP-86 state (bans, allow/disallow lists, blocked IPs, NIP-11 overrides) and the NIP-62 vanish points, emitted regardless of `--since`/`--until`. `--events-only` skips them, for piping into strfry or another relay.
+- `import` verifies each line's signature and stores verified events in batches. Malformed, oversized, or invalid lines are rejected and counted. A `nosfry_state` line is applied as it arrives; a malformed one, an unknown version, or a method outside the export vocabulary (read-only `list*` and `un*` ops are never exported) aborts the import.
   - Unlike relay ingest, there is no `created_at` time-window check, so archives of any age import cleanly.
   - Events imported while the relay is running are stored and queryable, but are not broadcast to live subscriptions.
-  - Import bypasses the write-policy plugin and NIP-86 moderation; it is an operator tool.
+  - Import bypasses the write-policy plugin, NIP-86 moderation, and the restricted-kind refusal (a dump's direct messages and gift wraps import without AUTH configured); it is an operator tool.
   - `--no-verify` skips only the signature check, for dumps from a relay you trust (for example `strfry export | nosfry import --no-verify`). The id hash, the size limit, and every structural check still run. The summary log records that signatures were not verified.
 - `scan` runs a `REQ` filter over the whole database in newest-first order; `--count` prints only the number of matches.
 - `delete` removes every stored event matching a `REQ` filter and prints the deleted count; `--dry-run` prints the count without deleting. Already-expired events still match the filter.
@@ -56,13 +56,13 @@ nosfry compact <dest-file>
 
 There are two kinds of backup, and they carry different things:
 
-|                                                                 | `nosfry compact <file>`                          | `nosfry export`                                 |
-| --------------------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------- |
-| What                                                            | a consistent physical copy of the whole database | every stored event as JSON lines                |
-| NIP-86 state (bans, allow lists, blocked IPs, NIP-11 overrides) | included                                         | **not included**                                |
-| Pending NIP-62 vanish sweeps                                    | included                                         | re-created when the kind-62 events are imported |
-| Restores into                                                   | the same on-disk format version only             | any nosfry version, and strfry                  |
-| Size                                                            | compacted (free pages dropped)                   | larger, compresses well                         |
+|                                                                 | `nosfry compact <file>`                          | `nosfry export`                                                   |
+| --------------------------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------- |
+| What                                                            | a consistent physical copy of the whole database | every stored event as JSON lines, then `nosfry_state` state lines |
+| NIP-86 state (bans, allow lists, blocked IPs, NIP-11 overrides) | included                                         | included as state lines; an import re-applies them                |
+| NIP-62 vanish points                                            | included                                         | included as state lines; the sweeps re-run on import              |
+| Restores into                                                   | the same on-disk format version only             | any nosfry version, and strfry with `--events-only`               |
+| Size                                                            | compacted (free pages dropped)                   | larger, compresses well                                           |
 
 A nightly physical backup:
 
@@ -116,19 +116,18 @@ passes with a `created_at` before `T` (the relay accepts events up to
 `events.reject_events_older_than_seconds` old) is missed. When that matters,
 run the second pass without `--since`, at the cost of a longer downtime.
 
-What an export and import does **not** carry over today:
+The `nosfry_state` lines carry the NIP-86 state and vanish points over — a
+0.4.0 exporter writes them on every pass and re-applying them is idempotent.
+An older binary's export (0.3.x and earlier, and strfry's) has no state lines,
+so that path still loses the NIP-86 state: record it before the upgrade
+(`listbannedpubkeys`, `listallowedpubkeys`, `listbannedevents`,
+`listallowedkinds`, `listdisallowedkinds`, `listblockedips`) and apply it
+again on the new relay. Until the bans and allow lists are applied again, the
+events they hid are served again: moderation hides stored events at read
+time without deleting them.
 
-<!-- fix/protocol-round1 adds export and import of the NIP-86 state:
-rewrite this list and the backup table above when it lands. -->
+What an export and import does **not** carry over:
 
-- NIP-86 state: banned and allowed pubkeys, banned events, allowed and
-  disallowed kinds, blocked IP addresses, and the NIP-11 name, description and
-  icon overrides. Record them before the upgrade (`listbannedpubkeys`,
-  `listallowedpubkeys`, `listbannedevents`, `listallowedkinds`,
-  `listdisallowedkinds`, `listblockedips`) and apply them again on the new
-  relay. Until the bans and allow lists are applied again, the events they
-  hid are served again: moderation hides stored events at read time without
-  deleting them.
 - Ephemeral events (never stored) and events a write-policy plugin would now
   reject: `import` bypasses the plugin and NIP-86 checks.
 - The configuration file, which you copy yourself.

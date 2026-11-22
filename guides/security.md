@@ -21,10 +21,12 @@ relay protects against, which bounds it enforces, and what it leaves to you.
 Defaults in parentheses; each is a key in [configuration.md](configuration.md)
 unless marked fixed.
 
-- **Per message:** inbound WebSocket message after inflation
-  (`max_websocket_payload_size`, 128 KiB); canonical event size
-  (`max_event_size`, 64 KiB); tags per event (2,000) and tag value size
-  (1,024 bytes); `created_at` window (900 s ahead, 3 years back, 60 s for
+- **Per message:** inbound WebSocket frame after inflation
+  (`max_websocket_payload_size`, 128 KiB, inclusive — it must be at least
+  `max_event_size + 10`); canonical event size (`max_event_size`, 64
+  KiB); tags per event (2,000) and tag value size (1,024 bytes); filter
+  `ids`/`authors`/`#e`/`#p` values are strict 64-character lowercase
+  hex; `created_at` window (900 s ahead, 3 years back, 60 s for
   ephemeral events).
 - **Per connection:** subscriptions (`max_subs_per_connection`, 200); filters
   per `REQ` (200); `#x` conditions per filter (3); queued outbound bytes
@@ -49,8 +51,8 @@ These are open in the current release and are tracked in the audit
 (round 1 identifiers):
 
 <!-- feat/bounded-server closes the max_connections default, C-14 and
-C-13 below; fix/protocol-round1 closes C-01. Each removes its entries
-here, and adds the new bounds to "Enforced bounds", when it lands. -->
+C-13 below: it removes their entries here and adds the new bounds to
+"Enforced bounds" when it lands. -->
 
 - `relay.max_connections` defaults to `0`, unlimited. Set it.
 - The per-reader request queues inside the process are unbounded (C-14). A

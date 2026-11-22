@@ -55,8 +55,10 @@ state:
 ```
 
 `import` checks every signature and every structural limit, but not the
-`created_at` window, so fixtures of any age load. Events with an `expiration`
-tag in the past are stored but never served.
+`created_at` window or the restricted-kind refusal, so fixtures of any age
+load — direct messages and gift wraps included, with or without AUTH
+configured. Events with an `expiration` tag in the past are stored but never
+served.
 
 Before each test run, with the relay stopped, replace the database with the
 pristine copy and start it:

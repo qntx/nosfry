@@ -18,8 +18,8 @@ connections opened afterwards, and _live_ means it applies at once.
 ## Reference
 
 <!-- feat/bounded-server (the max_connections default, the
-pending-subscription budget) and fix/protocol-round1 change keys here:
-the docs test fails until these tables match nosfry.example.toml. -->
+pending-subscription budget) changes keys here: the docs test fails
+until these tables match nosfry.example.toml. -->
 
 ### `[db]`
 
@@ -32,35 +32,38 @@ the docs test fails until these tables match nosfry.example.toml. -->
 
 ### `[events]`
 
-| Key                                                 | Default    | Reload | Meaning                                       |
-| --------------------------------------------------- | ---------- | ------ | --------------------------------------------- |
-| `events.max_event_size`                             | `65536`    | new    | Maximum canonical event size in bytes.        |
-| `events.reject_events_newer_than_seconds`           | `900`      | new    | Refuse events this far in the future.         |
-| `events.reject_events_older_than_seconds`           | `94608000` | new    | Refuse events this far in the past (3 years). |
-| `events.reject_ephemeral_events_older_than_seconds` | `60`       | new    | Refuse ephemeral events this far in the past. |
-| `events.max_num_tags`                               | `2000`     | new    | Maximum tags per event.                       |
-| `events.max_tag_val_size`                           | `1024`     | new    | Maximum tag value size in bytes.              |
+| Key                                                 | Default    | Reload | Meaning                                                                                               |
+| --------------------------------------------------- | ---------- | ------ | ----------------------------------------------------------------------------------------------------- |
+| `events.max_event_size`                             | `65536`    | new    | Maximum canonical event size in bytes; `relay.max_websocket_payload_size` must be at least this + 10. |
+| `events.reject_events_newer_than_seconds`           | `900`      | new    | Refuse events this far in the future.                                                                 |
+| `events.reject_events_older_than_seconds`           | `94608000` | new    | Refuse events this far in the past (3 years).                                                         |
+| `events.reject_ephemeral_events_older_than_seconds` | `60`       | new    | Refuse ephemeral events this far in the past.                                                         |
+| `events.max_num_tags`                               | `2000`     | new    | Maximum tags per event.                                                                               |
+| `events.max_tag_val_size`                           | `1024`     | new    | Maximum tag value size in bytes.                                                                      |
+
+A Marmot-ready 2 MiB profile is `max_event_size = 2097152` with
+`max_websocket_payload_size = 2097168`.
 
 ### `[relay]`
 
-| Key                                         | Default       | Reload  | Meaning                                                                                                                     |
-| ------------------------------------------- | ------------- | ------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `relay.bind`                                | `"127.0.0.1"` | restart | Listen address.                                                                                                             |
-| `relay.port`                                | `7777`        | restart | Listen port.                                                                                                                |
-| `relay.service_url`                         | `""`          | new     | The relay's public `ws://` or `wss://` URL. Required for NIP-42 AUTH, NIP-62 requests naming this relay, and NIP-86.        |
-| `relay.nofiles`                             | `1000000`     | restart | Raise the soft open-file limit to this value at startup, capped by the hard limit; `0` leaves it unchanged.                 |
-| `relay.real_ip_header`                      | `""`          | new     | Header carrying the client address; its last comma-separated value is trusted. Only behind a proxy that sets or appends it. |
-| `relay.max_websocket_payload_size`          | `131072`      | new     | Maximum inbound WebSocket message in bytes, after inflation.                                                                |
-| `relay.auto_ping_seconds`                   | `55`          | new     | WebSocket ping interval; at least 1. It also bounds socket writes and idle closes.                                          |
-| `relay.tcp_keepalive`                       | `false`       | new     | Set `SO_KEEPALIVE` on accepted sockets.                                                                                     |
-| `relay.max_pending_outbound_bytes`          | `33554432`    | new     | Queued outbound bytes above which one connection is closed (1008).                                                          |
-| `relay.max_pending_outbound_bytes_total`    | `1073741824`  | restart | Process-wide queued outbound bytes; over it, scans pause for connections that are behind. `0` is unlimited.                 |
-| `relay.max_sync_memory_bytes`               | `1073741824`  | restart | Process-wide negentropy budget, 40 bytes per record. `0` is unlimited.                                                      |
-| `relay.max_subscription_bytes_total`        | `1073741824`  | restart | Process-wide estimated memory of live subscriptions. `0` is unlimited.                                                      |
-| `relay.max_connections`                     | `0`           | live    | Maximum WebSocket connections. `0` is unlimited: set it on a public relay.                                                  |
-| `relay.max_connections_per_ip`              | `128`         | live    | Maximum WebSocket connections per client address (IPv6 per /64). `0` is unlimited.                                          |
-| `relay.metrics`                             | `false`       | restart | Serve unauthenticated `GET /metrics` (Prometheus) on the relay port.                                                        |
-| `relay.query_timeslice_budget_microseconds` | `10000`       | restart | Time slice of one stored scan before it yields to the next.                                                                 |
+| Key                                         | Default       | Reload  | Meaning                                                                                                                                                                                            |
+| ------------------------------------------- | ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relay.bind`                                | `"127.0.0.1"` | restart | Listen address.                                                                                                                                                                                    |
+| `relay.port`                                | `7777`        | restart | Listen port.                                                                                                                                                                                       |
+| `relay.service_url`                         | `""`          | new     | The relay's public `ws://` or `wss://` URL. Required for NIP-42 AUTH, NIP-62 requests naming this relay, and NIP-86. Empty disables AUTH: restricted kinds are then refused on write.              |
+| `relay.nofiles`                             | `1000000`     | restart | Raise the soft open-file limit to this value at startup, capped by the hard limit; `0` leaves it unchanged.                                                                                        |
+| `relay.real_ip_header`                      | `""`          | new     | Header carrying the client address; its last comma-separated value is trusted. Only behind a proxy that sets or appends it.                                                                        |
+| `relay.max_websocket_payload_size`          | `131072`      | new     | Maximum inbound WebSocket frame in bytes, after inflation — inclusive, one byte more closes with 1009. Must be at least `events.max_event_size + 10`, or the config is refused at load and reload. |
+| `relay.auto_ping_seconds`                   | `55`          | new     | WebSocket ping interval; at least 1. It also bounds socket writes and idle closes.                                                                                                                 |
+| `relay.tcp_keepalive`                       | `false`       | new     | Set `SO_KEEPALIVE` on accepted sockets.                                                                                                                                                            |
+| `relay.max_pending_outbound_bytes`          | `33554432`    | new     | Queued outbound bytes above which one connection is closed (1008).                                                                                                                                 |
+| `relay.max_pending_outbound_bytes_total`    | `1073741824`  | restart | Process-wide queued outbound bytes; over it, scans pause for connections that are behind. `0` is unlimited.                                                                                        |
+| `relay.max_sync_memory_bytes`               | `1073741824`  | restart | Process-wide negentropy budget, 40 bytes per record. `0` is unlimited.                                                                                                                             |
+| `relay.max_subscription_bytes_total`        | `1073741824`  | restart | Process-wide estimated memory of live subscriptions. `0` is unlimited.                                                                                                                             |
+| `relay.max_connections`                     | `0`           | live    | Maximum WebSocket connections. `0` is unlimited: set it on a public relay.                                                                                                                         |
+| `relay.max_connections_per_ip`              | `128`         | live    | Maximum WebSocket connections per client address (IPv6 per /64). `0` is unlimited.                                                                                                                 |
+| `relay.metrics`                             | `false`       | restart | Serve unauthenticated `GET /metrics` (Prometheus) on the relay port.                                                                                                                               |
+| `relay.query_timeslice_budget_microseconds` | `10000`       | restart | Time slice of one stored scan before it yields to the next.                                                                                                                                        |
 
 ### `[relay.limits]`
 
@@ -106,10 +109,10 @@ the docs test fails until these tables match nosfry.example.toml. -->
 
 ### `[relay.auth]`
 
-| Key                                    | Default     | Reload | Meaning                                                                      |
-| -------------------------------------- | ----------- | ------ | ---------------------------------------------------------------------------- |
-| `relay.auth.restricted_read_kinds`     | `[4, 1059]` | new    | Kinds served only to authenticated readers (direct messages and gift wraps). |
-| `relay.auth.restrict_read_to_involved` | `true`      | new    | Serve restricted kinds only to the author or a `p`-tagged pubkey.            |
+| Key                                    | Default            | Reload | Meaning                                                                                |
+| -------------------------------------- | ------------------ | ------ | -------------------------------------------------------------------------------------- |
+| `relay.auth.restricted_read_kinds`     | `[4, 1059, 21059]` | new    | Kinds served only to authenticated readers (direct messages and both gift-wrap kinds). |
+| `relay.auth.restrict_read_to_involved` | `true`             | new    | Serve restricted kinds only to the author or a `p`-tagged pubkey.                      |
 
 ### `[relay.management]`
 
@@ -174,7 +177,7 @@ to the memory you give the relay.
 
 ### Limits and abuse resistance
 
-- **Rate limits.** `relay.rate_limits` throttles each connection with EVENT and REQ token buckets (default 20/s, burst 100). An over-limit EVENT gets `OK false rate-limited:` and an over-limit REQ gets `CLOSED rate-limited:`. A `*_per_second` of 0 disables that bucket.
+- **Rate limits.** `relay.rate_limits` throttles each connection with EVENT and REQ token buckets (default 20/s, burst 100). An over-limit EVENT gets `OK false rate-limited:` and an over-limit REQ gets `CLOSED rate-limited:`, each carrying the NIP-01 retry hint (milliseconds until the bucket refills). A `*_per_second` of 0 disables that bucket.
 - **Per-address buckets.** The `ip_*` keys add a second pair of buckets shared by every connection of one client address (default 100/s, burst 500 each). A message is refused when either its connection bucket or its address bucket is empty, so 128 connections cannot each spend 20 events per second.
 - **Connection caps.** `relay.max_connections` caps all WebSocket connections and `relay.max_connections_per_ip` (default 128) caps them per client address, with IPv6 grouped per /64. An over-cap upgrade is refused with `429 Too Many Requests` before the handshake.
 - **Client address.** Behind a proxy, set `relay.real_ip_header`; the last comma-separated value of that header is trusted, because the proxy appends its peer's address.
@@ -183,7 +186,7 @@ to the memory you give the relay.
 
 ### Filter validation
 
-`[relay.filter_validation]` (off by default) restricts the shape of `REQ` and `COUNT` filters, with strfry's keys and defaults. A request that breaks a rule is answered `CLOSED blocked: <reason>`. `NEG-OPEN` is exempt, as in strfry, so a full sync stays possible.
+Whatever this section does, filter `ids`, `authors`, `#e` and `#p` values must each be 64 lowercase hex characters — anything else is refused with `invalid:` (`CLOSED` for REQ and COUNT, `NEG-ERR` for NEG-OPEN). `[relay.filter_validation]` (off by default) then restricts the shape of `REQ` and `COUNT` filters, with strfry's keys and defaults. A request that breaks a rule is answered `CLOSED blocked: <reason>`. `NEG-OPEN` is exempt, as in strfry, so a full sync stays possible.
 
 - `min_filters_per_req` and `max_filters_per_req` (1 and 3) bound the filters per request.
 - `max_kinds_per_filter` (3) bounds the kinds per filter.
@@ -196,6 +199,7 @@ to the memory you give the relay.
 - `[relay.info]` holds the NIP-11 fields: `name`, `description`, `pubkey`, `self`, `contact`, `icon`, `banner`, `terms_of_service`, and `privacy_policy`.
   - `pubkey` and `self` must be 64 lowercase hex; convert an npub first.
   - `supported_nips` replaces the computed list. Use it when a write-policy plugin implements a NIP the relay itself does not.
+- `limitation.max_message_length` is `min(max_websocket_payload_size, max_event_size + 10)` — the largest frame the relay accepts and the largest EVENT frame it can carry.
 - `limitation.restricted_writes` is `true` while a NIP-86 pubkey or kind allow list is non-empty.
 - `GET /` from a browser returns an HTML page built from the same fields. Only `http`, `https`, and `mailto` values become links, and every value is escaped.
 - `/nodeinfo/2.1` describes the software. `/.well-known/nodeinfo` links to it on the host of `service_url`, and is 404 while `service_url` is unset.
@@ -236,9 +240,11 @@ For example: `RUST_LOG=info,nosfry::ingest=debug`.
 
 `[relay] service_url` (empty by default) is the relay's canonical `ws://` or `wss://` address. Clients echo it in the AUTH event's `relay` tag, and NIP-62 requests name it.
 
-- When it is set, NIP-11 lists 42 and the relay challenges lazily: only when a client sends a REQ with a fully restricted filter, or publishes a protected event. A connection may authenticate up to 8 pubkeys.
-- `[relay.auth] restricted_read_kinds` (default `[4, 1059]`, direct messages and gift wraps) are served only to authenticated readers. With `restrict_read_to_involved = true` (the default), they are served only to the author or a `p`-tagged recipient.
-- A REQ whose filters list only restricted kinds is refused: `CLOSED auth-required:` when AUTH is enabled, `CLOSED restricted:` otherwise. Mixed filters still subscribe but hide restricted events, and hidden events never consume `limit`. Without a `service_url`, direct messages are stored but never served.
+- When it is set, NIP-11 lists 42 and the relay sends each connection at most one AUTH challenge: when an unauthenticated REQ, COUNT or NEG-OPEN could match a restricted kind — the request still proceeds, with the restricted events hidden — or when one publishes a protected event. A connection may authenticate up to 8 pubkeys.
+- `[relay.auth] restricted_read_kinds` (default `[4, 1059, 21059]`, direct messages and the stored and ephemeral gift-wrap kinds) are served only to authenticated readers. With `restrict_read_to_involved = true` (the default), they are served only to the author or a `p`-tagged recipient.
+- A REQ whose filters list only restricted kinds is refused: `CLOSED auth-required:` when AUTH is enabled, `CLOSED restricted:` otherwise. Mixed filters still subscribe but hide restricted events, and hidden events never consume `limit`.
+- Without a `service_url`, publishing a restricted kind is refused with `restricted:` — there is no reader who could ever be served. Set `restricted_read_kinds = []` to accept and serve them openly.
+- A gift wrap (kind 1059) is also deleted by a kind-5 request from the pubkey its `p` tag names, and re-publication stays blocked (NIP-59); NIP-11 lists 59 while AUTH is on and 1059 is restricted.
 - NIP-70 protected events (a `["-"]` tag) are rejected unless AUTH is configured and the author is authenticated. Reposts (kinds 6 and 16) embedding a protected event are always blocked. AUTH events (kind 22242) are never stored or broadcast.
 
 ### Request to vanish (NIP-62)
