@@ -240,7 +240,7 @@ fn req_newest_first_eose_and_limit() {
     let frames = reader.sent();
     let hits = event_frames(&frames, "s");
     assert_eq!(hits.len(), 3, "{frames:?}");
-    assert!(frames[3].starts_with("[\"EOSE\",\"s\"]"), "{frames:?}");
+    assert_eq!(frames[3], "[\"EOSE\",\"s\",[\"more\"]]", "{frames:?}");
     assert!(hits[0].contains("m4") && hits[1].contains("m3") && hits[2].contains("m2"));
 }
 
@@ -395,7 +395,7 @@ fn restricted_kind_served_only_to_involved_authed() {
     msg(&mut r, 2, &req_frame("x", &json!({"kinds": [4]})));
     msg(&mut r, 2, &auth_frame(9, "challenge-2", NOW));
     msg(&mut r, 2, &req_frame("s", &json!({"kinds": [4]})));
-    assert_eq!(b.sent().last().unwrap(), "[\"EOSE\",\"s\"]");
+    assert_eq!(b.sent().last().unwrap(), "[\"EOSE\",\"s\",[\"finish\"]]");
     // A kind-4 p-tagging conn 2's pubkey is delivered; one tagging a
     // stranger is not.
     let me = pubkey_of(9);
@@ -664,7 +664,10 @@ fn count_then_req_reuses_the_sub_id() {
     msg(&mut r, 1, &req_frame("s", &json!({"kinds": [1]})));
     let frames = socket.sent();
     assert_eq!(event_frames(&frames, "s").len(), 1, "{frames:?}");
-    assert!(frames.iter().any(|f| f == "[\"EOSE\",\"s\"]"), "{frames:?}");
+    assert!(
+        frames.iter().any(|f| f == "[\"EOSE\",\"s\",[\"finish\"]]"),
+        "{frames:?}"
+    );
 }
 
 #[test]
@@ -1890,13 +1893,13 @@ fn subscription_byte_budget_releases() {
     // CLOSE frees the budget: the same REQ is now admitted.
     msg(&mut r, 1, "[\"CLOSE\",\"s\"]");
     msg(&mut r, 1, &req_frame("t", &json!({"kinds": [1]})));
-    assert!(a.sent().iter().any(|f| f == "[\"EOSE\",\"t\"]"));
+    assert!(a.sent().iter().any(|f| f.starts_with("[\"EOSE\",\"t\"")));
     // A closed connection frees its whole charge.
     r.close(1);
     let b = connect(&mut r, 2);
     msg(&mut r, 2, &req_frame("u", &json!({"kinds": [1]})));
     msg(&mut r, 2, &req_frame("v", &json!({"kinds": [1]})));
-    assert!(b.sent().iter().any(|f| f == "[\"EOSE\",\"u\"]"));
+    assert!(b.sent().iter().any(|f| f.starts_with("[\"EOSE\",\"u\"")));
     assert!(
         b.sent()
             .iter()
@@ -2050,7 +2053,10 @@ fn filter_validation_refuses_req() {
     );
     msg(&mut r, 1, &req_frame("s", &json!({"kinds": [1]})));
     assert!(
-        socket.sent().iter().any(|f| f == "[\"EOSE\",\"s\"]"),
+        socket
+            .sent()
+            .iter()
+            .any(|f| f == "[\"EOSE\",\"s\",[\"finish\"]]"),
         "{:?}",
         socket.sent()
     );

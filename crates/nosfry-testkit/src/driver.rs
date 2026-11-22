@@ -9,12 +9,15 @@ use nosfry_core::filter::Filter;
 use nosfry_core::hll::Hll;
 use nosfry_core::moderation::{InfoField, ModOp, Moderation};
 use nosfry_core::sign::{event, keys, pubkey_hex};
-use nosfry_core::store::WriteOutcome;
+use nosfry_core::store::{Completion, WriteOutcome};
 use nosfry_core::url::RelayNames;
 use proptest::prelude::*;
 use serde_json::json;
 
-use crate::model::{Model, model_expire, model_records, model_scan, model_store, model_union};
+use crate::model::{
+    Model, model_completion, model_expire, model_finish, model_more, model_records, model_scan,
+    model_store, model_union,
+};
 use crate::spec::{EventSpec, FilterSpec, SERVICE_URL, build_event, filter_json};
 
 /// One event store under test. Implementations translate each call
@@ -28,7 +31,8 @@ pub trait StoreDriver {
     fn snapshot(&mut self) -> u64;
 
     /// The event JSONs `filters` emit under `gate`, bounded by
-    /// `snapshot` and `max_limit`, at `now`.
+    /// `snapshot` and `max_limit`, at `now`, plus the scan's NIP-67
+    /// completion summary.
     fn scan(
         &mut self,
         filters: Arc<[Filter]>,
@@ -36,7 +40,7 @@ pub trait StoreDriver {
         snapshot: u64,
         max_limit: u64,
         now: u64,
-    ) -> Vec<String>;
+    ) -> StoreScan;
 
     /// The `(created_at, id)` records `filters` emit under `gate`,
     /// bounded by `snapshot` and `max_limit`, at `now` — the NIP-77
@@ -65,6 +69,15 @@ pub trait StoreDriver {
 
     /// Apply one NIP-86 `op`, returning the rebuilt snapshot.
     fn moderate(&mut self, op: ModOp) -> Moderation;
+}
+
+/// The events and the NIP-67 summary [`StoreDriver::scan`] reports.
+#[derive(Debug)]
+pub struct StoreScan {
+    /// The emitted event JSONs, in scan order.
+    pub jsons: Vec<String>,
+    /// The scan's reported completeness.
+    pub completion: Completion,
 }
 
 /// The records [`StoreDriver::records`] reports, mirrored per store.
@@ -237,7 +250,16 @@ pub fn check(store: &mut impl StoreDriver, case: &Case) -> Result<Aftermath, Tes
         case.max_limit,
         case.now,
     );
-    prop_assert_eq!(got, expected);
+    prop_assert_eq!(got.jsons, expected);
+    completion_checks(
+        got.completion,
+        &stored,
+        &filters,
+        snapshot,
+        &ReadGate::default(),
+        case.max_limit,
+        case.now,
+    )?;
 
     // A restricted gate must shrink the scan exactly as it shrinks
     // the model's answer.
@@ -257,7 +279,16 @@ pub fn check(store: &mut impl StoreDriver, case: &Case) -> Result<Aftermath, Tes
         case.max_limit,
         case.now,
     );
-    prop_assert_eq!(got_gated, expected_gated);
+    prop_assert_eq!(got_gated.jsons, expected_gated);
+    completion_checks(
+        got_gated.completion,
+        &stored,
+        &filters,
+        snapshot,
+        &gate,
+        case.max_limit,
+        case.now,
+    )?;
 
     // The record view of the same scan must equal the model's
     // records — under the open and the restricted gate.
@@ -276,13 +307,22 @@ pub fn check(store: &mut impl StoreDriver, case: &Case) -> Result<Aftermath, Tes
         case.now2,
     );
     let got_swept = store.scan(
-        filters,
+        Arc::clone(&filters),
         &ReadGate::default(),
         swept,
         case.max_limit,
         case.now2,
     );
-    prop_assert_eq!(got_swept, expected_swept);
+    prop_assert_eq!(got_swept.jsons, expected_swept);
+    completion_checks(
+        got_swept.completion,
+        &stored,
+        &filters,
+        swept,
+        &ReadGate::default(),
+        case.max_limit,
+        case.now2,
+    )?;
 
     count_checks(store, case, &stored, swept, &gate);
 
@@ -290,6 +330,43 @@ pub fn check(store: &mut impl StoreDriver, case: &Case) -> Result<Aftermath, Tes
         model: stored,
         snapshot,
     })
+}
+
+/// The NIP-67 [`Completion`] assertions of [`check`]: the store's
+/// report equals the engine-faithful model answer exactly (so the
+/// LMDB and SQL stores agree), and the semantic truth conditions
+/// hold — `finish` only when the model agrees every filter fit its
+/// limit, `more` only when a match was provably left unsent.
+///
+/// # Errors
+///
+/// Fails the proptest case on any divergence.
+fn completion_checks(
+    got: Completion,
+    stored: &Model,
+    filters: &[Filter],
+    snapshot: u64,
+    gate: &ReadGate,
+    max_limit: u64,
+    now: u64,
+) -> Result<(), TestCaseError> {
+    prop_assert_eq!(
+        got,
+        model_completion(&stored.stored, filters, snapshot, gate, max_limit, now)
+    );
+    if got.exhausted {
+        prop_assert!(
+            model_finish(&stored.stored, filters, snapshot, gate, max_limit, now),
+            "exhausted but the model does not finish: {got:?}"
+        );
+    }
+    if got.more {
+        prop_assert!(
+            model_more(&stored.stored, filters, snapshot, gate, max_limit, now),
+            "more but the model found nothing unsent: {got:?}"
+        );
+    }
+    Ok(())
 }
 
 /// The `records` assertions of [`check`]: the record view under the
@@ -527,6 +604,7 @@ fn moderate_event(store: &mut dyn StoreDriver, id: EventId) {
                 10,
                 u64::MAX,
             )
+            .jsons
             .is_empty(),
         "banevent did not delete the stored event"
     );
@@ -597,6 +675,7 @@ fn served(store: &mut dyn StoreDriver, id: &EventId) -> usize {
     ]);
     store
         .scan(filters, &ReadGate::default(), u64::MAX, 10, u64::MAX)
+        .jsons
         .len()
 }
 

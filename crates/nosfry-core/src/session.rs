@@ -794,9 +794,10 @@ impl Session {
         // A filter that may match restricted kinds earns the AUTH
         // challenge before `NegOpen` — the read gate keeps hiding
         // them either way.
-        if self.authed.is_empty()
-            && self.limits.auth.enabled()
-            && self.limits.auth.may_restrict(std::slice::from_ref(&filter))
+        if self
+            .limits
+            .auth
+            .challenges(&self.authed, std::slice::from_ref(&filter))
         {
             self.issue_challenge(out);
         }
@@ -907,10 +908,7 @@ impl Session {
         // A filter group that may match restricted kinds earns the
         // AUTH challenge but still proceeds — the read gate keeps
         // hiding what an unauthenticated reader must not see.
-        if self.authed.is_empty()
-            && self.limits.auth.enabled()
-            && self.limits.auth.may_restrict(filters)
-        {
+        if self.limits.auth.challenges(&self.authed, filters) {
             self.issue_challenge(out);
         }
         true

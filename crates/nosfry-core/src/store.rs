@@ -1,4 +1,4 @@
-//! Write outcomes shared by the event stores (LMDB, SQL).
+//! Outcomes shared by the event stores (LMDB, SQL).
 
 /// Outcome of writing one event, in arrival order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,4 +35,17 @@ impl WriteOutcome {
             Self::Vanished => (false, "blocked: request to vanish"),
         }
     }
+}
+
+/// How completely a stored-event scan covered its filters — the
+/// NIP-67 `finish`/`more` hint inputs. `Default` reports nothing,
+/// which is always a safe answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Completion {
+    /// Every filter ran its candidates dry (or was impossible) with
+    /// no limit cut and no budget cut: all matching stored events
+    /// were sent.
+    pub exhausted: bool,
+    /// A visible matching stored event was provably left unsent.
+    pub more: bool,
 }

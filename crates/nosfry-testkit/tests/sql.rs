@@ -29,7 +29,7 @@ use nosfry_core::store::WriteOutcome;
 use nosfry_core::url::RelayNames;
 use nosfry_sql::rusqlite::Connection;
 use nosfry_sql::{Executor, SqlStore, Value};
-use nosfry_testkit::driver::{Count, StoreDriver, StoreRecords, build_case, check};
+use nosfry_testkit::driver::{Count, StoreDriver, StoreRecords, StoreScan, build_case, check};
 use nosfry_testkit::spec::{SERVICE_URL, event_specs_strategy, filter_spec_strategy};
 use proptest::prelude::*;
 
@@ -67,14 +67,18 @@ impl StoreDriver for SqlDriver {
         _snapshot: u64,
         max_limit: u64,
         now: u64,
-    ) -> Vec<String> {
+    ) -> StoreScan {
         let mut hits = Vec::new();
-        self.store
+        let result = self
+            .store
             .query(&filters, gate, now, max_limit, usize::MAX, &mut |hit| {
                 hits.push(hit.json.to_string());
             })
             .unwrap();
-        hits
+        StoreScan {
+            jsons: hits,
+            completion: result.completion,
+        }
     }
 
     fn records(

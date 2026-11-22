@@ -156,6 +156,21 @@ fn events(frames: &[Value]) -> Vec<&Value> {
         .collect()
 }
 
+/// The NIP-67 hint strings of an EOSE frame (element 2); empty when
+/// absent — hint absence is always legal.
+fn eose_hints(eose: &Value) -> Vec<String> {
+    eose.get(2)
+        .and_then(Value::as_array)
+        .map(|hints| {
+            hints
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// A plain HTTP GET (no NIP-11 Accept), returning (status,
 /// content-type, body).
 async fn http_get(path: &str) -> (u16, String, String) {
@@ -223,7 +238,7 @@ async fn nip11_document() {
         .iter()
         .map(|v| v.as_u64().unwrap())
         .collect();
-    for nip in [1, 9, 11, 40, 42, 45, 59, 62, 70, 77, 86] {
+    for nip in [1, 9, 11, 40, 42, 45, 59, 62, 67, 70, 77, 86] {
         assert!(nips.contains(&nip), "missing NIP-{nip}: {nips:?}");
     }
     // Default 64 KiB events + 10 bytes of EVENT-frame overhead.
@@ -310,7 +325,8 @@ async fn req_newest_first_limit_eose() {
     }
     let filter = format!("{{\"authors\":[\"{}\"],\"limit\":2}}", pubkey(&k));
     let frames = req(&mut ws, "s", &filter).await;
-    assert_eq!(frames.last().unwrap()[0], "EOSE");
+    let eose = frames.last().unwrap();
+    assert_eq!(eose[0], "EOSE");
     let got = events(&frames);
     assert_eq!(got.len(), 2);
     // Newest first: created_at descending.
@@ -319,6 +335,47 @@ async fn req_newest_first_limit_eose() {
         "{got:?}"
     );
     assert_eq!(got[0]["content"], "e2");
+    // NIP-67: the limit cut proves a third stored match — `more`,
+    // never `finish`.
+    let hints = eose_hints(eose);
+    assert!(hints.iter().any(|h| h == "more"), "{eose}");
+    assert!(!hints.iter().any(|h| h == "finish"), "{eose}");
+}
+
+/// NIP-67: an `ids` lookup that serves everything the store holds
+/// for the filter ends in `["EOSE", sub, ["finish"]]`. `kinds` pins
+/// the filter to public kinds so `auth` does not join on the
+/// AUTH-on pass.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn eose_finish_hint_on_exact_ids() {
+    let k = key();
+    let ev = sign::event(&k, 1, now() - 5, &json!([]), "hint");
+    let mut ws = connect().await;
+    let (ok, reason) = publish(&mut ws, &ev).await;
+    assert!(ok, "publish: {reason}");
+    let filter = format!("{{\"ids\":[\"{}\"],\"kinds\":[1]}}", ev.id());
+    let frames = req(&mut ws, "s", &filter).await;
+    assert_eq!(frames.last().unwrap(), &json!(["EOSE", "s", ["finish"]]));
+}
+
+/// NIP-67: a public-only unauthenticated REQ never earns the `auth`
+/// hint — nor a challenge.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn eose_no_auth_hint_for_public_only() {
+    let mut ws = connect().await;
+    let frames = req(&mut ws, "s", "{\"kinds\":[1]}").await;
+    assert!(
+        !frames.iter().any(|v| v[0] == "AUTH"),
+        "public REQ challenged: {frames:?}"
+    );
+    let eose = frames.last().unwrap();
+    assert_eq!(eose[0], "EOSE", "{eose}");
+    assert!(
+        !eose_hints(eose).iter().any(|h| h == "auth"),
+        "public REQ hinted auth: {eose}"
+    );
 }
 
 #[tokio::test]
@@ -1706,6 +1763,27 @@ async fn maybe_restricted_filters_challenge_before_output() {
     assert_eq!(frames.last().unwrap()[0], "NEG-MSG", "{frames:?}");
 }
 
+/// NIP-67 + NIP-42: a mixed `{"kinds":[1,4]}` request from an
+/// unauthenticated reader sees the AUTH challenge before EOSE and
+/// the `auth` hint on it. The fresh author stored nothing, so the
+/// scan also reports `finish`.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn eose_auth_hint_after_challenge() {
+    let fresh = key();
+    let filter = format!("{{\"kinds\":[1,4],\"authors\":[\"{}\"]}}", pubkey(&fresh));
+    let mut ws = connect().await;
+    let frames = req(&mut ws, "s", &filter).await;
+    let position = |verb: &str| frames.iter().position(|v| v[0] == verb);
+    assert_eq!(position("AUTH"), Some(0), "{frames:?}");
+    let eose = frames.last().unwrap();
+    assert_eq!(eose[0], "EOSE", "{frames:?}");
+    assert_eq!(position("EOSE"), Some(frames.len() - 1), "{frames:?}");
+    let hints = eose_hints(eose);
+    assert!(hints.iter().any(|h| h == "auth"), "{eose}");
+    assert!(hints.iter().any(|h| h == "finish"), "{eose}");
+}
+
 /// Pass 2 (profile-alt, the 2 MiB profile): NIP-11's
 /// `limitation.max_message_length` is the truthful
 /// `max_event_size + 10`, not the raw payload cap.
@@ -1850,6 +1928,25 @@ async fn alt_restricted_kinds_refused_without_auth() {
         .collect();
     assert!(!nips.contains(&42), "NIP-42 advertised: {nips:?}");
     assert!(!nips.contains(&59), "NIP-59 advertised: {nips:?}");
+    assert!(nips.contains(&67), "NIP-67 not advertised: {nips:?}");
+}
+
+/// Pass 2: the AUTH-off relay sends no challenge and no `auth`
+/// hint for a maybe-restricted REQ — the `finish` hint still
+/// applies.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-alt relay — run.sh pass 2)"]
+async fn alt_eose_no_auth_hint_when_auth_disabled() {
+    let fresh = key();
+    let filter = format!("{{\"kinds\":[1,4],\"authors\":[\"{}\"]}}", pubkey(&fresh));
+    let mut ws = connect().await;
+    let frames = req(&mut ws, "s", &filter).await;
+    assert!(
+        !frames.iter().any(|v| v[0] == "AUTH"),
+        "AUTH-off relay challenged: {frames:?}"
+    );
+    let eose = frames.last().unwrap();
+    assert_eq!(eose, &json!(["EOSE", "s", ["finish"]]), "{eose}");
 }
 
 /// Parse-failure replies spend the REQ budget too: the burst buys a

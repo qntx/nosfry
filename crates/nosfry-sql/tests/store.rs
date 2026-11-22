@@ -26,7 +26,7 @@ use nosfry_core::auth::ReadGate;
 use nosfry_core::event::Event;
 use nosfry_core::filter::Filter;
 use nosfry_core::sign::{event, key, keys, pubkey_hex};
-use nosfry_core::store::WriteOutcome;
+use nosfry_core::store::{Completion, WriteOutcome};
 use nosfry_core::url::RelayNames;
 use nosfry_sql::rusqlite::Connection;
 use nosfry_sql::{Executor, FORMAT_VERSION, Param, SqlStore, StoreError, Value};
@@ -866,4 +866,205 @@ fn deletion_immune_kinds_and_ephemeral() {
     // publish is `Ephemeral`, not `Deleted`.
     let out = store.write(&[eph], &RelayNames::default()).unwrap();
     assert_eq!(out.outcomes[0], WriteOutcome::Ephemeral);
+}
+
+/// Run `filters` under `gate`, answering the emitted seqs and the
+/// scan's NIP-67 [`Completion`].
+fn collect_completion(
+    store: &SqlStore<Connection>,
+    filters: &[&str],
+    gate: &ReadGate,
+) -> (Vec<u64>, Completion) {
+    let filters: Vec<Filter> = filters.iter().map(|f| filter(f)).collect();
+    let out = RefCell::new(Vec::new());
+    let scan = store
+        .query(&filters, gate, 0, u64::MAX, usize::MAX, &mut |hit| {
+            out.borrow_mut().push(hit.seq);
+        })
+        .unwrap();
+    (out.into_inner(), scan.completion)
+}
+
+/// NIP-67 `finish`: an `ids` lookup that serves every match reports
+/// `exhausted` and no `more`.
+#[test]
+fn scan_completion_ids_lookup_is_exhausted() {
+    let store = store();
+    let ev = event(&key(1), 1, 100, &json!([]), "x");
+    store
+        .write(&[Arc::clone(&ev)], &RelayNames::default())
+        .unwrap();
+    let filter = format!("{{\"ids\":[\"{}\"]}}", ev.id());
+    let (emitted, completion) = collect_completion(&store, &[&filter], &ReadGate::default());
+    assert_eq!(emitted.len(), 1, "{emitted:?}");
+    assert_eq!(
+        completion,
+        Completion {
+            exhausted: true,
+            more: false
+        }
+    );
+}
+
+/// Three stored events under `limit: 2` prove an unsent match: `more`,
+/// never `exhausted`.
+#[test]
+fn scan_completion_limit_cut_reports_more() {
+    let store = store();
+    let k = key(1);
+    let events = [
+        event(&k, 1, 100, &json!([]), "a"),
+        event(&k, 1, 200, &json!([]), "b"),
+        event(&k, 1, 300, &json!([]), "c"),
+    ];
+    store
+        .write(
+            &events.iter().map(Arc::clone).collect::<Vec<_>>(),
+            &RelayNames::default(),
+        )
+        .unwrap();
+    let (emitted, completion) =
+        collect_completion(&store, &["{\"limit\":2}"], &ReadGate::default());
+    assert_eq!(emitted.len(), 2, "{emitted:?}");
+    assert_eq!(
+        completion,
+        Completion {
+            exhausted: false,
+            more: true
+        }
+    );
+}
+
+/// Fewer matches than the limit: the merge ran dry — `exhausted`.
+#[test]
+fn scan_completion_under_limit_is_exhausted() {
+    let store = store();
+    let k = key(1);
+    let events = [
+        event(&k, 1, 100, &json!([]), "a"),
+        event(&k, 1, 200, &json!([]), "b"),
+    ];
+    store
+        .write(
+            &events.iter().map(Arc::clone).collect::<Vec<_>>(),
+            &RelayNames::default(),
+        )
+        .unwrap();
+    let (_, completion) = collect_completion(&store, &["{\"limit\":5}"], &ReadGate::default());
+    assert_eq!(
+        completion,
+        Completion {
+            exhausted: true,
+            more: false
+        }
+    );
+}
+
+/// The limit reached exactly at the end of the data still ran dry —
+/// `exhausted`, no `more`.
+#[test]
+fn scan_completion_limit_at_end_is_exhausted() {
+    let store = store();
+    let k = key(1);
+    let events = [
+        event(&k, 1, 100, &json!([]), "a"),
+        event(&k, 1, 200, &json!([]), "b"),
+        event(&k, 1, 300, &json!([]), "c"),
+    ];
+    store
+        .write(
+            &events.iter().map(Arc::clone).collect::<Vec<_>>(),
+            &RelayNames::default(),
+        )
+        .unwrap();
+    let (emitted, completion) =
+        collect_completion(&store, &["{\"limit\":3}"], &ReadGate::default());
+    assert_eq!(emitted.len(), 3, "{emitted:?}");
+    assert_eq!(
+        completion,
+        Completion {
+            exhausted: true,
+            more: false
+        }
+    );
+}
+
+/// A hidden (restricted) event beyond the limit is never a `more`
+/// witness: the emitted events equal the store without it.
+#[test]
+fn scan_completion_hidden_event_is_never_a_witness() {
+    let rules = Arc::new(nosfry_core::auth::AuthRules::new(
+        RelayNames::default(),
+        &[4],
+        true,
+    ));
+    let gate = ReadGate::new(rules, Arc::from(&[][..]));
+    let k = key(1);
+    let v1 = event(&k, 1, 200, &json!([]), "v1");
+    let v2 = event(&k, 1, 300, &json!([]), "v2");
+    let hidden = event(&k, 4, 100, &json!([]), "hidden");
+
+    let with_hidden = store();
+    with_hidden
+        .write(
+            &[Arc::clone(&v1), Arc::clone(&v2), Arc::clone(&hidden)],
+            &RelayNames::default(),
+        )
+        .unwrap();
+    let (emitted_with, completion_with) =
+        collect_completion(&with_hidden, &["{\"limit\":2}"], &gate);
+
+    let without_hidden = store();
+    without_hidden
+        .write(&[v1, v2], &RelayNames::default())
+        .unwrap();
+    let (emitted_without, completion_without) =
+        collect_completion(&without_hidden, &["{\"limit\":2}"], &gate);
+
+    assert_eq!(emitted_with, emitted_without);
+    assert!(!completion_with.more, "{completion_with:?}");
+    // The hidden head-check candidate is unproven below the cut:
+    // the scan can only report the cut, not exhaustion.
+    assert!(!completion_with.exhausted, "{completion_with:?}");
+    assert_eq!(
+        completion_without,
+        Completion {
+            exhausted: true,
+            more: false
+        }
+    );
+}
+
+/// Filter 2's limit-cut witness was already emitted by filter 1:
+/// `more` must not fire for an event the client received.
+#[test]
+fn scan_completion_emitted_witness_is_not_more() {
+    let store = store();
+    let k = key(1);
+    let events = [
+        event(&k, 1, 100, &json!([]), "a"),
+        event(&k, 1, 200, &json!([]), "b"),
+        event(&k, 1, 300, &json!([]), "c"),
+    ];
+    store
+        .write(
+            &events.iter().map(Arc::clone).collect::<Vec<_>>(),
+            &RelayNames::default(),
+        )
+        .unwrap();
+    let (emitted, completion) = collect_completion(
+        &store,
+        &["{\"kinds\":[1]}", "{\"kinds\":[1],\"limit\":2}"],
+        &ReadGate::default(),
+    );
+    assert_eq!(emitted.len(), 3, "{emitted:?}");
+    // Filter 2 was cut (`exhausted` falls) but its witness is in the
+    // emitted union, so `more` does not fire.
+    assert_eq!(
+        completion,
+        Completion {
+            exhausted: false,
+            more: false
+        }
+    );
 }

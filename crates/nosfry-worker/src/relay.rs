@@ -13,7 +13,7 @@ use nosfry_core::hll::Hll;
 use nosfry_core::limits::{AddressBuckets, AddressKey, Limits};
 use nosfry_core::management::{self, Action, Request};
 use nosfry_core::message::{
-    SubId, closed_frame, count_frame, eose_frame, event_frame, neg_err_frame,
+    EoseHints, SubId, closed_frame, count_frame, eose_frame, event_frame, neg_err_frame,
     neg_err_frame_with_limit, neg_msg_frame, ok_frame,
 };
 use nosfry_core::moderation::Moderation;
@@ -1040,14 +1040,20 @@ impl<E: Executor, S: Socket> Relay<E, S> {
                 }
             },
         );
-        if scanned.is_err() {
+        let Ok(scanned) = scanned else {
             self.send(conn, &closed_frame(&sub.id, "error: internal error"));
             if let Some(c) = self.conns.get_mut(&conn) {
                 c.session.close_by_relay(&sub);
             }
             return;
-        }
-        self.send(conn, &eose_frame(&sub.id));
+        };
+        self.send(
+            conn,
+            &eose_frame(
+                &sub.id,
+                EoseHints::new(scanned.completion, gate.auth_hint(&filters)),
+            ),
+        );
         let authed = self
             .conns
             .get(&conn)

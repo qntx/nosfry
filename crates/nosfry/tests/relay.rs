@@ -127,6 +127,32 @@ async fn req_returns_stored_events_then_eose() {
     relay.stop().await;
 }
 
+/// NIP-67: an `ids` lookup that serves everything the store holds
+/// for the filter earns the `finish` hint on EOSE.
+#[tokio::test]
+async fn eose_finish_hint_on_ids_lookup() {
+    let relay = Relay::start().await;
+    let mut ws = relay.connect().await;
+    let ev = common::event(&key(3), 1, now() - 5, &json!([]), "e");
+    send_text(&mut ws, &event_wire(&ev)).await;
+    let _ok = recv_text(&mut ws, T).await;
+    send_text(
+        &mut ws,
+        &req_wire("s", &format!("{{\"ids\":[\"{}\"]}}", ev.id())),
+    )
+    .await;
+    let eose = loop {
+        let frame = json(&recv_text(&mut ws, T).await);
+        match frame[0].as_str().unwrap() {
+            "EVENT" => {}
+            "EOSE" => break frame,
+            other => panic!("unexpected frame {other}"),
+        }
+    };
+    assert_eq!(eose, json!(["EOSE", "s", ["finish"]]));
+    relay.stop().await;
+}
+
 /// A 500-event stored result arrives complete and in newest-first
 /// order before EOSE through the reader's chunked `Out::Frames` path.
 #[tokio::test]
@@ -910,7 +936,10 @@ async fn nip11_document() {
     for key in ["description", "pubkey", "contact", "icon"] {
         assert!(doc.get(key).is_none(), "{key} must be omitted when empty");
     }
-    assert_eq!(doc["supported_nips"], json!([1, 9, 11, 40, 45, 62, 70, 77]));
+    assert_eq!(
+        doc["supported_nips"],
+        json!([1, 9, 11, 40, 45, 62, 67, 70, 77])
+    );
     assert_eq!(doc["software"], "https://github.com/qntx/nosfry");
     assert_eq!(doc["limitation"]["max_subscriptions"], 200);
     assert_eq!(
@@ -1961,7 +1990,10 @@ async fn write_policy_accept_stores_and_delivers() {
     let relay = Relay::start_with(policy_config(&plugin, 10)).await;
     let mut sub = relay.connect().await;
     send_text(&mut sub, &req_wire("s", r#"{"kinds":[1]}"#)).await;
-    assert_eq!(json(&recv_text(&mut sub, T).await), json!(["EOSE", "s"]));
+    assert_eq!(
+        json(&recv_text(&mut sub, T).await),
+        json!(["EOSE", "s", ["finish"]])
+    );
 
     let mut pub_ws = relay.connect().await;
     let ev = common::event(&key(7), 1, now(), &json!([]), "hi");
@@ -2028,7 +2060,10 @@ async fn write_policy_shadow_reject() {
     let relay = Relay::start_with(policy_config(&plugin, 10)).await;
     let mut sub = relay.connect().await;
     send_text(&mut sub, &req_wire("s", r#"{"kinds":[1]}"#)).await;
-    assert_eq!(json(&recv_text(&mut sub, T).await), json!(["EOSE", "s"]));
+    assert_eq!(
+        json(&recv_text(&mut sub, T).await),
+        json!(["EOSE", "s", ["finish"]])
+    );
 
     let mut pub_ws = relay.connect().await;
     let ev = common::event(&key(7), 1, now(), &json!([]), "ghost");
@@ -2070,7 +2105,10 @@ async fn write_policy_ephemeral_rejected_not_broadcast() {
     let relay = Relay::start_with(policy_config(&plugin, 10)).await;
     let mut sub = relay.connect().await;
     send_text(&mut sub, &req_wire("s", r#"{"kinds":[20000,20001]}"#)).await;
-    assert_eq!(json(&recv_text(&mut sub, T).await), json!(["EOSE", "s"]));
+    assert_eq!(
+        json(&recv_text(&mut sub, T).await),
+        json!(["EOSE", "s", ["finish"]])
+    );
 
     let mut pub_ws = relay.connect().await;
     let rejected = common::event(&key(8), 20_000, now(), &json!([]), "no");
@@ -2678,7 +2716,7 @@ async fn nip11_lists_42_59_only_with_auth_service_url() {
     let doc = nip11_body(&text);
     assert_eq!(
         doc["supported_nips"],
-        json!([1, 9, 11, 40, 42, 45, 59, 62, 70, 77])
+        json!([1, 9, 11, 40, 42, 45, 59, 62, 67, 70, 77])
     );
     relay.stop().await;
 
@@ -2687,7 +2725,10 @@ async fn nip11_lists_42_59_only_with_auth_service_url() {
     let relay = Relay::start().await;
     let text = http_get(relay.addr, "/").await;
     let doc = nip11_body(&text);
-    assert_eq!(doc["supported_nips"], json!([1, 9, 11, 40, 45, 62, 70, 77]));
+    assert_eq!(
+        doc["supported_nips"],
+        json!([1, 9, 11, 40, 45, 62, 67, 70, 77])
+    );
     relay.stop().await;
 }
 
@@ -4336,7 +4377,7 @@ async fn filter_validation_refuses_req() {
     );
     send_text(&mut ws, &req_wire("s", "{\"kinds\":[1]}")).await;
     let frame = json(&recv_text(&mut ws, T).await);
-    assert_eq!(frame, json!(["EOSE", "s"]), "{frame}");
+    assert_eq!(frame, json!(["EOSE", "s", ["finish"]]), "{frame}");
     relay.stop().await;
 }
 
@@ -4770,7 +4811,10 @@ async fn unix_listener_serves_websocket() {
 
     let mut sub = relay.connect_unix().await;
     send_text(&mut sub, &req_wire("s", r#"{"kinds":[1]}"#)).await;
-    assert_eq!(json(&recv_text(&mut sub, T).await), json!(["EOSE", "s"]));
+    assert_eq!(
+        json(&recv_text(&mut sub, T).await),
+        json!(["EOSE", "s", ["finish"]])
+    );
 
     let mut pub_ws = relay.connect_unix().await;
     let ev = common::event(&key(7), 1, now(), &json!([]), "unix hi");
@@ -4954,7 +4998,10 @@ async fn unix_stale_socket_replaced_on_bind() {
     let relay = Relay::start_with(config.clone()).await;
     let mut ws = relay.connect_unix().await;
     send_text(&mut ws, &req_wire("s", r#"{"kinds":[1]}"#)).await;
-    assert_eq!(json(&recv_text(&mut ws, T).await), json!(["EOSE", "s"]));
+    assert_eq!(
+        json(&recv_text(&mut ws, T).await),
+        json!(["EOSE", "s", ["finish"]])
+    );
     relay.stop().await;
 
     // A socket another process still holds is "address in use".
@@ -4996,7 +5043,10 @@ async fn reload_removing_a_used_profile_is_refused() {
     // The relay still serves new unix connections.
     let mut ws = relay.connect_unix().await;
     send_text(&mut ws, &req_wire("s", r#"{"kinds":[1]}"#)).await;
-    assert_eq!(json(&recv_text(&mut ws, T).await), json!(["EOSE", "s"]));
+    assert_eq!(
+        json(&recv_text(&mut ws, T).await),
+        json!(["EOSE", "s", ["finish"]])
+    );
     relay.stop().await;
 }
 

@@ -918,6 +918,25 @@ fn req_maybe_restricted_challenges_and_continues() {
     }
 }
 
+/// A single mixed `{"kinds":[1,4]}` filter is may-restricted: the
+/// AUTH `Send` command precedes `Subscribe`, so the challenge lands
+/// on the wire before the EOSE — the NIP-67 `auth` ordering MUST.
+#[test]
+fn req_mixed_kinds_challenge_before_subscribe() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1,4]}]");
+    let send_pos = out
+        .iter()
+        .position(|c| matches!(c, Command::Send { .. }))
+        .expect("challenge sent");
+    let sub_pos = out
+        .iter()
+        .position(|c| matches!(c, Command::Subscribe { .. }))
+        .expect("subscribed");
+    assert!(send_pos < sub_pos, "{out:?}");
+    assert_eq!(sends(&out), ["[\"AUTH\",\"challenge\"]"], "{out:?}");
+}
+
 /// `kinds:[1]` can never match a restricted kind — no challenge —
 /// and a qualifying REQ challenges at most once per connection.
 #[test]

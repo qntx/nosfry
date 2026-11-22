@@ -29,8 +29,9 @@
 mod common;
 
 use nosfry_core::message::{
-    ClientMessage, SubId, closed_frame, count_frame, eose_frame, event_frame,
+    ClientMessage, EoseHints, SubId, closed_frame, count_frame, eose_frame, event_frame,
 };
+use nosfry_core::store::Completion;
 use serde::Deserialize;
 
 /// `(raw substring, why)` — each pattern identifies exactly one case.
@@ -156,7 +157,7 @@ fn escaped_subscription_ids() {
     // The echoed frames carry the id as a properly escaped JSON string.
     let quoted = SubId::parse("a\"b").expect("sub id");
     for frame in [
-        eose_frame(&quoted),
+        eose_frame(&quoted, EoseHints::default()),
         closed_frame(&quoted, "closed: test"),
         event_frame(&quoted, "{}"),
     ] {
@@ -168,7 +169,138 @@ fn escaped_subscription_ids() {
             "frame {frame} re-escapes the id"
         );
     }
-    assert_eq!(eose_frame(&sub_id), "[\"EOSE\",\"é\"]");
+    assert_eq!(
+        eose_frame(&sub_id, EoseHints::default()),
+        "[\"EOSE\",\"é\"]"
+    );
+}
+
+/// `eose_frame` NIP-67 wire shapes: no hints keeps the two-element
+/// frame; `"auth"` comes first, then `"finish"` or `"more"`.
+#[test]
+fn eose_frame_hints() {
+    let sub = SubId::parse("s").expect("sub id");
+    let cases: &[(EoseHints, &str)] = &[
+        (EoseHints::default(), r#"["EOSE","s"]"#),
+        (
+            EoseHints {
+                auth: true,
+                finish: false,
+                more: false,
+            },
+            r#"["EOSE","s",["auth"]]"#,
+        ),
+        (
+            EoseHints {
+                auth: false,
+                finish: true,
+                more: false,
+            },
+            r#"["EOSE","s",["finish"]]"#,
+        ),
+        (
+            EoseHints {
+                auth: false,
+                finish: false,
+                more: true,
+            },
+            r#"["EOSE","s",["more"]]"#,
+        ),
+        (
+            EoseHints {
+                auth: true,
+                finish: true,
+                more: false,
+            },
+            r#"["EOSE","s",["auth","finish"]]"#,
+        ),
+        (
+            EoseHints {
+                auth: true,
+                finish: false,
+                more: true,
+            },
+            r#"["EOSE","s",["auth","more"]]"#,
+        ),
+        (
+            EoseHints {
+                auth: false,
+                finish: true,
+                more: true,
+            },
+            r#"["EOSE","s",["finish"]]"#,
+        ),
+        (
+            EoseHints {
+                auth: true,
+                finish: true,
+                more: true,
+            },
+            r#"["EOSE","s",["auth","finish"]]"#,
+        ),
+    ];
+    for (hints, expected) in cases {
+        let frame = eose_frame(&sub, *hints);
+        assert_eq!(&frame, expected, "hints {hints:?}");
+        let parsed: serde_json::Value = serde_json::from_str(&frame).expect("frame is valid JSON");
+        assert_eq!(parsed[0], "EOSE", "{frame}");
+    }
+}
+
+/// `EoseHints::new`: `finish` follows `exhausted`, `more` needs a
+/// witness and is never emitted alongside `finish`.
+#[test]
+fn eose_hints_new() {
+    let nothing = Completion::default();
+    assert_eq!(EoseHints::new(nothing, false), EoseHints::default());
+    let exhausted = Completion {
+        exhausted: true,
+        more: false,
+    };
+    assert_eq!(
+        EoseHints::new(exhausted, false),
+        EoseHints {
+            finish: true,
+            ..EoseHints::default()
+        }
+    );
+    // An exhausted scan never also reports `more`.
+    let both = Completion {
+        exhausted: true,
+        more: true,
+    };
+    assert_eq!(
+        EoseHints::new(both, true),
+        EoseHints {
+            auth: true,
+            finish: true,
+            more: false,
+        }
+    );
+    let cut = Completion {
+        exhausted: false,
+        more: true,
+    };
+    assert_eq!(
+        EoseHints::new(cut, false),
+        EoseHints {
+            more: true,
+            ..EoseHints::default()
+        }
+    );
+    // A cut with no witness reports nothing.
+    let silent = Completion {
+        exhausted: false,
+        more: false,
+    };
+    assert_eq!(EoseHints::new(silent, false), EoseHints::default());
+    assert_eq!(
+        EoseHints::new(silent, true),
+        EoseHints {
+            auth: true,
+            ..EoseHints::default()
+        }
+    );
 }
 
 /// `count_frame` wire shapes: bare count, approximate flag, and the

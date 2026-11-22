@@ -9,6 +9,7 @@ use serde_json::value::RawValue;
 use crate::event::{EventError, EventId, UnverifiedEvent};
 use crate::filter::{Filter, FilterError};
 use crate::hex;
+use crate::store::Completion;
 
 /// Maximum subscription id length in chars (NIP-01).
 pub const SUB_ID_MAX_CHARS: usize = 64;
@@ -602,10 +603,53 @@ pub fn ok_frame_with_params(id: &EventId, accepted: bool, message: &str, params:
     out
 }
 
-/// `["EOSE", "<sub>"]`.
+/// The NIP-67 hint flags a completed REQ scan earns. Hints are only
+/// ever emitted when they are true; their absence says nothing.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EoseHints {
+    /// The filters may match restricted data the unauthenticated
+    /// reader cannot see — authenticating could return more. The
+    /// session sent its AUTH challenge before this EOSE.
+    pub auth: bool,
+    /// Every stored event matching the filters was sent; the client
+    /// does not need to paginate.
+    pub finish: bool,
+    /// The relay holds more matching stored events than it sent.
+    pub more: bool,
+}
+
+impl EoseHints {
+    /// Hints for `completion` plus the session's REQ-time challenge
+    /// decision. `more` is never emitted alongside `finish`.
+    #[must_use]
+    pub const fn new(completion: Completion, auth: bool) -> Self {
+        Self {
+            auth,
+            finish: completion.exhausted,
+            more: completion.more && !completion.exhausted,
+        }
+    }
+}
+
+/// `["EOSE", "<sub>"]`, or `["EOSE", "<sub>", [<hint>, ...]]` with
+/// NIP-67 hints: `"auth"` first, then `"finish"` or `"more"`.
 #[must_use]
-pub fn eose_frame(sub: &SubId) -> String {
-    frame_with_sub("EOSE", sub, "]")
+pub fn eose_frame(sub: &SubId, hints: EoseHints) -> String {
+    if hints == EoseHints::default() {
+        return frame_with_sub("EOSE", sub, "]");
+    }
+    let mut tail = String::from(",[");
+    if hints.auth {
+        tail.push_str("\"auth\",");
+    }
+    if hints.finish {
+        tail.push_str("\"finish\",");
+    } else if hints.more {
+        tail.push_str("\"more\",");
+    }
+    tail.pop();
+    tail.push_str("]]");
+    frame_with_sub("EOSE", sub, &tail)
 }
 
 /// `["COUNT", "<sub>", {"count": n}]` — the NIP-45 answer.

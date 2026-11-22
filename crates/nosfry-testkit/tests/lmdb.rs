@@ -30,7 +30,7 @@ use nosfry_core::sign::{event, keys};
 use nosfry_core::store::WriteOutcome;
 use nosfry_core::url::RelayNames;
 use nosfry_lmdb::{CountResult, CountScan, Progress, Scan, Store, StoreOptions};
-use nosfry_testkit::driver::{Count, StoreDriver, StoreRecords, build_case, check};
+use nosfry_testkit::driver::{Count, StoreDriver, StoreRecords, StoreScan, build_case, check};
 use nosfry_testkit::spec::{SERVICE_URL, event_specs_strategy, filter_spec_strategy};
 use proptest::prelude::*;
 use serde_json::json;
@@ -42,7 +42,7 @@ fn store_scan_gated(
     snapshot: u64,
     max_limit: u64,
     now: u64,
-) -> Vec<String> {
+) -> StoreScan {
     let mut scan = Scan::new(filters, gate, snapshot, max_limit, now);
     let out = RefCell::new(Vec::new());
     let mut guard = 0usize;
@@ -58,7 +58,10 @@ fn store_scan_gated(
             break;
         }
     }
-    out.into_inner()
+    StoreScan {
+        jsons: out.into_inner(),
+        completion: scan.completion(),
+    }
 }
 
 /// Run a [`CountScan`] to completion (`0` entry budget = uncapped).
@@ -106,7 +109,7 @@ impl StoreDriver for LmdbDriver<'_> {
         snapshot: u64,
         max_limit: u64,
         now: u64,
-    ) -> Vec<String> {
+    ) -> StoreScan {
         store_scan_gated(self.store, filters, gate.clone(), snapshot, max_limit, now)
     }
 

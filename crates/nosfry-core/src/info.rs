@@ -115,10 +115,10 @@ pub struct Features {
 }
 
 /// The sorted `supported_nips` list for `features`: NIP-01, 09, 11,
-/// 40, 62, and 70 unconditionally, plus the enabled optionals.
+/// 40, 62, 67, and 70 unconditionally, plus the enabled optionals.
 #[must_use]
 pub fn supported_nips(features: Features) -> Vec<u16> {
-    let mut nips = vec![1, 9, 11, 40, 62, 70];
+    let mut nips = vec![1, 9, 11, 40, 62, 67, 70];
     if features.count {
         nips.push(45);
     }
@@ -272,7 +272,7 @@ mod tests {
         ] {
             assert!(doc.get(key).is_none(), "{key} must be omitted when empty");
         }
-        assert_eq!(doc["supported_nips"], json!([1, 9, 11, 40, 62, 70]));
+        assert_eq!(doc["supported_nips"], json!([1, 9, 11, 40, 62, 67, 70]));
     }
 
     #[test]
@@ -326,7 +326,7 @@ mod tests {
         );
         assert_eq!(
             doc["supported_nips"],
-            json!([1, 9, 11, 40, 42, 45, 59, 62, 70, 77, 86])
+            json!([1, 9, 11, 40, 42, 45, 59, 62, 67, 70, 77, 86])
         );
     }
 
@@ -343,7 +343,7 @@ mod tests {
         );
         assert_eq!(
             auth_only["supported_nips"],
-            json!([1, 9, 11, 40, 42, 62, 70])
+            json!([1, 9, 11, 40, 42, 62, 67, 70])
         );
         let wraps_only = doc(
             &Info::default(),
@@ -355,7 +355,7 @@ mod tests {
         );
         assert_eq!(
             wraps_only["supported_nips"],
-            json!([1, 9, 11, 40, 59, 62, 70])
+            json!([1, 9, 11, 40, 59, 62, 67, 70])
         );
     }
 
