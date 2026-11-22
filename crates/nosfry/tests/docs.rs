@@ -73,6 +73,12 @@ fn enabling(condition: &str, admin_hex: &str) -> Vec<(&'static str, String)> {
         "when `relay.service_url` is set" => {
             vec![("relay", "service_url = \"ws://127.0.0.1:7777\"".to_owned())]
         }
+        "when `relay.service_url` is set and `relay.auth.restricted_read_kinds` holds 1059" => {
+            vec![
+                ("relay", "service_url = \"ws://127.0.0.1:7777\"".to_owned()),
+                ("relay.auth", "restricted_read_kinds = [1059]".to_owned()),
+            ]
+        }
         "when `max_filter_limit_count` is not 0" => {
             vec![("relay.limits", "max_filter_limit_count = 1".to_owned())]
         }
@@ -112,11 +118,12 @@ fn render(lines: &[(&'static str, String)]) -> String {
 }
 
 /// The config with every optional NIP off: no `service_url`, no
-/// admins, COUNT and sync disabled.
+/// admins, no restricted kinds, COUNT and sync disabled.
 fn off_lines() -> Vec<(&'static str, String)> {
     vec![
         ("relay.limits", "max_filter_limit_count = 0".to_owned()),
         ("relay.limits", "max_sync_events = 0".to_owned()),
+        ("relay.auth", "restricted_read_kinds = []".to_owned()),
     ]
 }
 
@@ -177,7 +184,10 @@ async fn readme_nip_table_matches_the_relay() {
         "with every feature off the NIP-11 list must be the \"always\" rows"
     );
 
-    // Everything off plus one condition: always plus that row's NIP.
+    // Everything off plus one condition: always plus every row whose
+    // enabling lines the applied config covers — a condition that
+    // implies another row's (a stricter `service_url` rule still
+    // advertises NIP-42) pulls that row in too.
     for (nip, condition) in &rows {
         if condition == "always" {
             continue;
@@ -185,15 +195,27 @@ async fn readme_nip_table_matches_the_relay() {
         let mut lines = off_lines();
         lines.extend(enabling(condition, &admin_hex));
         let mut want = always.clone();
-        want.insert(*nip);
+        want.extend(
+            rows.iter()
+                .filter(|(_, implied_condition)| implied_condition != "always")
+                .filter(|(_, implied_condition)| {
+                    enabling(implied_condition, &admin_hex)
+                        .iter()
+                        .all(|line| lines.contains(line))
+                })
+                .map(|(implied, _)| *implied),
+        );
         assert_eq!(
             advertised(&lines).await,
             want,
-            "condition {condition:?} must advertise exactly NIP-{nip} on top"
+            "condition {condition:?} must advertise NIP-{nip} plus every implied row"
         );
     }
 
-    // Everything on: every row.
+    // Everything on: every row. A second run restores the stock
+    // `restricted_read_kinds` default — the NIP-59 row must exist for
+    // the sets to stay equal, so a dropped row fails here instead of
+    // silently shrinking both sides.
     let mut lines = off_lines();
     let mut want = always;
     for (nip, condition) in &rows {
@@ -207,6 +229,16 @@ async fn readme_nip_table_matches_the_relay() {
         advertised(&lines).await,
         want,
         "with every feature on the NIP-11 list must be the whole table"
+    );
+    let mut stock = lines.clone();
+    stock.push((
+        "relay.auth",
+        "restricted_read_kinds = [4, 1059, 21059]".to_owned(),
+    ));
+    assert_eq!(
+        advertised(&stock).await,
+        want,
+        "with every feature on and stock restricted kinds the NIP-11 list must be the whole table"
     );
 }
 
