@@ -6,7 +6,10 @@
 # Usage: run-soak-72h.sh <nosfry-binary-name> <label>
 #   Same container layout as run-soak.sh (bench/README.md). Env:
 #   ANALYZER (default /src/nosfry/bench/soak_analyze.py), SOAK_OUT
-#   (default /bench/results); every run-soak.sh knob passes through.
+#   (default /bench/results); DURATION (default 259200 s) and WARMUP
+#   (the analyzer's warm-up, default 21600 s) shorten a rehearsal and
+#   are recorded in the .meta; every other run-soak.sh knob passes
+#   through.
 set -euo pipefail
 
 BENCH=/bench
@@ -15,6 +18,8 @@ LABEL="${2:?usage: run-soak-72h.sh <nosfry-binary-name> <label>}"
 OUT="${SOAK_OUT:-$BENCH/results}"
 ANALYZER="${ANALYZER:-/src/nosfry/bench/soak_analyze.py}"
 META="$OUT/soak-$LABEL.meta"
+DURATION="${DURATION:-259200}"
+WARMUP="${WARMUP:-21600}"
 
 [ -x "$BENCH/bin/$BIN" ] || { echo "no binary $BENCH/bin/$BIN" >&2; exit 1; }
 [ -f "$ANALYZER" ] || { echo "no analyzer at $ANALYZER" >&2; exit 1; }
@@ -31,15 +36,16 @@ mkdir -p "$OUT"
     echo "kernel: $(uname -srm)"
     echo "cpus: $(nproc)"
     echo "memory: $(grep MemTotal /proc/meminfo)"
+    echo "duration: $DURATION s, warm-up: $WARMUP s"
     echo "work filesystem: $(df -T "$BENCH/work" 2>/dev/null | tail -n 1)"
     echo "workload: publishers=${PUBLISHERS:-8} rate=${RATE:-200} subscribers=${SUBSCRIBERS:-200} churn=${CHURN_RATE:-10} slow_every=${SLOW_EVERY:-60} neg_every=${NEG_EVERY:-10} vanish_every=${VANISH_EVERY:-60} deflate=${DEFLATE:-0}"
 } | tee "$META"
 
-DURATION=259200 SAMPLE="${SAMPLE:-60}" "$BENCH/run-soak.sh" "$BIN" "$LABEL"
+DURATION="$DURATION" SAMPLE="${SAMPLE:-60}" "$BENCH/run-soak.sh" "$BIN" "$LABEL"
 
 echo "ended: $(date -u +%FT%TZ)" >>"$META"
 status=0
-python3 "$ANALYZER" "$OUT/soak-$LABEL.jsonl" --warmup-secs 21600 \
+python3 "$ANALYZER" "$OUT/soak-$LABEL.jsonl" --warmup-secs "$WARMUP" \
     --publishers "${PUBLISHERS:-8}" --subscribers "${SUBSCRIBERS:-200}" \
     | tee "$OUT/soak-$LABEL.verdict" || status=$?
 echo "analyzer exit: $status" >>"$META"

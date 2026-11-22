@@ -39,6 +39,16 @@ It writes, under `/bench/results`:
 
 and the relay log at `/bench/work/soak-<label>/relay.log`.
 
+A rehearsal runs the same pipeline for 10 minutes before the gate run:
+
+```bash
+DURATION=600 WARMUP=0 /bench/run-soak-72h.sh <name> rehearsal-<version>
+```
+
+It proves the build, the sampler and the analyzer end to end. Its memory
+and database checks are not meaningful (no warm-up, and the 600 s
+expiration has not cycled), and it never counts toward the gate.
+
 The workload is `run-soak.sh`'s default: 8 publishers at 200 events/s in
 total, 200 long-lived subscribers, 10 churn connections/s with historical
 `REQ`s and `COUNT`s, a non-reading consumer every 60 s (reaped as a slow
