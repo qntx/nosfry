@@ -143,7 +143,7 @@ Trust boundaries:
   any single client, any single address, or the aggregate.
 - **Operator data.** The database files, logs (no secrets or event content at
   default levels), and metrics (bounded label sets).
-- **Release artifacts.** crates.io packages (trusted publishing), GitHub
+- **Release artifacts.** crates.io packages (published with the organization token), GitHub
   release binaries with checksums, SBOMs, and build provenance attestations,
   and the multi-arch GHCR image.
 

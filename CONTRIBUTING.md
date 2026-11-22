@@ -124,7 +124,7 @@ Maintainers only. `.github/workflows/release.yml` is the whole pipeline.
    repeats the gate on the tagged commit, then publishes in this order: a
    draft GitHub release with checksums, SBOMs and attestations, the
    `ghcr.io/qntx/nosfry` image, the crates (`nosfry-core`, `nosfry-lmdb`,
-   `nosfry`, through crates.io trusted publishing), and finally the public
+   `nosfry`, with the organization's crates.io token), and finally the public
    release.
 
 ## Security

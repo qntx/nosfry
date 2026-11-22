@@ -223,7 +223,7 @@ The format is based on [Keep a Changelog]; this project follows
   is published, the release workflow runs the full CI gate on the tagged
   commit, starts every Linux binary in Debian 11, Debian 12 and Ubuntu
   22.04, and smoke-tests the image on both architectures. The crates are
-  published with crates.io trusted publishing.
+  published with the organization's crates.io token.
 - Operator guides in [`guides/`](guides/README.md): install,
   configuration reference, deployment (a hardened systemd unit and an
   nginx site in [`contrib/`](contrib)), administration, security model,
