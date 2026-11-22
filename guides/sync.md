@@ -96,14 +96,17 @@ remotely, skipped, and failed.
   ingest, there is no lower `created_at` bound, so history of any age
   syncs.
 - Downloads refuse NIP-70 protected events (only their author may publish
-  them), kind 22242, ephemeral events, and the restricted kinds
-  (`[relay.auth] restricted_read_kinds`, direct messages and gift wraps by
-  default) unless AUTH is enabled locally.
+  them), kind 22242, ephemeral events, and everything the local
+  `[relay.access]` write gate refuses an unauthenticated writer: gated
+  kinds while AUTH is disabled locally, and any kind whose `write` rule
+  is `authenticated` or `author` — the sync peer is never an
+  authenticated author.
 - **Uploads** are the stored events matching the filter, minus events
-  hidden by NIP-86 and expired events. Protected events and restricted
-  kinds are never uploaded: this relay serves them only to their
-  authenticated author or recipients, and the remote is neither. Events
-  larger than the remote's NIP-11 `max_message_length` are skipped.
+  hidden by NIP-86 and expired events. Protected events and events a
+  non-open `read` rule hides from an unauthenticated reader are never
+  uploaded: the remote authenticates as neither author nor recipient, so
+  a catch-all `read` rule uploads nothing at all. Events larger than the
+  remote's NIP-11 `max_message_length` are skipped.
 - Events a rule refuses come back on every run (for example a remote
   holding an older version of a replaceable event); they are counted, not
   retried.

@@ -36,10 +36,10 @@ max_websocket_payload_size = 131072
 [[relay.listen]]
 address = "127.0.0.1:$port"
 
-# Serve restricted read kinds (DMs) like strfry does, so relayBench's
+# Serve gated read kinds (DMs) like strfry does, so relayBench's
 # cross-check compares the same result sets.
-[relay.auth]
-restricted_read_kinds = []
+[relay.access]
+rules = []
 
 [relay.limits]
 max_sync_events = 2000000

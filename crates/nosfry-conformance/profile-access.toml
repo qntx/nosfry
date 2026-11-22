@@ -1,0 +1,46 @@
+# Shared relay profile for the black-box conformance suite's third
+# pass (see run.sh): a members-only relay. `run.sh` injects
+# `[relay] service_url` (and, for native, the listener/db keys it
+# needs) exactly like pass 1; only `access_*` cases run here because
+# the NIP-86 allow list is relay-wide.
+
+[events]
+# The strict defaults: a future-dated event is rejected.
+
+[relay.limits]
+max_filter_limit = 1000
+
+# On so both editions pin the same refusal; every suite REQ fits the
+# defaults (1-3 filters, <=3 kinds).
+[relay.filter_validation]
+enabled = true
+
+# NIP-86: the suite's fixed admin signer (nosfry_core::sign::key(9)).
+[relay.management]
+admins = ["acd484e2f0c7f65309ad178a9f559abde09796974c57e714c35f110dfc27ccbe"]
+
+[relay.info]
+name             = "nosfry conformance"
+description      = "edition under test"
+banner           = "https://example.com/banner.png"
+self             = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+terms_of_service = "https://example.com/terms"
+privacy_policy   = "https://example.com/privacy"
+
+# Members-only reads: the catch-all `allowed` gate hides everything
+# from unauthenticated and unlisted readers. Kind 445 is carved out —
+# Marmot group messages are signed by single-use keys
+# (`anonymous_kinds`) and stay publicly readable.
+[relay.access]
+anonymous_kinds = [445]
+
+[[relay.access.rules]]
+kinds = [4, 1059, 21059]
+read  = ["author", "recipient"]
+
+[[relay.access.rules]]
+kinds = [445]
+read  = []
+
+[[relay.access.rules]]
+read = ["allowed"]

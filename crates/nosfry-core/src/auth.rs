@@ -1,18 +1,18 @@
 //! NIP-42 authentication rules and the per-subscription read gate.
 //!
-//! [`AuthRules`] carries the configured service URL, the restricted
-//! read kinds, and the `involved_only` policy. [`ReadGate`] is the
-//! snapshot taken at REQ time — the rules plus the connection's
-//! authenticated pubkeys — that stored scans and live monitors
-//! consult per event.
+//! [`AuthRules`] carries the relay names AUTH binds to plus the
+//! compiled `[relay.access]` table ([`AccessRules`]). [`ReadGate`] is
+//! the snapshot taken at REQ time — the rules, the connection's
+//! authenticated pubkeys, and the moderation snapshot — that stored
+//! scans and live monitors consult per event.
 
 use std::sync::Arc;
 
-use serde::Deserialize;
-
+use crate::access::{AccessRules, Writer};
 use crate::event::PublicKey;
 use crate::filter::Filter;
 use crate::kind::Kind;
+use crate::message::Reason;
 use crate::moderation::Moderation;
 use crate::packed::PackedRef;
 use crate::url::RelayNames;
@@ -24,57 +24,25 @@ pub const AUTH_KIND: Kind = Kind(22242);
 /// treats every authenticated pubkey as valid for the connection).
 pub const MAX_AUTHED_PUBKEYS: usize = 8;
 
-/// `[relay.auth]` — NIP-42 restricted read kinds (strfry
-/// `relay.auth.*`; the URL is the relay's `service_url`).
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct AuthConfig {
-    /// Kinds served only to authenticated readers.
-    pub restricted_read_kinds: Vec<u16>,
-    /// Restricted kinds are served only to authenticated pubkeys
-    /// involved in the event (author or `p` tag); `false` serves them
-    /// to any authenticated reader.
-    pub restrict_read_to_involved: bool,
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self {
-            restricted_read_kinds: vec![4, 1059, 21059],
-            restrict_read_to_involved: true,
-        }
-    }
-}
-
-/// Authentication configuration: the relay's own names and the
-/// read-side restrictions.
+/// Authentication and access: the relay's own names plus the
+/// compiled per-kind rules every decision goes through.
 ///
-/// `Default` disables AUTH entirely and restricts nothing.
+/// `Default` disables AUTH entirely and gates nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthRules {
     /// The relay's own names when AUTH is enabled — the canonical
     /// `service_url` plus its aliases.
     names: RelayNames,
-    /// Sorted, deduplicated kinds hidden from unauthorized readers.
-    restricted_kinds: Box<[u16]>,
-    /// Restricted events are served only to authenticated pubkeys
-    /// involved in the event (author or `p` tag).
-    involved_only: bool,
+    /// The compiled `[relay.access]` rules.
+    access: AccessRules,
 }
 
 impl AuthRules {
     /// New rules. Empty `names` disables AUTH (protected events are
-    /// rejected outright and restricted kinds are never served).
+    /// rejected outright and no read rule can be satisfied).
     #[must_use]
-    pub fn new(names: RelayNames, restricted_kinds: &[u16], involved_only: bool) -> Self {
-        let mut restricted_kinds = restricted_kinds.to_vec();
-        restricted_kinds.sort_unstable();
-        restricted_kinds.dedup();
-        Self {
-            names,
-            restricted_kinds: restricted_kinds.into(),
-            involved_only,
-        }
+    pub const fn new(names: RelayNames, access: AccessRules) -> Self {
+        Self { names, access }
     }
 
     /// The configured names (empty = AUTH disabled).
@@ -83,23 +51,23 @@ impl AuthRules {
         &self.names
     }
 
+    /// The compiled access rules.
+    #[must_use]
+    pub const fn access(&self) -> &AccessRules {
+        &self.access
+    }
+
     /// Whether AUTH is enabled (a service URL is configured).
     #[must_use]
     pub const fn enabled(&self) -> bool {
         !self.names.is_empty()
     }
 
-    /// Whether `kind` is restricted to authorized readers.
-    #[must_use]
-    pub fn is_restricted(&self, kind: u16) -> bool {
-        self.restricted_kinds.binary_search(&kind).is_ok()
-    }
-
     /// Whether the relay guards gift wraps — AUTH enabled and kind
-    /// 1059 restricted — advertised as NIP-59 in the NIP-11 document.
+    /// 1059 read-restricted — advertised as NIP-59 in NIP-11.
     #[must_use]
     pub fn guards_gift_wraps(&self) -> bool {
-        self.enabled() && self.is_restricted(1059)
+        self.enabled() && self.access.rule(1059).restricts_reads()
     }
 
     /// Whether a `relay` tag value names one of the configured names.
@@ -107,51 +75,107 @@ impl AuthRules {
         self.names.matches(url)
     }
 
-    /// Whether any filter can match a restricted kind — restricted
-    /// kinds are configured and some possible filter has no `kinds`
-    /// list or lists at least one of them. An unauthenticated REQ,
-    /// COUNT, or NEG-OPEN matching this gets an AUTH challenge and
-    /// still proceeds.
-    pub(crate) fn may_restrict(&self, filters: &[Filter]) -> bool {
-        !self.restricted_kinds.is_empty()
-            && filters.iter().any(|filter| {
-                !filter.is_impossible()
-                    && filter
-                        .kinds()
-                        .is_none_or(|kinds| kinds.iter().any(|kind| self.is_restricted(*kind)))
-            })
-    }
-
     /// Whether this read earns the lazy AUTH challenge: AUTH enabled,
     /// no authenticated pubkey on the connection, and the filters may
-    /// match restricted kinds. The session sends `Command::Send(AUTH)`
-    /// before the operation whenever this holds, so it is also the
-    /// NIP-67 `auth` hint's truth condition — it never inspects stored
-    /// data.
+    /// match read-restricted kinds. The session sends
+    /// `Command::Send(AUTH)` before the operation whenever this holds,
+    /// so it is also the NIP-67 `auth` hint's truth condition — it
+    /// never inspects stored data.
     pub(crate) fn challenges(&self, authed: &[PublicKey], filters: &[Filter]) -> bool {
-        self.enabled() && authed.is_empty() && self.may_restrict(filters)
+        self.enabled() && authed.is_empty() && self.access.may_restrict(filters)
     }
 
-    /// Whether every filter is fully restricted — restricted kinds are
-    /// configured, there is at least one filter, and every filter lists
-    /// only restricted kinds (strfry `isFilterGroupFullyRestricted`).
-    /// An unauthenticated REQ matching this is refused outright.
+    /// Whether every filter can only match read-restricted kinds —
+    /// an unauthenticated REQ matching this is refused outright.
+    /// AUTH being disabled does not weaken the check: there is no
+    /// reader to serve either way.
     pub(crate) fn fully_restricts(&self, filters: &[Filter]) -> bool {
-        !self.restricted_kinds.is_empty()
-            && !filters.is_empty()
-            && filters.iter().all(|filter| {
-                filter
-                    .kinds()
-                    .is_some_and(|kinds| kinds.iter().all(|kind| self.is_restricted(*kind)))
-            })
+        self.access.fully_restricts(filters)
+    }
+
+    /// The `[relay.access]` write gate's verdict on an `EVENT` of
+    /// `kind` by `pubkey` while the connection holds `authed`:
+    /// `None` when the write proceeds to signature verification.
+    ///
+    /// The session applies this before verifying signatures;
+    /// `nosfry sync` calls it with an empty `authed` — its downloads
+    /// are stored for an unauthenticated writer, so a gated kind
+    /// AUTH cannot fix (AUTH disabled) and every `authenticated` /
+    /// `author` write rule refuse them.
+    #[must_use]
+    pub fn write_gate(
+        &self,
+        kind: u16,
+        pubkey: &PublicKey,
+        authed: &[PublicKey],
+    ) -> Option<WriteRefusal> {
+        let rule = self.access.rule(kind);
+        // A gated kind needs AUTH to be served or published; with
+        // AUTH disabled the gate cannot run, so the write is refused.
+        if !self.enabled() && rule.restricts() {
+            return Some(WriteRefusal::AuthDisabled);
+        }
+        // `write = "authenticated" | "author"`: challenge first,
+        // then refuse the unauthenticated writer.
+        if rule.write != Writer::Open && authed.is_empty() {
+            return Some(WriteRefusal::AuthRequired);
+        }
+        // `write = "author"`: the event's own author must have
+        // authenticated — another connection pubkey does not count.
+        if rule.write == Writer::Author && !authed.contains(pubkey) {
+            return Some(WriteRefusal::AuthorRequired);
+        }
+        None
+    }
+}
+
+/// Why the `[relay.access]` write gate refuses an `EVENT`:
+/// [`AuthRules::write_gate`]'s verdict, which the session turns into
+/// the matching `OK false` (and an AUTH challenge on
+/// [`WriteRefusal::AuthRequired`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteRefusal {
+    /// The kind is read- or write-gated and AUTH is disabled on
+    /// this relay — authentication cannot fix the refusal here.
+    AuthDisabled,
+    /// `write` is `authenticated` or `author` and the connection
+    /// holds no authenticated pubkey.
+    AuthRequired,
+    /// `write = "author"`: the event's own author is not among the
+    /// connection's authenticated pubkeys.
+    AuthorRequired,
+}
+
+impl WriteRefusal {
+    /// The `OK` reason prefix for the refusal.
+    #[must_use]
+    pub const fn reason(self) -> Reason {
+        match self {
+            Self::AuthRequired => Reason::AuthRequired,
+            Self::AuthDisabled | Self::AuthorRequired => Reason::Restricted,
+        }
+    }
+
+    /// The detail sentence the `OK false` carries for `kind`.
+    #[must_use]
+    pub fn detail(self, kind: u16) -> String {
+        match self {
+            Self::AuthDisabled => {
+                format!("kind {kind} needs NIP-42 AUTH, which is disabled on this relay")
+            }
+            Self::AuthRequired => format!("kind {kind} requires authentication"),
+            Self::AuthorRequired => {
+                format!("kind {kind} must be published by its authenticated author")
+            }
+        }
     }
 }
 
 /// Per-subscription read visibility: the rules plus the pubkeys the
 /// connection had authenticated at REQ time.
 ///
-/// `Default` is an open gate (admin tooling, tests): nothing is
-/// restricted and nothing is moderated.
+/// `Default` is an open gate (admin tooling, tests): no rules
+/// restrict and nothing is moderated.
 #[derive(Debug, Clone, Default)]
 pub struct ReadGate {
     /// Configured rules.
@@ -183,38 +207,22 @@ impl ReadGate {
         self
     }
 
-    /// Whether this subscription may see `ev` (strfry
-    /// `shouldSendToSubscriber`): unrestricted kinds always pass; a
-    /// restricted kind needs an authenticated pubkey, and under
-    /// `involved_only` that pubkey must be the author or a packed `p`
-    /// tag value. Either way a moderated event — banned or unlisted
-    /// author, banned id, disallowed kind — is never served.
+    /// Whether this subscription may see `ev`: the moderation hide
+    /// first (bans, disallowed kinds, the allow-list identity), then
+    /// the kind's read rule evaluated against the REQ-time
+    /// authenticated set.
     #[must_use]
     pub fn allows(&self, ev: PackedRef<'_>) -> bool {
-        if !self.rules.is_restricted(ev.kind().0) {
-            return !self.moderation.hides(ev);
-        }
-        if self.authed.is_empty() || self.moderation.hides(ev) {
-            return false;
-        }
-        if !self.rules.involved_only {
-            return true;
-        }
-        self.authed.contains(&ev.pubkey())
-            || ev.tags().any(|(name, value)| {
-                name == b'p'
-                    && self
-                        .authed
-                        .iter()
-                        .any(|pubkey| pubkey.0.as_slice() == value)
-            })
+        self.rules
+            .access
+            .read_allows(ev, &self.authed, &self.moderation)
     }
 
     /// The NIP-67 `auth` hint for `filters`: true exactly when the
     /// session issued the lazy AUTH challenge for this read — AUTH
     /// enabled, no pubkey authenticated at REQ time, and the filters
-    /// may match restricted kinds. Data-independent: it never reveals
-    /// whether hidden events exist.
+    /// may match read-restricted kinds. Data-independent: it never
+    /// reveals whether hidden events exist.
     #[must_use]
     pub fn auth_hint(&self, filters: &[Filter]) -> bool {
         self.rules.challenges(&self.authed, filters)
@@ -229,9 +237,22 @@ impl ReadGate {
 )]
 mod tests {
     use super::*;
+    use crate::access::{AccessConfig, Reader, RuleConfig, Writer};
 
-    fn auth_rules(url: &str, kinds: &[u16], involved_only: bool) -> AuthRules {
-        AuthRules::new(RelayNames::parse(url, &[]).unwrap(), kinds, involved_only)
+    fn access(kinds: &[u16], read: Vec<Reader>) -> AccessRules {
+        AccessRules::compile(&AccessConfig {
+            rules: vec![RuleConfig {
+                kinds: Some(kinds.to_vec()),
+                read,
+                write: Writer::Open,
+            }],
+            anonymous_kinds: Vec::new(),
+        })
+        .unwrap()
+    }
+
+    fn auth_rules(url: &str, access: AccessRules) -> AuthRules {
+        AuthRules::new(RelayNames::parse(url, &[]).unwrap(), access)
     }
 
     fn gate(rules: &AuthRules, authed: &[[u8; 32]]) -> ReadGate {
@@ -258,11 +279,11 @@ mod tests {
 
     #[test]
     fn service_url_validation() {
-        let ok = auth_rules("wss://Relay.Example.com/path?x", &[], false);
+        let ok = auth_rules("wss://Relay.Example.com/path?x", AccessRules::default());
         assert!(ok.enabled());
         assert!(ok.matches_relay("wss://relay.example.com"));
         assert!(ok.matches_relay("wss://Relay.Example.com/sub#frag"));
-        let disabled = auth_rules("", &[4], true);
+        let disabled = auth_rules("", access(&[4], vec![Reader::Author]));
         assert!(!disabled.enabled());
         assert!(!disabled.matches_relay("wss://x"));
     }
@@ -273,36 +294,31 @@ mod tests {
     fn aliases_match_relay() {
         let names =
             RelayNames::parse("wss://relay.example.com", &["ws://abc.onion".to_owned()]).unwrap();
-        let rules = AuthRules::new(names, &[], false);
+        let rules = AuthRules::new(names, AccessRules::default());
         assert!(rules.matches_relay("wss://relay.example.com"));
         assert!(rules.matches_relay("ws://ABC.onion"));
         assert!(!rules.matches_relay("wss://unrelated.example.com"));
     }
 
     #[test]
-    fn restricted_kinds_sorted_deduped() {
-        let rules = auth_rules("", &[1059, 4, 1059, 4], true);
-        assert_eq!(&*rules.restricted_kinds, &[4, 1059]);
-        assert!(rules.is_restricted(4));
-        assert!(rules.is_restricted(1059));
-        assert!(!rules.is_restricted(1));
-    }
-
-    #[test]
     fn fully_restricts() {
-        let rules = auth_rules("", &[4], true);
+        let rules = auth_rules("", access(&[4], vec![Reader::Author]));
         let f = |json: &str| Filter::parse(json).unwrap();
-        assert!(rules.fully_restricts(&[f(r#"{"kinds":[4]}"#)]));
-        assert!(rules.fully_restricts(&[f(r#"{"kinds":[]}"#)]));
-        assert!(!rules.fully_restricts(&[]));
-        assert!(!rules.fully_restricts(&[f(r#"{"kinds":[4]}"#), f("{}")]));
-        assert!(!rules.fully_restricts(&[f(r#"{"kinds":[4,1]}"#)]));
-        assert!(!AuthRules::default().fully_restricts(&[f(r#"{"kinds":[4]}"#)]));
+        assert!(rules.access.fully_restricts(&[f(r#"{"kinds":[4]}"#)]));
+        assert!(rules.access.fully_restricts(&[f(r#"{"kinds":[]}"#)]));
+        assert!(!rules.access.fully_restricts(&[]));
+        assert!(
+            !rules
+                .access
+                .fully_restricts(&[f(r#"{"kinds":[4]}"#), f("{}")])
+        );
+        assert!(!rules.access.fully_restricts(&[f(r#"{"kinds":[4,1]}"#)]));
+        assert!(!AccessRules::default().fully_restricts(&[f(r#"{"kinds":[4]}"#)]));
     }
 
     #[test]
     fn may_restrict() {
-        let rules = auth_rules("", &[4, 1059], true);
+        let rules = access(&[4, 1059], vec![Reader::Author]);
         let f = |json: &str| Filter::parse(json).unwrap();
         // No `kinds` or a listed restricted kind may match one.
         assert!(rules.may_restrict(&[f(r#"{"kinds":[1,1059]}"#)]));
@@ -311,12 +327,12 @@ mod tests {
         )]));
         assert!(rules.may_restrict(&[f("{}")]));
         assert!(rules.may_restrict(&[f(r#"{"kinds":[4]}"#)]));
-        // Only public kinds, an impossible filter, and no restricted
-        // kinds configured can never match one.
+        // Only public kinds, an impossible filter, and no restricting
+        // rule can never match one.
         assert!(!rules.may_restrict(&[f(r#"{"kinds":[1]}"#)]));
         assert!(!rules.may_restrict(&[f(r#"{"kinds":[]}"#)]));
         assert!(!rules.may_restrict(&[]));
-        assert!(!auth_rules("", &[], true).may_restrict(&[f("{}")]));
+        assert!(!AccessRules::default().may_restrict(&[f("{}")]));
     }
 
     #[test]
@@ -324,7 +340,10 @@ mod tests {
         let author = [1u8; 32];
         let tagged = [2u8; 32];
         let other = [3u8; 32];
-        let rules = auth_rules("wss://relay.example", &[4], true);
+        let rules = auth_rules(
+            "wss://relay.example",
+            access(&[4], vec![Reader::Author, Reader::Recipient]),
+        );
         let dm = event(4, 1, Some(2));
         let note = event(1, 9, None);
         let packed = dm.packed();
@@ -339,38 +358,34 @@ mod tests {
             gate(&rules, &[other, tagged]).allows(packed),
             "any of multiple"
         );
-        let open = auth_rules("wss://relay.example", &[4], false);
+        let authed_only = auth_rules(
+            "wss://relay.example",
+            access(&[4], vec![Reader::Authenticated]),
+        );
         assert!(
-            gate(&open, &[other]).allows(packed),
-            "involved_only = false"
+            gate(&authed_only, &[other]).allows(packed),
+            "`authenticated` admits any authed reader"
         );
     }
 
     #[test]
-    fn default_restricts_dms_and_wraps() {
-        assert_eq!(
-            AuthConfig::default().restricted_read_kinds,
-            vec![4, 1059, 21059],
-            "DMs plus stored and ephemeral gift wraps"
-        );
-        let rules = auth_rules(
-            "wss://relay.example",
-            &AuthConfig::default().restricted_read_kinds,
-            true,
-        );
+    fn default_config_restricts_dms_and_wraps() {
+        let rules = AccessRules::compile(&AccessConfig::default()).unwrap();
         for kind in [4, 1059, 21059] {
-            assert!(rules.is_restricted(kind), "kind {kind}");
+            assert!(rules.rule(kind).restricts_reads(), "kind {kind}");
         }
     }
 
     #[test]
     fn gate_hides_moderated_events() {
         use crate::event::EventId;
-        use crate::moderation::Moderation;
 
         let author = [1u8; 32];
         let tagged = [2u8; 32];
-        let rules = auth_rules("wss://relay.example", &[4], true);
+        let rules = auth_rules(
+            "wss://relay.example",
+            access(&[4], vec![Reader::Author, Reader::Recipient]),
+        );
         let mut moderation = Moderation::default();
         moderation.banned_pubkeys.insert(PublicKey(author), None);
         moderation.disallowed_kinds.insert(7);

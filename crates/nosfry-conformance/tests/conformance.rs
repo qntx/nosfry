@@ -1983,3 +1983,342 @@ async fn junk_flood_is_rate_limited() {
     assert!((100..150).contains(&notices), "NOTICE count {notices}");
     assert!(answered, "the REQ after the flood got no reply");
 }
+
+/// Authenticate an already-connected socket as `signer`: issue the
+/// fully restricted `{kinds:[30078]}` probe REQ to earn a challenge,
+/// then answer it.
+async fn authed_conn(ws: &mut yawc::TcpWebSocket, signer: &Keypair) {
+    let frames = req(ws, "probe", "{\"kinds\":[30078]}").await;
+    let challenge = frames
+        .iter()
+        .find(|v| v[0] == "AUTH")
+        .map(|v| v[1].as_str().unwrap().to_owned())
+        .expect("no AUTH challenge sent");
+    auth_as(ws, signer, &challenge).await;
+}
+
+/// NIP-42 write gates (pass 1, profile.toml rules): kind 31234 has
+/// `write = "authenticated"` — the first EVENT earns a challenge
+/// plus `auth-required:`, and the same event stores after AUTH.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn gate_authenticated_write() {
+    let writer = key();
+    let mut ws = connect().await;
+    let draft = sign::event(&writer, 31234, now(), &json!([]), "draft");
+    send(&mut ws, &event_wire(&draft)).await;
+    let frames = collect_until(&mut ws, |v| v[0] == "OK").await;
+    let challenge = frames
+        .iter()
+        .find(|v| v[0] == "AUTH")
+        .map(|v| v[1].as_str().unwrap().to_owned())
+        .expect("no challenge sent");
+    let ok = frames.last().unwrap();
+    assert_eq!(ok[2], false, "{ok}");
+    assert!(
+        ok[3].as_str().unwrap().starts_with("auth-required:"),
+        "{ok}"
+    );
+    // Any authenticated pubkey satisfies `write = "authenticated"`
+    // — answer the challenge the refused write already sent (one
+    // challenge per connection, so the probe would see none).
+    auth_as(&mut ws, &key(), &challenge).await;
+    let (ok, reason) = publish(&mut ws, &draft).await;
+    assert!(ok, "authenticated write refused: {reason}");
+}
+
+/// `write = "author"`: authenticating as a different pubkey does
+/// not satisfy the rule — the OK stays `restricted:`.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn gate_author_write() {
+    let author = key();
+    let mut ws = connect().await;
+    authed_conn(&mut ws, &key()).await; // authenticated as a stranger
+    let store = sign::event(&author, 30078, now(), &json!([]), "private");
+    let (ok, reason) = publish(&mut ws, &store).await;
+    assert!(!ok, "stranger wrote an author-only kind");
+    assert!(
+        reason.contains("must be published by its authenticated author"),
+        "{reason}"
+    );
+}
+
+/// Pass 1, owner-only kind 30078: no side channel — REQ, COUNT and
+/// NEG answers for a stranger equal a store without the hidden
+/// event, live delivery is filtered, and the author sees its own.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL"]
+async fn gate_owner_only_leaves_no_trace() {
+    use negentropy::{Id, Negentropy, NegentropyStorageVector};
+
+    let author = key();
+    let stranger = key();
+    let by_author = format!("{{\"authors\":[\"{}\"]}}", pubkey(&author));
+
+    // The author (authenticated as itself, satisfying
+    // `write = "author"`) stores a public note and a private 30078.
+    let mut ws_a = connect().await;
+    authed_conn(&mut ws_a, &author).await;
+    let note = sign::event(&author, 1, now() - 2, &json!([]), "public");
+    let store = sign::event(&author, 30078, now() - 1, &json!([]), "private");
+    for ev in [&note, &store] {
+        let (ok, reason) = publish(&mut ws_a, ev).await;
+        assert!(ok, "author publish: {reason}");
+    }
+
+    // Stranger-authenticated reads: only the note, everywhere.
+    let mut ws_s = connect().await;
+    authed_conn(&mut ws_s, &stranger).await;
+    let frames = req(&mut ws_s, "s", &by_author).await;
+    let got = events(&frames);
+    assert_eq!(got.len(), 1, "hidden event served: {frames:?}");
+    assert_eq!(got[0]["id"], note.id().to_string());
+    let body = count(&mut ws_s, "c", &by_author).await;
+    assert_eq!(body["count"], 1, "{body}");
+    // NEG: the relay's visible set is exactly the note.
+    let mut storage = NegentropyStorageVector::with_capacity(0);
+    storage.seal().unwrap();
+    let mut neg = Negentropy::owned(storage, 500_000).unwrap();
+    let init = neg.initiate().unwrap();
+    send(&mut ws_s, &neg_open_wire("n", &by_author, &init)).await;
+    let mut have = Vec::new();
+    let mut need = Vec::new();
+    for _ in 0..16 {
+        let frame = recv_json(&mut ws_s).await;
+        if frame[0] == "AUTH" {
+            continue;
+        }
+        assert_eq!(frame[0], "NEG-MSG", "{frame}");
+        let reply = unhex(frame[2].as_str().unwrap());
+        if neg
+            .reconcile_with_ids(&reply, &mut have, &mut need)
+            .unwrap()
+            .is_some()
+        {
+            continue;
+        }
+        break;
+    }
+    assert_eq!(
+        need.iter()
+            .map(|id: &Id| faster_hex::hex_string(id.as_bytes()))
+            .collect::<Vec<_>>(),
+        vec![note.id().to_string()],
+        "hidden event in the NEG set"
+    );
+
+    // Live: the stranger's open sub does not receive a fresh 30078;
+    // the author's does.
+    send(&mut ws_s, &req_wire("live", &by_author)).await;
+    send(&mut ws_a, &req_wire("live", &by_author)).await;
+    collect_until(&mut ws_s, |v| v[0] == "EOSE" && v[1] == "live").await;
+    collect_until(&mut ws_a, |v| v[0] == "EOSE" && v[1] == "live").await;
+    // A second author conn publishes, so its OK cannot reorder
+    // against ws_a's live EVENT.
+    let mut ws_p = connect().await;
+    authed_conn(&mut ws_p, &author).await;
+    let fresh = sign::event(&author, 30078, now(), &json!([]), "fresh");
+    let (ok, reason) = publish(&mut ws_p, &fresh).await;
+    assert!(ok, "author publish: {reason}");
+    send(&mut ws_s, &req_wire("barrier", "{\"kinds\":[1]}")).await;
+    let frames = collect_until(&mut ws_s, |v| v[0] == "EOSE" && v[1] == "barrier").await;
+    assert!(
+        events(&frames)
+            .iter()
+            .all(|e| e["id"] != fresh.id().to_string()),
+        "stranger's live sub leaked the private event: {frames:?}"
+    );
+    let frame = recv_json(&mut ws_a).await;
+    assert_eq!(frame[0], "EVENT", "{frame}");
+    assert_eq!(frame[2]["id"], fresh.id().to_string());
+
+    // The author's own reads: both events, both counts.
+    let frames = req(&mut ws_a, "s", &by_author).await;
+    assert_eq!(events(&frames).len(), 2, "{frames:?}");
+    let body = count(&mut ws_a, "c", &by_author).await;
+    assert_eq!(body["count"], 2, "{body}");
+}
+
+/// Pass 3 (profile-access, members-only): an unauthenticated `{}`
+/// REQ is challenged and closed `auth-required:` — every read
+/// behind the catch-all `allowed` gate needs a listed identity.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-access relay — run.sh pass 3)"]
+async fn access_unauthenticated_req_is_refused() {
+    let mut ws = connect().await;
+    let frames = req(&mut ws, "s", "{}").await;
+    let auth = frames.iter().position(|v| v[0] == "AUTH");
+    assert!(auth.is_some(), "no challenge: {frames:?}");
+    let last = frames.last().unwrap();
+    assert_eq!(last[0], "CLOSED", "{frames:?}");
+    assert!(
+        last[2].as_str().unwrap().starts_with("auth-required:"),
+        "{last}"
+    );
+    assert!(auth.unwrap() < frames.len() - 1, "AUTH after CLOSED");
+}
+
+/// Pass 3: a member (NIP-86 allow-listed) publishes and another
+/// allow-listed reader sees the note.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-access relay — run.sh pass 3)"]
+async fn access_member_reads_member_note() {
+    let member = key();
+    let note = sign::event(&member, 1, now(), &json!([]), "members only");
+    let answer = rpc("allowpubkey", json!([pubkey(&member)])).await;
+    assert_eq!(answer["result"], true, "{answer}");
+
+    let mut ws = connect().await;
+    let (ok, reason) = publish(&mut ws, &note).await;
+    assert!(ok, "member publish refused: {reason}");
+    authed_conn(&mut ws, &member).await;
+    let frames = req(
+        &mut ws,
+        "s",
+        &format!("{{\"authors\":[\"{}\"]}}", pubkey(&member)),
+    )
+    .await;
+    let got = events(&frames);
+    assert_eq!(got.len(), 1, "member note not served: {frames:?}");
+    assert_eq!(got[0]["id"], note.id().to_string());
+}
+
+/// Pass 3: an authenticated non-member's REQ, COUNT and NEG all
+/// answer as if the store were empty — the `allowed` gate hides
+/// member content without leaking its existence.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-access relay — run.sh pass 3)"]
+async fn access_nonmember_sees_nothing() {
+    use negentropy::{Negentropy, NegentropyStorageVector};
+
+    let member = key();
+    let stranger = key();
+    let answer = rpc("allowpubkey", json!([pubkey(&member)])).await;
+    assert_eq!(answer["result"], true, "{answer}");
+    let note = sign::event(&member, 1, now(), &json!([]), "members only");
+    let mut ws_m = connect().await;
+    let (ok, reason) = publish(&mut ws_m, &note).await;
+    assert!(ok, "member publish refused: {reason}");
+
+    let mut ws = connect().await;
+    authed_conn(&mut ws, &stranger).await;
+    let by_member = format!("{{\"authors\":[\"{}\"]}}", pubkey(&member));
+    let frames = req(&mut ws, "s", &by_member).await;
+    assert!(
+        events(&frames).is_empty(),
+        "non-member served a member note: {frames:?}"
+    );
+    let body = count(&mut ws, "c", &by_member).await;
+    assert_eq!(body["count"], 0, "{body}");
+    let mut storage = NegentropyStorageVector::with_capacity(0);
+    storage.seal().unwrap();
+    let mut neg = Negentropy::owned(storage, 500_000).unwrap();
+    let init = neg.initiate().unwrap();
+    send(&mut ws, &neg_open_wire("n", &by_member, &init)).await;
+    let mut have = Vec::new();
+    let mut need = Vec::new();
+    for _ in 0..16 {
+        let frame = recv_json(&mut ws).await;
+        if frame[0] == "AUTH" {
+            continue;
+        }
+        assert_eq!(frame[0], "NEG-MSG", "{frame}");
+        let reply = unhex(frame[2].as_str().unwrap());
+        if neg
+            .reconcile_with_ids(&reply, &mut have, &mut need)
+            .unwrap()
+            .is_some()
+        {
+            continue;
+        }
+        break;
+    }
+    assert!(need.is_empty(), "NEG leaked member ids: {need:?}");
+}
+
+/// Pass 3, M5 identity: a gift wrap signed by a random key is
+/// admitted by its `p` recipient when the recipient is a member —
+/// and refused when every recipient is a stranger.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-access relay — run.sh pass 3)"]
+async fn access_wraps_follow_the_recipient() {
+    let member = key();
+    let anon = key();
+    let answer = rpc("allowpubkey", json!([pubkey(&member)])).await;
+    assert_eq!(answer["result"], true, "{answer}");
+
+    let mut ws = connect().await;
+    let wrap = sign::event(
+        &anon,
+        1059,
+        now(),
+        &json!([["p", pubkey(&member)]]),
+        "wrapped",
+    );
+    let (ok, reason) = publish(&mut ws, &wrap).await;
+    assert!(ok, "wrap to a member refused: {reason}");
+    let stray = sign::event(
+        &anon,
+        1059,
+        now(),
+        &json!([["p", pubkey(&key())]]),
+        "wrapped",
+    );
+    let (ok, reason) = publish(&mut ws, &stray).await;
+    assert!(!ok, "wrap to a non-member accepted");
+    assert!(reason.starts_with("blocked:"), "{reason}");
+
+    // The member reads its wrap through the DM rule's recipient
+    // principal.
+    authed_conn(&mut ws, &member).await;
+    let frames = req(
+        &mut ws,
+        "w",
+        &format!("{{\"kinds\":[1059],\"#p\":[\"{}\"]}}", pubkey(&member)),
+    )
+    .await;
+    let got = events(&frames);
+    assert_eq!(got.len(), 1, "member wrap not served: {frames:?}");
+    assert_eq!(got[0]["id"], wrap.id().to_string());
+}
+
+/// Pass 3: kind 445 is anonymous — a single-use key publishes it
+/// without AUTH and anyone reads it through the carve-out rule,
+/// on a relay whose every other kind requires a listed identity.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-access relay — run.sh pass 3)"]
+async fn access_anonymous_kind_445() {
+    let answer = rpc("allowpubkey", json!([pubkey(&key())])).await;
+    assert_eq!(answer["result"], true, "{answer}");
+    let marmot = sign::event(&key(), 445, now(), &json!([]), "mls msg");
+    let mut ws = connect().await;
+    let (ok, reason) = publish(&mut ws, &marmot).await;
+    assert!(ok, "anonymous 445 refused: {reason}");
+    // No AUTH at all: the carve-out makes `{kinds:[445]}` open.
+    let frames = req(&mut ws, "m", "{\"kinds\":[445]}").await;
+    assert!(
+        !frames.iter().any(|v| v[0] == "AUTH"),
+        "anonymous kind challenged: {frames:?}"
+    );
+    let got = events(&frames);
+    assert!(
+        got.iter().any(|e| e["id"] == marmot.id().to_string()),
+        "445 not served: {frames:?}"
+    );
+}
+
+/// Pass 3: an unlisted author's ordinary kind is refused
+/// `blocked:` — the allow list is a write gate for every kind the
+/// rules do not exempt.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a profile-access relay — run.sh pass 3)"]
+async fn access_unlisted_author_blocked() {
+    let answer = rpc("allowpubkey", json!([pubkey(&key())])).await;
+    assert_eq!(answer["result"], true, "{answer}");
+    let mut ws = connect().await;
+    let note = sign::event(&key(), 1, now(), &json!([]), "hi");
+    let (ok, reason) = publish(&mut ws, &note).await;
+    assert!(!ok, "unlisted author accepted");
+    assert!(reason.starts_with("blocked:"), "{reason}");
+}

@@ -34,6 +34,7 @@ use hyper::{Request, Response};
 use hyper_util::rt::TokioIo;
 use nosfry::config::Config;
 use nosfry::sync::{Direction, Outcome, SyncOptions};
+use nosfry_core::access::{Reader, RuleConfig, Writer};
 use nosfry_core::event::Event;
 use nosfry_core::moderation::ModOp;
 use nosfry_lmdb::Store;
@@ -284,14 +285,18 @@ async fn up_converges() {
 
 #[tokio::test]
 async fn up_skips_restricted_and_protected() {
-    // Local AUTH enabled: restricted kinds and protected events must
+    // Local AUTH enabled: read-gated kinds and protected events must
     // still never leave the relay — the peer is not an authenticated
     // author or recipient.
     let peer = peer().await;
     let dir = tempfile::tempdir().unwrap();
     let (mut config, store) = local(dir.path());
     config.relay.service_url = "wss://local.example".to_owned();
-    config.relay.auth.restricted_read_kinds = vec![4];
+    config.relay.access.rules = vec![RuleConfig {
+        kinds: Some(vec![4]),
+        read: vec![Reader::Author, Reader::Recipient],
+        write: Writer::Open,
+    }];
     let t = now_secs() - 60;
     let dm_pk = faster_hex::hex_string(&key(6).x_only_public_key().0.to_byte_array());
     let dm = event(&key(5), 4, t, &json!([["p", dm_pk]]), "a direct message");
@@ -315,6 +320,63 @@ async fn up_skips_restricted_and_protected() {
         remote_ids(&peer).await,
         BTreeSet::from([note.id().to_string()])
     );
+    peer.stop().await;
+}
+
+#[tokio::test]
+async fn up_uploads_nothing_under_catch_all_read_rule() {
+    // A catch-all `read` rule hides the whole store from an
+    // unauthenticated reader — the peer is one — so nothing is
+    // uploaded; the run still completes and reports the skip count.
+    let peer = peer().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, store) = local(dir.path());
+    config.relay.service_url = "wss://local.example".to_owned();
+    config.relay.access.rules = vec![RuleConfig {
+        kinds: None,
+        read: vec![Reader::Author],
+        write: Writer::Open,
+    }];
+    let evs = events(5, 1, now_secs() - 60, 10);
+    seed(&store, &config, &evs);
+    let report = nosfry::sync::run(&store, &config, relay_opts(&peer, Direction::Up))
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Complete);
+    assert_eq!(report.stats.uploaded, 0, "{:?}", report.stats);
+    assert_eq!(report.stats.skipped, 5, "{:?}", report.stats);
+    assert!(remote_ids(&peer).await.is_empty());
+    peer.stop().await;
+}
+
+#[tokio::test]
+async fn down_refuses_author_only_write_kind() {
+    // `write = "author"` on kind 30023 with local AUTH enabled: the
+    // sync peer is never the authenticated author, so a downloaded
+    // 30023 is refused locally while a kind-1 event in the same run
+    // is stored.
+    let peer = peer().await;
+    let dir = tempfile::tempdir().unwrap();
+    let (mut config, store) = local(dir.path());
+    config.relay.service_url = "wss://local.example".to_owned();
+    config.relay.access.rules = vec![RuleConfig {
+        kinds: Some(vec![30023]),
+        read: vec![],
+        write: Writer::Author,
+    }];
+    let t = now_secs() - 60;
+    let article = event(&key(7), 30023, t, &json!([["d", "a1"]]), "a long-form post");
+    let note = event(&key(7), 1, t + 1, &json!([]), "public");
+    publish(&peer, &[Arc::clone(&article), Arc::clone(&note)]).await;
+    let report = nosfry::sync::run(&store, &config, relay_opts(&peer, Direction::Down))
+        .await
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Complete);
+    assert_eq!(report.stats.refused_local, 1, "{:?}", report.stats);
+    assert_eq!(report.stats.downloaded, 1, "{:?}", report.stats);
+    let ids = local_ids(&store);
+    assert!(ids.contains(&note.id().to_string()));
+    assert!(!ids.contains(&article.id().to_string()));
     peer.stop().await;
 }
 
@@ -967,13 +1029,16 @@ async fn binary_exit_codes() {
 
 #[tokio::test]
 async fn nip42_authenticated_sync() {
-    // Peer with AUTH enabled and kind 4 restricted to involved
-    // pubkeys: the authed sync downloads the DMs addressed to the
+    // Peer with AUTH enabled and kind 4 read-gated to author and
+    // recipient: the authed sync downloads the DMs addressed to the
     // key, the unauthed one gets public notes only.
     let mut peer_config = config();
     peer_config.db.map_size = MAP_SIZE;
-    peer_config.relay.auth.restricted_read_kinds = vec![4];
-    peer_config.relay.auth.restrict_read_to_involved = true;
+    peer_config.relay.access.rules = vec![RuleConfig {
+        kinds: Some(vec![4]),
+        read: vec![Reader::Author, Reader::Recipient],
+        write: Writer::Open,
+    }];
     let peer = Relay::start_with(peer_config.clone()).await;
     let mut with_url = peer_config;
     with_url.relay.service_url = format!("ws://{}", peer.addr);
@@ -990,9 +1055,9 @@ async fn nip42_authenticated_sync() {
     publish(&peer, &all).await;
     let dir = tempfile::tempdir().unwrap();
     let (mut config, store) = local(dir.path());
-    // The local relay refuses restricted kinds it cannot itself gate
-    // — clear them so synced DMs are admitted.
-    config.relay.auth.restricted_read_kinds = vec![];
+    // The local relay refuses gated kinds it cannot itself gate
+    // (AUTH is disabled) — clear the rules so synced DMs are admitted.
+    config.relay.access.rules = vec![];
     // No key: public notes only, still Complete.
     let report = nosfry::sync::run(&store, &config, relay_opts(&peer, Direction::Down))
         .await

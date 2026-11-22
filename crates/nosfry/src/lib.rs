@@ -391,15 +391,27 @@ fn log_invalid_reload(err: &ServerError) {
     tracing::error!(%err, "invalid reloaded config; keeping the running one");
 }
 
-/// One notice when restricted kinds are configured but AUTH is off:
-/// such writes are refused because there is no reader to serve.
+/// One notice when access rules gate kinds but AUTH is off: gated
+/// writes are refused because the gate cannot run.
 fn log_restricted_writes(config: &Config) {
-    if config.relay.service_url.is_empty() && !config.relay.auth.restricted_read_kinds.is_empty() {
-        tracing::info!(
-            "AUTH disabled: writes of restricted kinds {:?} are refused",
-            config.relay.auth.restricted_read_kinds
-        );
+    if !config.relay.service_url.is_empty() {
+        return;
     }
+    let Ok(rules) = nosfry_core::access::AccessRules::compile(&config.relay.access) else {
+        return;
+    };
+    let (kinds, catch_all) = rules.restricted();
+    if kinds.is_empty() && !catch_all {
+        return;
+    }
+    tracing::info!(
+        "AUTH disabled: writes of gated kinds {kinds:?}{} are refused",
+        if catch_all {
+            " (plus the catch-all rule)"
+        } else {
+            ""
+        },
+    );
 }
 
 /// Apply a validated reload: update the connection caps, replace the

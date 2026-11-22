@@ -58,8 +58,18 @@ fn limits() -> Arc<Limits> {
         },
         auth: Arc::new(AuthRules::new(
             nosfry_core::url::RelayNames::parse("wss://fuzz.example", &[]).unwrap(),
-            &[4, 1059],
-            true,
+            nosfry_core::access::AccessRules::compile(&nosfry_core::access::AccessConfig {
+                rules: vec![nosfry_core::access::RuleConfig {
+                    kinds: Some(vec![4, 1059]),
+                    read: vec![
+                        nosfry_core::access::Reader::Author,
+                        nosfry_core::access::Reader::Recipient,
+                    ],
+                    write: nosfry_core::access::Writer::Open,
+                }],
+                anonymous_kinds: Vec::new(),
+            })
+            .unwrap(),
         )),
     })
 }

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::auth::{AUTH_KIND, MAX_AUTHED_PUBKEYS, ReadGate};
+use crate::auth::{AUTH_KIND, MAX_AUTHED_PUBKEYS, ReadGate, WriteRefusal};
 use crate::event::{Event, EventId, PublicKey, UnverifiedEvent};
 use crate::filter::Filter;
 use crate::kind::Kind;
@@ -496,26 +496,11 @@ impl Session {
                 return;
             }
         }
-        // A restricted kind is only served to authenticated readers;
-        // with AUTH disabled there is no reader to serve, so the
-        // write is refused — ephemeral restricted kinds too (they are
-        // never stored, and imports bypass this gate by design).
-        if !limits.auth.enabled() && limits.auth.is_restricted(unverified.kind().0) {
-            out.push(Command::Send {
-                verb: RelayVerb::Ok,
-                text: ok_frame(
-                    &unverified.id(),
-                    false,
-                    &Reason::Restricted.message(&format!(
-                        "kind {} is only served to authenticated readers and AUTH is disabled on this relay",
-                        unverified.kind().0
-                    )),
-                ),
-            });
+        if self.access_write_gate(&unverified, out) {
             return;
         }
         let id = unverified.id();
-        match unverified.verify(&limits.event) {
+        match unverified.verify(&self.limits.event) {
             Ok(event) => {
                 let authed = if self.authed.contains(&event.pubkey()) {
                     Some(event.pubkey())
@@ -532,6 +517,43 @@ impl Session {
                 text: ok_frame(&id, false, &error.reason()),
             }),
         }
+    }
+
+    /// The `[relay.access]` write gate, run before signature
+    /// verification. Returns true when the event was refused (the
+    /// `OK false` is already on `out`).
+    ///
+    /// A kind gated for reads or writes needs AUTH to be served or
+    /// published; with AUTH disabled the gate cannot run, so the
+    /// write is refused — gated ephemeral kinds too (they are never
+    /// stored, and imports bypass this gate by design).
+    fn access_write_gate(
+        &mut self,
+        unverified: &UnverifiedEvent<'_>,
+        out: &mut Vec<Command>,
+    ) -> bool {
+        let kind = unverified.kind().0;
+        let Some(refusal) = self
+            .limits
+            .auth
+            .write_gate(kind, &unverified.pubkey(), &self.authed)
+        else {
+            return false;
+        };
+        // `write = "authenticated" | "author"`: challenge first, then
+        // refuse the unauthenticated writer.
+        if refusal == WriteRefusal::AuthRequired {
+            self.issue_challenge(out);
+        }
+        out.push(Command::Send {
+            verb: RelayVerb::Ok,
+            text: ok_frame(
+                &unverified.id(),
+                false,
+                &refusal.reason().message(&refusal.detail(kind)),
+            ),
+        });
+        true
     }
 
     /// NIP-42 AUTH: verifies the event, then adds its pubkey to the

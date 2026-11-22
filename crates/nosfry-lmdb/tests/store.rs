@@ -1116,8 +1116,7 @@ fn scan_gate_hides_restricted_and_they_do_not_consume_limits() {
         .unwrap();
     let rules = Arc::new(nosfry_core::auth::AuthRules::new(
         RelayNames::default(),
-        &[4],
-        true,
+        nosfry_core::access::AccessRules::involved(&[4]),
     ));
     let collect_gated = |authed: &[nosfry_core::event::PublicKey], limit: &str| {
         let gate = nosfry_core::auth::ReadGate::new(Arc::clone(&rules), Arc::from(authed));
@@ -1671,10 +1670,14 @@ fn banevent_deletes_the_stored_event_and_survives_reopen() {
             reason: Some("illegal".into()),
         })
         .unwrap();
+    let rules = nosfry_core::access::AccessRules::default();
     assert_eq!(m.banned_events[&note.id()].as_deref(), Some("illegal"));
     assert_eq!(served_ids(&store, &author), vec![keep.id().to_string()]);
-    assert_eq!(m.blocked_reason(&note), Some("blocked: event banned"));
-    assert_eq!(m.blocked_reason(&keep), None);
+    assert_eq!(
+        rules.write_blocked(&m, &note),
+        Some("blocked: event banned")
+    );
+    assert_eq!(rules.write_blocked(&m, &keep), None);
     m = store
         .moderate(nosfry_core::moderation::ModOp::UnbanEvent { id: note.id() })
         .unwrap();
@@ -1695,8 +1698,9 @@ fn banevent_deletes_the_stored_event_and_survives_reopen() {
 }
 
 #[test]
-fn blocked_reason_enforces_bans_and_allow_lists() {
+fn write_blocked_enforces_bans_and_allow_lists() {
     let (_dir, store) = store();
+    let rules = nosfry_core::access::AccessRules::default();
     let (a, b) = (key(1), key(2));
     let pk_of = pubkey_of;
     let note_a = event(&a, 1, 100, &json!([]), "a");
@@ -1704,7 +1708,7 @@ fn blocked_reason_enforces_bans_and_allow_lists() {
 
     // Empty snapshot blocks nothing.
     let mut m = store.moderation().unwrap();
-    assert_eq!(m.blocked_reason(&note_a), None);
+    assert_eq!(rules.write_blocked(&m, &note_a), None);
 
     // Banned author; other authors unaffected.
     m = store
@@ -1714,10 +1718,10 @@ fn blocked_reason_enforces_bans_and_allow_lists() {
         })
         .unwrap();
     assert_eq!(
-        m.blocked_reason(&note_a),
+        rules.write_blocked(&m, &note_a),
         Some("blocked: pubkey not allowed")
     );
-    assert_eq!(m.blocked_reason(&note_b), None);
+    assert_eq!(rules.write_blocked(&m, &note_b), None);
 
     // A non-empty allow list blocks everyone not on it.
     store
@@ -1730,10 +1734,10 @@ fn blocked_reason_enforces_bans_and_allow_lists() {
         })
         .unwrap();
     assert_eq!(
-        m.blocked_reason(&note_a),
+        rules.write_blocked(&m, &note_a),
         Some("blocked: pubkey not allowed")
     );
-    assert_eq!(m.blocked_reason(&note_b), None);
+    assert_eq!(rules.write_blocked(&m, &note_b), None);
 
     // disallowed kind 4; a non-empty allowed-kinds list blocks kinds
     // not on it.
@@ -1743,23 +1747,26 @@ fn blocked_reason_enforces_bans_and_allow_lists() {
     m = store
         .moderate(nosfry_core::moderation::ModOp::DisallowKind { kind: 4 })
         .unwrap();
-    assert_eq!(m.blocked_reason(&note_b), Some("blocked: kind not allowed"));
-    assert_eq!(m.blocked_reason(&note_a), None);
+    assert_eq!(
+        rules.write_blocked(&m, &note_b),
+        Some("blocked: kind not allowed")
+    );
+    assert_eq!(rules.write_blocked(&m, &note_a), None);
     m = store
         .moderate(nosfry_core::moderation::ModOp::AllowKind { kind: 4 })
         .unwrap();
-    assert_eq!(m.blocked_reason(&note_b), None, "kind 4 was allowed");
+    assert_eq!(rules.write_blocked(&m, &note_b), None, "kind 4 was allowed");
     store
         .moderate(nosfry_core::moderation::ModOp::AllowKind { kind: 1 })
         .unwrap();
     let note_c = event(&a, 7, 100, &json!([]), "c");
     m = store.moderation().unwrap();
     assert_eq!(
-        m.blocked_reason(&note_c),
+        rules.write_blocked(&m, &note_c),
         Some("blocked: kind not allowed"),
         "kind 7 is not on the allow list"
     );
-    assert_eq!(m.blocked_reason(&note_a), None);
+    assert_eq!(rules.write_blocked(&m, &note_a), None);
 }
 
 /// NIP-62 bookkeeping: only the author's newest request to vanish is
@@ -2216,8 +2223,7 @@ fn scan_completion_limit_at_end_is_exhausted() {
 fn scan_completion_hidden_event_is_never_a_witness() {
     let rules = Arc::new(nosfry_core::auth::AuthRules::new(
         RelayNames::default(),
-        &[4],
-        true,
+        nosfry_core::access::AccessRules::involved(&[4]),
     ));
     let gate = nosfry_core::auth::ReadGate::new(rules, Arc::from(&[][..]));
     let k = key(1);

@@ -141,7 +141,8 @@ pub fn supported_nips(features: Features) -> Vec<u16> {
 /// The NIP-11 relay information document.
 ///
 /// `moderation` overrides `name`/`description`/`icon` and its
-/// allow-lists set `limitation.restricted_writes`; `info.supported_nips`
+/// allow-lists — OR'd with the access rules' write gates — set
+/// `limitation.restricted_writes`; `info.supported_nips`
 /// replaces the list `features` computes when set. `description`,
 /// `pubkey`, `contact`, `icon`, `banner`, `self`, `terms_of_service`,
 /// and `privacy_policy` are omitted when empty; `name` stays
@@ -182,7 +183,8 @@ pub fn document(
             "created_at_lower_limit": limits.event.reject_events_older_than_seconds,
             "created_at_upper_limit": limits.event.reject_events_newer_than_seconds,
             "auth_required": false,
-            "restricted_writes": moderation.restricts_writes(),
+            "restricted_writes": moderation.restricts_writes()
+                || limits.auth.access().restricts_writes(),
             "payment_required": false,
         },
     });

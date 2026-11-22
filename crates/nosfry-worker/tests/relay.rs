@@ -2128,3 +2128,191 @@ fn ip_buckets_are_shared_within_64() {
         b.sent()
     );
 }
+
+/// `[relay.access]` config with the stock DM rule plus an
+/// authenticated-write/owner-read kind and an author-only kind.
+const ACCESS_CONFIG: &str = "[relay]\nservice_url = \"wss://relay.example.com\"\n\
+[[relay.access.rules]]\nkinds = [4, 1059, 21059]\nread = [\"author\", \"recipient\"]\n\
+[[relay.access.rules]]\nkinds = [30078]\nread = [\"author\"]\nwrite = \"author\"\n\
+[[relay.access.rules]]\nkinds = [31234]\nread = [\"author\"]\nwrite = \"authenticated\"\n";
+
+/// Members-only: every unlisted kind reads through the NIP-86 allow
+/// list; kind 445 is anonymous and carved out.
+const MEMBERS_CONFIG: &str = "[relay]\nservice_url = \"wss://relay.example.com\"\n\
+[relay.management]\nadmins = [\"%s\"]\n\
+[relay.access]\nanonymous_kinds = [445]\n\
+[[relay.access.rules]]\nkinds = [4, 1059, 21059]\nread = [\"author\", \"recipient\"]\n\
+[[relay.access.rules]]\nkinds = [445]\n\
+[[relay.access.rules]]\nread = [\"allowed\"]\n";
+
+fn access_config() -> String {
+    ACCESS_CONFIG.to_owned()
+}
+
+fn members_config() -> String {
+    MEMBERS_CONFIG.replacen("%s", &pubkey_of(9), 1)
+}
+
+/// `write = "authenticated"`: the first unauthenticated EVENT earns
+/// a challenge and `auth-required:`; after AUTH any pubkey stores.
+#[test]
+fn access_authenticated_write_flow() {
+    let mut r = relay(&access_config());
+    let socket = connect(&mut r, 1);
+    let draft = event(&key(1), 31234, NOW, &json!([]), "draft");
+    msg(&mut r, 1, &event_frame(&draft));
+    let frames = socket.sent();
+    assert_eq!(frames[0], "[\"AUTH\",\"challenge-1\"]", "{frames:?}");
+    assert!(frames[1].contains("auth-required:"), "{frames:?}");
+    // After AUTH as any pubkey, the same event stores.
+    msg(&mut r, 1, &auth_frame(2, "challenge-1", NOW));
+    msg(&mut r, 1, &event_frame(&draft));
+    let oks = ok_frames(&socket.sent());
+    assert_eq!(
+        oks.last().unwrap(),
+        &format!("[\"OK\",\"{}\",true,\"\"]", draft.id())
+    );
+}
+
+/// `write = "author"`: an authenticated stranger cannot write a
+/// kind owned by another pubkey.
+#[test]
+fn access_author_write_refuses_stranger() {
+    let mut r = relay(&access_config());
+    let socket = connect(&mut r, 1);
+    msg(&mut r, 1, &req_frame("x", &json!({"kinds": [30078]})));
+    msg(&mut r, 1, &auth_frame(2, "challenge-1", NOW));
+    let foreign = event(&key(1), 30078, NOW, &json!([]), "private");
+    msg(&mut r, 1, &event_frame(&foreign));
+    let ok = ok_frames(&socket.sent()).pop().unwrap();
+    assert!(
+        ok.contains("must be published by its authenticated author"),
+        "{ok}"
+    );
+    let own = event(&key(2), 30078, NOW, &json!([]), "private");
+    msg(&mut r, 1, &event_frame(&own));
+    assert_eq!(
+        ok_frames(&socket.sent()).pop().unwrap(),
+        format!("[\"OK\",\"{}\",true,\"\"]", own.id())
+    );
+}
+
+/// `read = ["author"]` hides stored events from every other reader;
+/// COUNT agrees (no side channel).
+#[test]
+fn access_owner_only_hides_from_strangers() {
+    let mut r = relay(&access_config());
+    let ws_a = connect(&mut r, 1);
+    let ws_b = connect(&mut r, 2);
+    msg(&mut r, 1, &req_frame("x", &json!({"kinds": [30078]})));
+    msg(&mut r, 1, &auth_frame(1, "challenge-1", NOW));
+    msg(&mut r, 2, &req_frame("x", &json!({"kinds": [4]})));
+    msg(&mut r, 2, &auth_frame(2, "challenge-2", NOW));
+    let store = event(&key(1), 30078, NOW, &json!([]), "private");
+    let note = event(&key(1), 1, NOW, &json!([]), "public");
+    msg(&mut r, 1, &event_frame(&store));
+    msg(&mut r, 1, &event_frame(&note));
+    let by_a = json!({"authors": [pubkey_of(1)]});
+    // The author reads both; the stranger reads only the note.
+    ws_a.sent.borrow_mut().clear();
+    ws_b.sent.borrow_mut().clear();
+    msg(&mut r, 1, &req_frame("s", &by_a));
+    msg(&mut r, 2, &req_frame("s", &by_a));
+    let ids = |frames: &[String]| -> Vec<String> {
+        frames
+            .iter()
+            .filter_map(|f| serde_json::from_str::<serde_json::Value>(f).ok())
+            .filter(|f| f[0] == "EVENT")
+            .map(|f| f[2]["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let ids_a = ids(&ws_a.sent());
+    assert_eq!(ids_a.len(), 2, "{:?}", ws_a.sent());
+    let ids_b = ids(&ws_b.sent());
+    assert_eq!(ids_b, vec![note.id().to_string()], "{:?}", ws_b.sent());
+    // COUNT: 2 for the author, 1 for the stranger.
+    ws_a.sent.borrow_mut().clear();
+    ws_b.sent.borrow_mut().clear();
+    msg(&mut r, 1, &count_wire("c", &by_a));
+    msg(&mut r, 2, &count_wire("c", &by_a));
+    assert_eq!(count_body(&ws_a.sent(), "c")["count"], 2);
+    assert_eq!(count_body(&ws_b.sent(), "c")["count"], 1);
+}
+
+/// `read = ["allowed"]` serves only NIP-86-listed readers; kind 445
+/// with `anonymous_kinds` stays publishable and readable by anyone.
+#[test]
+fn access_allowed_readers_and_anonymous_kinds() {
+    let mut r = relay(&members_config());
+    let ws_m = connect(&mut r, 1);
+    let ws_s = connect(&mut r, 2);
+    // Allow-list key 1 only.
+    let (_, body) = rpc(
+        &mut r,
+        9,
+        &json!({"method": "allowpubkey", "params": [pubkey_of(1), "m"]}),
+    );
+    assert_eq!(body["result"], true, "{body}");
+    // key(1) writes a member note; key(3) is refused `blocked:`.
+    let note = event(&key(1), 1, NOW, &json!([]), "members only");
+    msg(&mut r, 1, &event_frame(&note));
+    let foreign = event(&key(3), 1, NOW, &json!([]), "hi");
+    msg(&mut r, 1, &event_frame(&foreign));
+    let oks = ok_frames(&ws_m.sent());
+    assert_eq!(oks.len(), 2, "{oks:?}");
+    assert!(oks[0].contains(",true,"));
+    assert!(oks[1].contains("blocked: pubkey not allowed"), "{oks:?}");
+    // key(3)-authenticated read of the member note: nothing.
+    msg(&mut r, 2, &req_frame("x", &json!({"kinds": [1]})));
+    msg(&mut r, 2, &auth_frame(3, "challenge-2", NOW));
+    ws_s.sent.borrow_mut().clear();
+    msg(
+        &mut r,
+        2,
+        &req_frame("s", &json!({"authors": [pubkey_of(1)]})),
+    );
+    assert!(
+        event_frames(&ws_s.sent(), "s").is_empty(),
+        "{:?}",
+        ws_s.sent()
+    );
+    // key(1)-authenticated read: the note.
+    ws_m.sent.borrow_mut().clear();
+    msg(&mut r, 1, &auth_frame(1, "challenge-1", NOW));
+    msg(
+        &mut r,
+        1,
+        &req_frame("s", &json!({"authors": [pubkey_of(1)]})),
+    );
+    let hits = event_frames(&ws_m.sent(), "s");
+    assert_eq!(hits.len(), 1, "{:?}", ws_m.sent());
+    // Kind 445 from a random key: accepted, then readable without
+    // AUTH through the carve-out.
+    let marmot = event(&key(8), 445, NOW, &json!([]), "mls");
+    msg(&mut r, 2, &event_frame(&marmot));
+    assert!(
+        ok_frames(&ws_s.sent()).last().unwrap().contains(",true,"),
+        "{:?}",
+        ws_s.sent()
+    );
+    let ws_u = connect(&mut r, 3);
+    msg(&mut r, 3, &req_frame("m", &json!({"kinds": [445]})));
+    let hits = event_frames(&ws_u.sent(), "m");
+    assert_eq!(hits.len(), 1, "{:?}", ws_u.sent());
+    // A wrap to a member is admitted by its recipient; to a
+    // non-member it is refused.
+    let wrap = event(&key(8), 1059, NOW, &json!([["p", pubkey_of(1)]]), "w");
+    msg(&mut r, 2, &event_frame(&wrap));
+    let stray = event(&key(8), 1059, NOW, &json!([["p", pubkey_of(3)]]), "w");
+    msg(&mut r, 2, &event_frame(&stray));
+    let oks = ok_frames(&ws_s.sent());
+    let (wrap_ok, stray_ok) = (oks[oks.len() - 2].clone(), oks[oks.len() - 1].clone());
+    assert!(
+        wrap_ok.contains(&format!("\"{}\",true", wrap.id())),
+        "{wrap_ok}"
+    );
+    assert!(
+        stray_ok.contains("blocked: pubkey not allowed"),
+        "{stray_ok}"
+    );
+}

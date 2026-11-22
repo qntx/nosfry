@@ -821,17 +821,30 @@ fn unknown_verb_echo_is_bounded() {
     assert!(frames[0].contains("unknown verb `BOGUS`"), "{}", frames[0]);
 }
 
-/// Session under auth rules: `url` empty disables AUTH; `kinds` are
-/// the restricted read kinds.
-fn session_auth(url: &str, kinds: &[u16], involved_only: bool) -> Session {
+/// The compiled DM-inbox shape tests use most: `kinds` gated to
+/// `author` + `recipient`, every other kind open.
+fn involved(kinds: &[u16]) -> nosfry_core::access::AccessRules {
+    nosfry_core::access::AccessRules::compile(&nosfry_core::access::AccessConfig {
+        rules: vec![nosfry_core::access::RuleConfig {
+            kinds: Some(kinds.to_vec()),
+            read: vec![
+                nosfry_core::access::Reader::Author,
+                nosfry_core::access::Reader::Recipient,
+            ],
+            write: nosfry_core::access::Writer::Open,
+        }],
+        anonymous_kinds: Vec::new(),
+    })
+    .unwrap()
+}
+
+/// Session under auth rules: `url` empty disables AUTH; `access` is
+/// the compiled `[relay.access]` table.
+fn session_auth(url: &str, access: nosfry_core::access::AccessRules) -> Session {
     let names = RelayNames::parse(url, &[]).expect("service url");
     Session::new(
         Arc::new(Limits {
-            auth: Arc::new(nosfry_core::auth::AuthRules::new(
-                names,
-                kinds,
-                involved_only,
-            )),
+            auth: Arc::new(nosfry_core::auth::AuthRules::new(names, access)),
             ..Limits::default()
         }),
         "challenge".to_owned(),
@@ -881,7 +894,7 @@ fn auth_frame(secret: [u8; 32], created_at: u64) -> String {
 
 #[test]
 fn req_fully_restricted_auth_disabled() {
-    let mut s = session_auth("", &[4], true);
+    let mut s = session_auth("", involved(&[4]));
     let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[4]}]");
     let frames = sends(&out);
     assert_eq!(
@@ -906,7 +919,7 @@ fn req_maybe_restricted_challenges_and_continues() {
         format!("{{\"#p\":[\"{p}\"]}}"),
         "{}".to_owned(),
     ] {
-        let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+        let mut s = session_auth("wss://relay.example.com", involved(&[4, 1059]));
         let out = feed(&mut s, 1, &format!("[\"REQ\",\"a\",{filter}]"));
         assert!(
             matches!(
@@ -923,7 +936,7 @@ fn req_maybe_restricted_challenges_and_continues() {
 /// on the wire before the EOSE — the NIP-67 `auth` ordering MUST.
 #[test]
 fn req_mixed_kinds_challenge_before_subscribe() {
-    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4, 1059]));
     let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1,4]}]");
     let send_pos = out
         .iter()
@@ -941,7 +954,7 @@ fn req_mixed_kinds_challenge_before_subscribe() {
 /// and a qualifying REQ challenges at most once per connection.
 #[test]
 fn req_maybe_restricted_challenges_once() {
-    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4, 1059]));
     let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1]}]");
     assert!(
         sends(&out).is_empty() && matches!(out.as_slice(), [Command::Subscribe { .. }]),
@@ -963,7 +976,7 @@ fn req_maybe_restricted_challenges_once() {
 /// An authenticated connection gets no challenge.
 #[test]
 fn req_maybe_restricted_authed_no_challenge() {
-    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4, 1059]));
     let out = feed(&mut s, 1, &auth_frame([7; 32], 1));
     assert!(!s.authenticated().is_empty(), "{out:?}");
     let out = feed(&mut s, 2, "[\"REQ\",\"a\",{\"kinds\":[1,1059]}]");
@@ -977,7 +990,7 @@ fn req_maybe_restricted_authed_no_challenge() {
 /// challenged.
 #[test]
 fn req_maybe_restricted_auth_disabled_no_challenge() {
-    let mut s = session_auth("", &[4, 1059], true);
+    let mut s = session_auth("", involved(&[4, 1059]));
     let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1,4]}]");
     assert!(
         sends(&out).is_empty() && matches!(out.as_slice(), [Command::Subscribe { .. }]),
@@ -988,7 +1001,7 @@ fn req_maybe_restricted_auth_disabled_no_challenge() {
 /// `COUNT` shares `validate_read`: same challenge, then the count.
 #[test]
 fn count_maybe_restricted_challenges() {
-    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4, 1059]));
     let out = feed(&mut s, 1, "[\"COUNT\",\"a\",{\"kinds\":[1,1059]}]");
     assert!(
         matches!(
@@ -1003,7 +1016,7 @@ fn count_maybe_restricted_challenges() {
 /// frame precedes any `NEG-MSG` on the wire.
 #[test]
 fn neg_open_maybe_restricted_challenges() {
-    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4, 1059]));
     let out = feed(&mut s, 1, "[\"NEG-OPEN\",\"n\",{},\"aabb\"]");
     assert!(
         matches!(
@@ -1014,26 +1027,26 @@ fn neg_open_maybe_restricted_challenges() {
     );
 }
 
-/// With AUTH disabled a restricted kind has no reader to serve:
-/// the write is refused `restricted:` — including the ephemeral
-/// wrap kind — while ordinary kinds still publish.
+/// With AUTH disabled a gated kind's write is refused
+/// `restricted:` — including the ephemeral wrap kind — while
+/// ordinary kinds still publish.
 #[test]
 fn restricted_writes_refused_when_auth_disabled() {
-    let mut s = session_auth("", &[4, 1059, 21059], true);
+    let mut s = session_auth("", involved(&[4, 1059, 21059]));
     let out = feed(&mut s, 1, &signed_event(1, 1059, "wrap"));
     let frames = sends(&out);
     assert_eq!(frames.len(), 1, "{out:?}");
     assert!(frames[0].starts_with("[\"OK\""), "{frames:?}");
     assert!(
         frames[0].contains(
-            "\"restricted: kind 1059 is only served to authenticated readers and AUTH is disabled on this relay\""
+            "\"restricted: kind 1059 needs NIP-42 AUTH, which is disabled on this relay\""
         ),
         "{frames:?}"
     );
     let out = feed(&mut s, 2, &signed_event(2, 21059, "eph"));
     let frames = sends(&out);
     assert!(
-        frames[0].contains("restricted: kind 21059 is only served to authenticated readers"),
+        frames[0].contains("restricted: kind 21059 needs NIP-42 AUTH"),
         "{frames:?}"
     );
     let out = feed(&mut s, 3, &signed_event(3, 1, "note"));
@@ -1046,10 +1059,130 @@ fn restricted_writes_refused_when_auth_disabled() {
 /// With AUTH enabled a restricted kind publishes normally.
 #[test]
 fn restricted_writes_publish_when_auth_enabled() {
-    let mut s = session_auth("wss://relay.example.com", &[4, 1059, 21059], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4, 1059, 21059]));
     let out = feed(&mut s, 1, &signed_event(1, 1059, "wrap"));
     assert!(
         matches!(out.as_slice(), [Command::Publish { .. }]),
+        "{out:?}"
+    );
+}
+
+/// A rule of arbitrary shape for the write-gate tests.
+fn access(rules: Vec<nosfry_core::access::RuleConfig>) -> nosfry_core::access::AccessRules {
+    nosfry_core::access::AccessRules::compile(&nosfry_core::access::AccessConfig {
+        rules,
+        anonymous_kinds: Vec::new(),
+    })
+    .unwrap()
+}
+
+/// `write = "authenticated"` challenges an unauthenticated writer
+/// with `auth-required:` and accepts the same event after AUTH.
+#[test]
+fn write_authenticated_challenges_then_publishes() {
+    use nosfry_core::access::{Reader, RuleConfig, Writer};
+    let mut s = session_auth(
+        "wss://relay.example.com",
+        access(vec![RuleConfig {
+            kinds: Some(vec![1059]),
+            read: vec![Reader::Author, Reader::Recipient],
+            write: Writer::Authenticated,
+        }]),
+    );
+    let out = feed(&mut s, 1, &signed_event(1, 1059, "wrap"));
+    let frames = sends(&out);
+    assert_eq!(frames[0], "[\"AUTH\",\"challenge\"]", "{out:?}");
+    assert!(
+        frames[1].contains("auth-required: kind 1059 requires authentication"),
+        "{frames:?}"
+    );
+    // After AUTH the same kind publishes.
+    let out = feed(&mut s, 2, &auth_frame([9; 32], 2));
+    assert!(sends(&out)[0].contains("true"), "{out:?}");
+    let out = feed(&mut s, 3, &signed_event(1, 1059, "wrap"));
+    assert!(
+        matches!(out.as_slice(), [Command::Publish { .. }]),
+        "{out:?}"
+    );
+}
+
+/// `write = "author"` refuses an event authenticated as a different
+/// pubkey, even though the connection did authenticate.
+#[test]
+fn write_author_must_authenticate_as_the_author() {
+    use nosfry_core::access::{Reader, RuleConfig, Writer};
+    let mut s = session_auth(
+        "wss://relay.example.com",
+        access(vec![RuleConfig {
+            kinds: Some(vec![30078]),
+            read: vec![Reader::Author],
+            write: Writer::Author,
+        }]),
+    );
+    let out = feed(&mut s, 1, &auth_frame([9; 32], 1));
+    assert!(sends(&out)[0].contains("true"), "{out:?}");
+    // Authenticated as [9;32], the kind-30078 event signed by another
+    // key is refused; the author's own publishes.
+    let foreign = format!(
+        "[\"EVENT\",{}]",
+        signed_event_json([7u8; 32], 2, 30078, "[]", "store")
+    );
+    let out = feed(&mut s, 2, &foreign);
+    let frames = sends(&out);
+    assert!(
+        frames[0].contains("restricted: kind 30078 must be published by its authenticated author"),
+        "{frames:?}"
+    );
+    let out = feed(&mut s, 3, &signed_event(3, 30078, "store"));
+    assert!(
+        matches!(out.as_slice(), [Command::Publish { .. }]),
+        "{out:?}"
+    );
+}
+
+/// A write-gated kind with AUTH disabled is refused `restricted:` —
+/// the same path as a read-gated kind.
+#[test]
+fn write_gate_refused_when_auth_disabled() {
+    use nosfry_core::access::{Reader, RuleConfig, Writer};
+    let mut s = session_auth(
+        "",
+        access(vec![RuleConfig {
+            kinds: Some(vec![1059]),
+            read: vec![Reader::Author],
+            write: Writer::Authenticated,
+        }]),
+    );
+    let out = feed(&mut s, 1, &signed_event(1, 1059, "wrap"));
+    let frames = sends(&out);
+    assert!(frames[0].contains("restricted:"), "{frames:?}");
+    assert!(
+        frames[0].contains("needs NIP-42 AUTH, which is disabled on this relay"),
+        "{frames:?}"
+    );
+}
+
+/// A `read = ["allowed"]` catch-all fully restricts a kindless REQ:
+/// unauthenticated readers get the challenge plus `auth-required:`.
+#[test]
+fn catch_all_allowed_unauthenticated_req_is_auth_required() {
+    use nosfry_core::access::{Reader, RuleConfig, Writer};
+    let mut s = session_auth(
+        "wss://relay.example.com",
+        access(vec![RuleConfig {
+            kinds: None,
+            read: vec![Reader::Allowed],
+            write: Writer::Open,
+        }]),
+    );
+    let out = feed(&mut s, 1, "[\"REQ\",\"a\",{}]");
+    let frames = sends(&out);
+    assert_eq!(
+        frames.as_slice(),
+        [
+            "[\"AUTH\",\"challenge\"]",
+            "[\"CLOSED\",\"a\",\"auth-required: requested filter requires authentication\"]",
+        ],
         "{out:?}"
     );
 }
@@ -1060,8 +1193,8 @@ fn restricted_writes_publish_when_auth_enabled() {
 fn req_ephemeral_wrap_restricted_by_default() {
     let mut s = session_auth(
         "wss://relay.example.com",
-        &nosfry_core::auth::AuthConfig::default().restricted_read_kinds,
-        true,
+        nosfry_core::access::AccessRules::compile(&nosfry_core::access::AccessConfig::default())
+            .unwrap(),
     );
     let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[21059]}]");
     let frames = sends(&out);
@@ -1077,7 +1210,7 @@ fn req_ephemeral_wrap_restricted_by_default() {
 
 #[test]
 fn req_fully_restricted_challenges_once() {
-    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4, 1059]));
     let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[4]}]");
     let frames = sends(&out);
     assert_eq!(
@@ -1102,7 +1235,7 @@ fn req_fully_restricted_challenges_once() {
 
 #[test]
 fn auth_then_same_req_subscribes() {
-    let mut s = session_auth("wss://relay.example.com", &[4], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4]));
     let out = feed(&mut s, 1_700_000_000, &auth_frame([9; 32], 1_700_000_000));
     let frames = sends(&out);
     assert_eq!(frames.len(), 1, "{out:?}");
@@ -1122,7 +1255,7 @@ fn auth_then_same_req_subscribes() {
 /// ephemeral-age rule (60 s) no longer applies to AUTH.
 #[test]
 fn auth_window_is_symmetric_10_minutes() {
-    let mut s = session_auth("wss://relay.example.com", &[4], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4]));
     let t = 1_700_000_000;
     for (secret, created_at) in [([7u8; 32], t - 300), ([8u8; 32], t + 300)] {
         let out = feed(&mut s, t, &auth_frame(secret, created_at));
@@ -1138,7 +1271,7 @@ fn auth_window_is_symmetric_10_minutes() {
 
 #[test]
 fn auth_failures_report_exact_reasons() {
-    let mut s = session_auth("wss://relay.example.com", &[4], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4]));
     let t = 1_700_000_000u64;
     let fail = |out: &[Command], reason: &str| {
         let frames = sends(out);
@@ -1213,7 +1346,7 @@ fn auth_failures_report_exact_reasons() {
 
 #[test]
 fn auth_relay_tag_normalization() {
-    let mut s = session_auth("wss://Relay.Example.com/path?x=1", &[4], true);
+    let mut s = session_auth("wss://Relay.Example.com/path?x=1", involved(&[4]));
     let tags = r#"[["challenge","challenge"],["relay","wss://RELAY.EXAMPLE.COM/other"]]"#;
     let out = feed(
         &mut s,
@@ -1228,7 +1361,7 @@ fn auth_relay_tag_normalization() {
 
 #[test]
 fn auth_multiple_pubkeys_and_cap() {
-    let mut s = session_auth("wss://relay.example.com", &[4], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4]));
     let t = 1_700_000_000u64;
     // Nine distinct keys: the first eight authenticate, the ninth is
     // refused.
@@ -1268,8 +1401,7 @@ fn auth_charges_event_bucket() {
         Arc::new(Limits {
             auth: Arc::new(nosfry_core::auth::AuthRules::new(
                 RelayNames::parse("wss://relay.example.com", &[]).expect("service url"),
-                &[4],
-                true,
+                involved(&[4]),
             )),
             rate,
             ..Limits::default()
@@ -1287,7 +1419,7 @@ fn auth_charges_event_bucket() {
 
 #[test]
 fn event_auth_kind_is_never_published() {
-    let mut s = session_auth("wss://relay.example.com", &[4], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4]));
     let t = 1_700_000_000u64;
     let tags = r#"[["challenge","challenge"],["relay","wss://relay.example.com"]]"#;
     let event = signed_event_json([9; 32], t, 22_242, tags, "");
@@ -1315,7 +1447,7 @@ fn protected_event_states() {
         "{out:?}"
     );
     // AUTH enabled, unauthenticated: challenge then auth-required.
-    let mut s = session_auth("wss://relay.example.com", &[4], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4]));
     let out = feed(&mut s, t, &protected([9; 32]));
     let frames = sends(&out);
     assert_eq!(frames[0], "[\"AUTH\",\"challenge\"]");
@@ -1380,7 +1512,7 @@ fn repost_embedding_protected_is_blocked() {
 
 #[test]
 fn mixed_req_gate_hides_restricted() {
-    let mut s = session_auth("wss://relay.example.com", &[4], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4]));
     let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1,4]}]");
     // A mixed group may match restricted kinds: AUTH challenge first,
     // then the subscription proceeds under the read gate.
@@ -1541,7 +1673,7 @@ fn count_over_limit_is_closed_rate_limited() {
 #[test]
 fn count_fully_restricted_unauthenticated() {
     // AUTH enabled: challenge once, then auth-required.
-    let mut s = session_auth("wss://relay.example.com", &[4], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4]));
     let out = feed(&mut s, 1, "[\"COUNT\",\"a\",{\"kinds\":[4]}]");
     let frames = sends(&out);
     assert_eq!(
@@ -1553,7 +1685,7 @@ fn count_fully_restricted_unauthenticated() {
         "{out:?}"
     );
     // AUTH disabled: the restricted refusal.
-    let mut s = session_auth("", &[4], true);
+    let mut s = session_auth("", involved(&[4]));
     let out = feed(&mut s, 1, "[\"COUNT\",\"a\",{\"kinds\":[4]}]");
     assert_eq!(
         sends(&out).as_slice(),
@@ -1563,7 +1695,7 @@ fn count_fully_restricted_unauthenticated() {
 
 #[test]
 fn authed_count_gate_hides_uninvolved_dms() {
-    let mut s = session_auth("wss://relay.example.com", &[4], true);
+    let mut s = session_auth("wss://relay.example.com", involved(&[4]));
     let out = feed(&mut s, 1_700_000_000, &auth_frame([9; 32], 1_700_000_000));
     assert!(sends(&out)[0].contains("true"), "{out:?}");
     let out = feed(&mut s, 2, "[\"COUNT\",\"c\",{\"kinds\":[4]}]");
@@ -1799,7 +1931,7 @@ fn neg_open_over_tag_limit_drops_prior_sync() {
 /// `restricted:` like a REQ.
 #[test]
 fn neg_fully_restricted_auth_disabled() {
-    let mut s = session_auth("", &[4], true);
+    let mut s = session_auth("", involved(&[4]));
     let out = feed(&mut s, 1, "[\"NEG-OPEN\",\"n\",{\"kinds\":[4]},\"aabb\"]");
     let frames = sends(&out);
     assert_eq!(
@@ -1817,7 +1949,7 @@ fn neg_fully_restricted_auth_disabled() {
 /// `auth-required:` (challenge issued) like a REQ.
 #[test]
 fn neg_fully_restricted_unauthenticated() {
-    let mut s = session_auth("ws://r", &[4], true);
+    let mut s = session_auth("ws://r", involved(&[4]));
     let out = feed(&mut s, 1, "[\"NEG-OPEN\",\"n\",{\"kinds\":[4]},\"aabb\"]");
     let frames = sends(&out);
     assert_eq!(frames[0], "[\"AUTH\",\"challenge\"]", "{out:?}");
@@ -1911,7 +2043,7 @@ fn resumed_session_keeps_authed_pubkeys() {
     let authed: Arc<[PublicKey]> = Arc::from([PublicKey::from_hex(&pubkey_hex([9; 32])).unwrap()]);
     let mut s = Session::resume(
         Arc::new(Limits {
-            auth: Arc::new(nosfry_core::auth::AuthRules::new(names, &[4], true)),
+            auth: Arc::new(nosfry_core::auth::AuthRules::new(names, involved(&[4]))),
             ..Limits::default()
         }),
         "challenge".to_owned(),
@@ -1939,7 +2071,7 @@ fn resumed_session_does_not_resend_challenge() {
     let names = RelayNames::parse("wss://relay.example.com", &[]).expect("service url");
     let mut s = Session::resume(
         Arc::new(Limits {
-            auth: Arc::new(nosfry_core::auth::AuthRules::new(names, &[4], true)),
+            auth: Arc::new(nosfry_core::auth::AuthRules::new(names, involved(&[4]))),
             ..Limits::default()
         }),
         "challenge".to_owned(),

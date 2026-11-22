@@ -2985,6 +2985,403 @@ async fn restricted_kinds_refused_without_auth_service() {
     relay.stop().await;
 }
 
+/// Collect the event ids of one REQ plus the EOSE frame's third
+/// element (NIP-67 hints; `null` when absent).
+async fn req_ids_eose(
+    ws: &mut yawc::TcpWebSocket,
+    sub: &str,
+    filter: &str,
+) -> (Vec<String>, Value) {
+    send_text(ws, &req_wire(sub, filter)).await;
+    let mut got = Vec::new();
+    loop {
+        let frame = json(&recv_text(ws, T).await);
+        match frame[0].as_str().unwrap() {
+            "AUTH" => {}
+            "EVENT" => got.push(frame[2]["id"].as_str().unwrap().to_owned()),
+            "EOSE" => return (got, frame.get(2).cloned().unwrap_or(Value::Null)),
+            other => panic!("unexpected frame {other}"),
+        }
+    }
+}
+
+/// A config with AUTH on plus the conformance-shaped rules: kind
+/// 30078 owner-only reads and writes, kind 31234 owner reads behind
+/// any authentication — on top of the stock DM rule.
+fn access_config() -> nosfry::config::Config {
+    use nosfry_core::access::{Reader, RuleConfig, Writer};
+    let mut config = auth_config();
+    config.relay.access.rules.extend([
+        RuleConfig {
+            kinds: Some(vec![30078]),
+            read: vec![Reader::Author],
+            write: Writer::Author,
+        },
+        RuleConfig {
+            kinds: Some(vec![31234]),
+            read: vec![Reader::Author],
+            write: Writer::Authenticated,
+        },
+    ]);
+    config
+}
+
+/// Authenticate `ws` as `key` when no challenge is pending yet: the
+/// first gated read or write earns one.
+async fn authed(ws: &mut yawc::TcpWebSocket, key: &secp256k1::Keypair, url: &str, challenge: &str) {
+    send_text(ws, &auth_wire(key, challenge, url)).await;
+    assert_eq!(json(&recv_text(ws, T).await)[2], true, "AUTH refused");
+}
+
+/// A `write = "author"` kind: unauthenticated writes are challenged
+/// and refused `auth-required:`; after AUTH the author's own event
+/// stores, another's authed pubkey does not count.
+#[tokio::test]
+async fn access_author_write_requires_the_author() {
+    let relay = Relay::start_with(access_config()).await;
+    let url = "wss://relay.example.com";
+    let (a, b) = (key(1), key(2));
+    let mut ws = relay.connect().await;
+
+    // Unauthenticated kind-30078 write: challenge + auth-required OK.
+    let store_a = common::event(&a, 30078, now(), &json!([]), "private");
+    send_text(&mut ws, &event_wire(&store_a)).await;
+    let auth = json(&recv_text(&mut ws, T).await);
+    assert_eq!(auth[0], "AUTH", "{auth}");
+    let ok = json(&recv_text(&mut ws, T).await);
+    assert!(
+        ok[3].as_str().unwrap().starts_with("auth-required:"),
+        "{ok}"
+    );
+
+    // AUTH as b: a's 30078 is still refused — b is not its author.
+    authed(&mut ws, &b, url, auth[1].as_str().unwrap()).await;
+    let ok = publish(&mut ws, &store_a).await;
+    assert_eq!(ok[2], false, "{ok}");
+    assert!(
+        ok[3]
+            .as_str()
+            .unwrap()
+            .contains("must be published by its authenticated author"),
+        "{ok}"
+    );
+    // b's own 30078 publishes.
+    let store_b = common::event(&b, 30078, now(), &json!([]), "private");
+    assert_eq!(publish(&mut ws, &store_b).await[2], true);
+    relay.stop().await;
+}
+
+/// `write = "authenticated"`: any authenticated pubkey may write;
+/// reads still follow the rule's `read` principals.
+#[tokio::test]
+async fn access_authenticated_write_and_owner_reads() {
+    let relay = Relay::start_with(access_config()).await;
+    let url = "wss://relay.example.com";
+    let (author, writer, reader) = (key(1), key(2), key(3));
+    let pk_a = pk_hex(1);
+
+    // Writer side: challenge + auth-required, then any AUTH accepts.
+    let mut ws_w = relay.connect().await;
+    let draft = common::event(&author, 31234, now(), &json!([]), "draft");
+    send_text(&mut ws_w, &event_wire(&draft)).await;
+    let auth = json(&recv_text(&mut ws_w, T).await);
+    assert_eq!(auth[0], "AUTH", "{auth}");
+    let ok = json(&recv_text(&mut ws_w, T).await);
+    assert!(
+        ok[3].as_str().unwrap().starts_with("auth-required:"),
+        "{ok}"
+    );
+    authed(&mut ws_w, &writer, url, auth[1].as_str().unwrap()).await;
+    assert_eq!(publish(&mut ws_w, &draft).await[2], true);
+
+    // Reader side: an unauthenticated REQ is refused auth-required;
+    // a non-author authenticated reader sees nothing; the author
+    // (who stored under any-authed-write) reads its own.
+    let mut ws_u = relay.connect().await;
+    send_text(&mut ws_u, &req_wire("s", "{\"kinds\":[31234]}")).await;
+    let auth_u = json(&recv_text(&mut ws_u, T).await);
+    assert_eq!(auth_u[0], "AUTH");
+    let closed = json(&recv_text(&mut ws_u, T).await);
+    assert!(
+        closed[2].as_str().unwrap().starts_with("auth-required:"),
+        "{closed}"
+    );
+    let mut ws_c = relay.connect().await;
+    send_text(&mut ws_c, &req_wire("probe", "{\"kinds\":[31234]}")).await;
+    let auth_c = json(&recv_text(&mut ws_c, T).await);
+    let _closed = json(&recv_text(&mut ws_c, T).await);
+    authed(&mut ws_c, &reader, url, auth_c[1].as_str().unwrap()).await;
+    let (ids, _) = req_ids_eose(&mut ws_c, "s", &format!("{{\"authors\":[\"{pk_a}\"]}}")).await;
+    assert!(ids.is_empty(), "non-author saw the draft: {ids:?}");
+    let mut ws_a = relay.connect().await;
+    send_text(&mut ws_a, &req_wire("probe", "{\"kinds\":[31234]}")).await;
+    let auth_a = json(&recv_text(&mut ws_a, T).await);
+    let _closed = json(&recv_text(&mut ws_a, T).await);
+    authed(&mut ws_a, &author, url, auth_a[1].as_str().unwrap()).await;
+    let (ids, _) = req_ids_eose(&mut ws_a, "s", "{\"kinds\":[31234]}").await;
+    assert_eq!(ids, vec![draft.id().to_string()], "{ids:?}");
+    relay.stop().await;
+}
+
+/// No side channel: an owner-only kind is indistinguishable from
+/// absent — identical events, COUNTs, NEG sets and EOSE hints for
+/// unauthenticated and non-author readers alike.
+#[tokio::test]
+async fn access_owner_only_leaves_no_trace() {
+    let relay = Relay::start_with(access_config()).await;
+    let url = "wss://relay.example.com";
+    let (a, b) = (key(1), key(2));
+    let pk_a = pk_hex(1);
+
+    // Store a public note and a private 30078 under the author.
+    let mut ws_a = relay.connect().await;
+    send_text(&mut ws_a, &req_wire("p", "{\"kinds\":[30078]}")).await;
+    let auth_a = json(&recv_text(&mut ws_a, T).await);
+    let _closed = json(&recv_text(&mut ws_a, T).await);
+    authed(&mut ws_a, &a, url, auth_a[1].as_str().unwrap()).await;
+    let note = common::event(&a, 1, now(), &json!([]), "public");
+    let store = common::event(&a, 30078, now(), &json!([]), "private");
+    assert_eq!(publish(&mut ws_a, &note).await[2], true);
+    assert_eq!(publish(&mut ws_a, &store).await[2], true);
+
+    let by_a = format!("{{\"authors\":[\"{pk_a}\"]}}");
+    // Unauthenticated: only the note; the kindless REQ earns the
+    // challenge hint but the private event stays invisible.
+    let mut u = relay.connect().await;
+    let (ids, eose) = req_ids_eose(&mut u, "u", &by_a).await;
+    assert_eq!(ids, vec![note.id().to_string()], "{ids:?}");
+    assert!(eose.to_string().contains("auth"), "{eose}");
+    let (ids, eose) = req_ids_eose(
+        &mut u,
+        "u2",
+        &format!("{{\"authors\":[\"{pk_a}\"],\"kinds\":[1]}}"),
+    )
+    .await;
+    assert_eq!(ids, vec![note.id().to_string()], "{ids:?}");
+    assert_eq!(eose, json!(["finish"]), "{eose}");
+    // COUNT: unauthenticated sees 1, a stranger-authed sees 1, the
+    // author sees 2.
+    send_text(&mut u, &format!("[\"COUNT\",\"c\",{by_a}]")).await;
+    let mut count = Value::Null;
+    for _ in 0..3 {
+        let frame = json(&recv_text(&mut u, T).await);
+        if frame[0] == "COUNT" {
+            count = frame[2].clone();
+            break;
+        }
+    }
+    assert_eq!(count["count"], 1, "{count}");
+    let mut ws_b = relay.connect().await;
+    send_text(&mut ws_b, &req_wire("probe", "{\"kinds\":[4]}")).await;
+    let auth_b = json(&recv_text(&mut ws_b, T).await);
+    let _closed = json(&recv_text(&mut ws_b, T).await);
+    authed(&mut ws_b, &b, url, auth_b[1].as_str().unwrap()).await;
+    send_text(&mut ws_b, &format!("[\"COUNT\",\"c\",{by_a}]")).await;
+    let count = recv_count(&mut ws_b, "c").await;
+    assert_eq!(count["count"], 1, "{count}");
+    send_text(&mut ws_a, &format!("[\"COUNT\",\"c\",{by_a}]")).await;
+    let count = recv_count(&mut ws_a, "c").await;
+    assert_eq!(count["count"], 2, "{count}");
+    // NEG: the relay's visible set is exactly the note for b, both
+    // events for a.
+    let (_, need_b) = neg_sync(&mut ws_b, "n", &by_a, &[]).await;
+    assert_eq!(need_b, vec![note.id().to_string()], "{need_b:?}");
+    let (_, need_a) = neg_sync(&mut ws_a, "n", &by_a, &[]).await;
+    let mut want = vec![note.id().to_string(), store.id().to_string()];
+    want.sort_unstable();
+    let mut need_a = need_a;
+    need_a.sort_unstable();
+    assert_eq!(need_a, want, "{need_a:?}");
+
+    // Live: b's open `authors=[a]` sub does not get a's new 30078;
+    // a's does. The fresh event goes through a second author conn so
+    // its OK cannot reorder against a's live EVENT.
+    // A later `created_at` so the addressable 30078 does not tie
+    // with `store` and lose the duplicate check.
+    let fresh = common::event(&a, 30078, now() + 1, &json!([]), "fresh");
+    send_text(&mut ws_b, &req_wire("live", &by_a)).await;
+    send_text(&mut ws_a, &req_wire("live", &by_a)).await;
+    for ws in [&mut ws_b, &mut ws_a] {
+        loop {
+            let frame = json(&recv_text(ws, T).await);
+            if frame[0] == "EOSE" && frame[1] == "live" {
+                break;
+            }
+        }
+    }
+    let mut ws_p = relay.connect().await;
+    send_text(&mut ws_p, &req_wire("probe", "{\"kinds\":[30078]}")).await;
+    let auth_p = json(&recv_text(&mut ws_p, T).await);
+    let _closed = json(&recv_text(&mut ws_p, T).await);
+    authed(&mut ws_p, &a, url, auth_p[1].as_str().unwrap()).await;
+    assert_eq!(publish(&mut ws_p, &fresh).await[2], true);
+    send_text(&mut ws_b, &req_wire("barrier", "{\"kinds\":[1]}")).await;
+    let mut got_b = Vec::new();
+    loop {
+        let frame = json(&recv_text(&mut ws_b, T).await);
+        match frame[0].as_str().unwrap() {
+            "EVENT" => got_b.push(frame),
+            "EOSE" if frame[1] == "barrier" => break,
+            _ => {}
+        }
+    }
+    assert!(
+        got_b
+            .iter()
+            .all(|f| f[2]["id"] == note.id().to_string() || f[2]["id"] == fresh.id().to_string()),
+        "b saw what it must not: {got_b:?}"
+    );
+    assert!(
+        !got_b.iter().any(|f| f[2]["id"] == fresh.id().to_string()),
+        "b saw the private event: {got_b:?}"
+    );
+    let live = json(&recv_text(&mut ws_a, T).await);
+    assert_eq!(live[0], "EVENT");
+    assert_eq!(live[2]["id"], fresh.id().to_string());
+    relay.stop().await;
+}
+
+/// `relay.access` write gates show up in NIP-11
+/// `limitation.restricted_writes`.
+#[tokio::test]
+async fn access_write_rules_set_restricted_writes() {
+    let relay = Relay::start_with(access_config()).await;
+    let text = http_get_accept(relay.addr, "/", "application/nostr+json").await;
+    let doc = nip11_body(&text);
+    assert_eq!(doc["limitation"]["restricted_writes"], true, "{doc}");
+    relay.stop().await;
+    let open = Relay::start_with(auth_config()).await;
+    let text = http_get_accept(open.addr, "/", "application/nostr+json").await;
+    let doc = nip11_body(&text);
+    assert_eq!(doc["limitation"]["restricted_writes"], false, "{doc}");
+    open.stop().await;
+}
+
+/// Members-only relay: a catch-all `read = ["allowed"]` gate, the
+/// stock DM rule, a kind-445 carve-out and `anonymous_kinds = [445]`.
+/// Every gated read/write rides on the NIP-86 allow list.
+#[tokio::test]
+async fn access_members_only_with_anonymous_kinds() {
+    use nosfry_core::access::{Reader, RuleConfig, Writer};
+    let admin = key(9);
+    let mut config = mgmt_config(&admin);
+    config.relay.access.anonymous_kinds = vec![445];
+    config.relay.access.rules.extend([
+        RuleConfig {
+            kinds: Some(vec![445]),
+            read: vec![],
+            write: Writer::Open,
+        },
+        RuleConfig {
+            kinds: None,
+            read: vec![Reader::Allowed],
+            write: Writer::Open,
+        },
+    ]);
+    let relay = Relay::start_with(config).await;
+    let url = "wss://relay.example.com";
+    let (member, other_member, stranger) = (key(1), key(2), key(3));
+    let (pk_member, pk_other) = (pk_hex(1), pk_hex(2));
+
+    // Empty allow list: writes stay open (the list gates reads, not
+    // writes) but `read = ["allowed"]` serves literally nobody — not
+    // even an authenticated reader.
+    let mut ws = relay.connect().await;
+    let early = common::event(&stranger, 1, now(), &json!([]), "too early");
+    assert_eq!(publish(&mut ws, &early).await[2], true);
+    send_text(&mut ws, &req_wire("probe", "{\"kinds\":[1]}")).await;
+    let auth_e = json(&recv_text(&mut ws, T).await);
+    let _closed = json(&recv_text(&mut ws, T).await);
+    authed(&mut ws, &key(7), url, auth_e[1].as_str().unwrap()).await;
+    let (ids, _) = req_ids_eose(
+        &mut ws,
+        "e",
+        &format!("{{\"authors\":[\"{}\"]}}", pk_hex(3)),
+    )
+    .await;
+    assert!(ids.is_empty(), "empty allow list served a reader: {ids:?}");
+
+    // Allow-list the two members; a stranger stays outside.
+    for (n, pk) in [(1, &pk_member), (2, &pk_other)] {
+        let res = rpc(
+            &relay,
+            &admin,
+            "allowpubkey",
+            json!([pk, format!("member {n}")]),
+            &[],
+        )
+        .await;
+        assert_eq!(res["result"], true, "{res}");
+    }
+
+    // A member's note stores; a stranger's kind-1 is refused
+    // `blocked:` (author not allow-listed, kind not anonymous).
+    let mut ws_m = relay.connect().await;
+    send_text(&mut ws_m, &req_wire("probe", "{\"kinds\":[1]}")).await;
+    let auth_m = json(&recv_text(&mut ws_m, T).await);
+    assert_eq!(auth_m[0], "AUTH");
+    let _closed = json(&recv_text(&mut ws_m, T).await);
+    authed(&mut ws_m, &member, url, auth_m[1].as_str().unwrap()).await;
+    let note = common::event(&member, 1, now(), &json!([]), "hello");
+    assert_eq!(publish(&mut ws_m, &note).await[2], true);
+    let foreign = common::event(&stranger, 1, now(), &json!([]), "hi");
+    let ok = publish(&mut ws_m, &foreign).await;
+    assert_eq!(ok[2], false, "{ok}");
+    assert!(ok[3].as_str().unwrap().starts_with("blocked:"), "{ok}");
+
+    // Member reads the note; an authenticated non-member sees zero —
+    // REQ, COUNT and NEG alike.
+    let by_member = format!("{{\"authors\":[\"{pk_member}\"]}}");
+    let (ids, _) = req_ids_eose(&mut ws_m, "r", &by_member).await;
+    assert_eq!(ids, vec![note.id().to_string()], "{ids:?}");
+    let mut ws_s = relay.connect().await;
+    send_text(&mut ws_s, &req_wire("probe", "{\"kinds\":[1]}")).await;
+    let auth_s = json(&recv_text(&mut ws_s, T).await);
+    let _closed = json(&recv_text(&mut ws_s, T).await);
+    authed(&mut ws_s, &stranger, url, auth_s[1].as_str().unwrap()).await;
+    let (ids, eose) = req_ids_eose(&mut ws_s, "r", &by_member).await;
+    assert!(ids.is_empty(), "non-member saw a member note: {ids:?}");
+    assert_eq!(eose, json!(["finish"]), "{eose}");
+    send_text(&mut ws_s, &format!("[\"COUNT\",\"c\",{by_member}]")).await;
+    assert_eq!(recv_count(&mut ws_s, "c").await["count"], 0);
+    let (_, need) = neg_sync(&mut ws_s, "n", &by_member, &[]).await;
+    assert!(need.is_empty(), "non-member NEG leaked ids: {need:?}");
+
+    // A gift wrap signed by a random key is admitted by its `p`
+    // recipient when the recipient is a member (M5 identity: the
+    // wrap's author is not an identity, the recipient is).
+    let anon = key(8);
+    let wrap = common::event(&anon, 1059, now(), &json!([["p", pk_other]]), "wrapped");
+    assert_eq!(publish(&mut ws_m, &wrap).await[2], true);
+    // …and refused when every recipient is a non-member.
+    let stray = common::event(&anon, 1059, now(), &json!([["p", pk_hex(3)]]), "wrapped");
+    let ok = publish(&mut ws_m, &stray).await;
+    assert_eq!(ok[2], false, "{ok}");
+    assert!(ok[3].as_str().unwrap().starts_with("blocked:"), "{ok}");
+    // The member recipient reads its wrap (DM rule: recipient).
+    let mut ws_o = relay.connect().await;
+    send_text(&mut ws_o, &req_wire("probe", "{\"kinds\":[1059]}")).await;
+    let auth_o = json(&recv_text(&mut ws_o, T).await);
+    let _closed = json(&recv_text(&mut ws_o, T).await);
+    authed(&mut ws_o, &other_member, url, auth_o[1].as_str().unwrap()).await;
+    let (ids, _) = req_ids_eose(
+        &mut ws_o,
+        "w",
+        &format!("{{\"kinds\":[1059],\"#p\":[\"{pk_other}\"]}}"),
+    )
+    .await;
+    assert_eq!(ids, vec![wrap.id().to_string()], "{ids:?}");
+
+    // Kind 445 is anonymous: a random single-use key publishes it
+    // without AUTH, and anyone reads it through the carve-out.
+    let marmot = common::event(&anon, 445, now(), &json!([]), "mls msg");
+    assert_eq!(publish(&mut ws, &marmot).await[2], true);
+    let (ids, eose) = req_ids_eose(&mut ws, "m", "{\"kinds\":[445]}").await;
+    assert_eq!(ids, vec![marmot.id().to_string()], "{ids:?}");
+    assert_eq!(eose, json!(["finish"]), "{eose}");
+    relay.stop().await;
+}
+
 /// Send a `COUNT` and read its one `["COUNT",<sub>,{..}]` answer body.
 async fn recv_count(ws: &mut yawc::TcpWebSocket, sub: &str) -> Value {
     let frame = json(&recv_text(ws, T).await);
@@ -3552,10 +3949,10 @@ async fn neg_malformed_msg_is_invalid() {
 // NIP-62 request to vanish: end-to-end over the wire.
 
 /// A config with a `service_url` so vanish requests can name this
-/// relay, and no restricted read kinds so REQs see gift wraps too.
+/// relay, and no access rules so REQs see gift wraps too.
 fn vanish_config() -> nosfry::config::Config {
     let mut config = auth_config();
-    config.relay.auth.restricted_read_kinds = vec![];
+    config.relay.access.rules = vec![];
     config
 }
 

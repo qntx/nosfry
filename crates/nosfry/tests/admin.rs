@@ -1035,7 +1035,8 @@ fn export_import_carries_management_state() {
         [WriteOutcome::Vanished]
     );
     assert_eq!(
-        b.moderation().unwrap().blocked_reason(&f.banned_ev),
+        nosfry_core::access::AccessRules::default()
+            .write_blocked(&b.moderation().unwrap(), &f.banned_ev),
         Some("blocked: event banned")
     );
 }

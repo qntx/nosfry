@@ -66,7 +66,7 @@ code computes.
 | [40](https://github.com/nostr-protocol/nips/blob/master/40.md) | Expiration timestamp       | always                                                                            |
 | [42](https://github.com/nostr-protocol/nips/blob/master/42.md) | Authentication of clients  | when `relay.service_url` is set                                                   |
 | [45](https://github.com/nostr-protocol/nips/blob/master/45.md) | Event counts (with HLL)    | when `max_filter_limit_count` is not 0                                            |
-| [59](https://github.com/nostr-protocol/nips/blob/master/59.md) | Gift wrap deletion         | when `relay.service_url` is set and `relay.auth.restricted_read_kinds` holds 1059 |
+| [59](https://github.com/nostr-protocol/nips/blob/master/59.md) | Gift wrap deletion         | when `relay.service_url` is set and `relay.access` gates kind 1059 reads |
 | [62](https://github.com/nostr-protocol/nips/blob/master/62.md) | Request to vanish          | always                                                                            |
 | [67](https://github.com/nostr-protocol/nips/blob/master/67.md) | EOSE completeness hints    | always                                                                            |
 | [70](https://github.com/nostr-protocol/nips/blob/master/70.md) | Protected events           | always                                                                            |

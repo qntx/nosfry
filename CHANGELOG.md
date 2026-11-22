@@ -67,12 +67,29 @@ The format is based on [Keep a Changelog]; this project follows
 
   `nosfry.example.toml` lists every key. The Workers edition keeps
   `[relay] max_connections_per_ip` and `[relay.rate_limits]`.
-- `[relay] service_url_aliases` is new (both editions); no other key
-  was added. `relay.auth.restricted_read_kinds` now defaults to
-  `[4, 1059, 21059]` (was `[4, 1059]`). A config whose
-  `max_websocket_payload_size` is smaller than `max_event_size + 10`
-  is refused at load and at reload — check this pair if you raised
-  `max_event_size`.
+- `[relay] service_url_aliases` is new (both editions).
+- **The `[relay.auth]` table is gone, with no aliases.** A config
+  that sets `[relay.auth]`, `restricted_read_kinds` or
+  `restrict_read_to_involved` stops the relay at startup with an
+  `unknown field` error; the Workers edition rejects it the same
+  way. Move the settings to `[relay.access]` rules, which cover the
+  old kinds (now including 21059) plus write gates and the NIP-86
+  allow list:
+
+  - `restricted_read_kinds = K` with
+    `restrict_read_to_involved = true` becomes
+    `[[relay.access.rules]]` with `kinds = K` and
+    `read = ["author", "recipient"]` — also the new built-in default
+    for `K = [4, 1059, 21059]`, so a config that never listed the
+    key needs nothing.
+  - `restrict_read_to_involved = false` becomes
+    `read = ["authenticated"]`.
+  - `restricted_read_kinds = []` becomes `[relay.access]` with
+    `rules = []`.
+
+  A config whose `max_websocket_payload_size` is smaller than
+  `max_event_size + 10` is refused at load and at reload — check
+  this pair if you raised `max_event_size`.
 - `[relay] max_connections` is always finite. `max_connections = 0`
   (the old "unlimited" default) now stops the relay at startup, as
   does a value above `limit - 64 - limit/8` of the soft open-file
@@ -94,8 +111,9 @@ The format is based on [Keep a Changelog]; this project follows
   request to vanish per author is kept; AUTH events are accepted within
   10 minutes of the relay's time in both directions.
 - Breaking behaviour: with AUTH disabled (empty `service_url`),
-  publishes of the restricted kinds are refused with `restricted:` —
-  set `restricted_read_kinds = []` to accept and serve them openly.
+  publishes of the access-gated kinds are refused with
+  `restricted:` — set `[relay.access] rules = []` to accept and
+  serve them openly.
   `ids`, `authors`, `#e` and `#p` filter values must be 64 lowercase
   hex characters (anything else is `invalid:`; strfry accepts
   uppercase and a `0x` prefix). `nostr_events_total{kind}` now counts
@@ -111,10 +129,10 @@ The format is based on [Keep a Changelog]; this project follows
   hibernation restore. The events stay in the database and reappear
   when the entry is removed; `banevent` still deletes the event.
 - Kind 21059 (NIP-59 ephemeral gift wraps) was broadcast to every
-  matching subscriber, including unauthenticated ones, because it was
-  not in `restricted_read_kinds`. It is restricted by default now:
-  with AUTH on it is delivered only to authenticated involved readers,
-  and with AUTH off it is refused on write.
+  matching subscriber, including unauthenticated ones, because no
+  rule covered it. The default `[relay.access]` rule covers it now:
+  with AUTH on it is delivered only to authenticated involved
+  readers, and with AUTH off it is refused on write.
 - The Workers edition keyed its per-IP connection cap and shared
   per-address rate buckets by the exact client address, so an IPv6
   client could bypass both by rotating addresses inside its /64. It now
@@ -163,6 +181,17 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Added
 
+- `[relay.access]` per-kind rules, in both editions, replacing the
+  old restricted-kinds settings: each `[[relay.access.rules]]` entry
+  names explicit `kinds` (omit it once for a catch-all; no
+  wildcards), a `read` set of principals (`authenticated`, `author`,
+  `recipient`, `allowed` — the NIP-86 allow list), and a `write`
+  gate (`open`, `authenticated`, `author`). The same rules govern
+  stored scans, live delivery, COUNT, NEG and publishes; a non-open
+  write gate marks NIP-11 `limitation.restricted_writes`.
+  `anonymous_kinds` exempts single-use-key kinds such as 445 from
+  the allow-list author check so allow-list relays can carry Marmot
+  content.
 - `nosfry sync <url> [--filter] [--dir down|up|both] [--since]
   [--until]` reconciles the local database with any NIP-77 relay
   (nosfry, strfry) and transfers the difference (native). Memory stays
@@ -173,7 +202,8 @@ The format is based on [Keep a Changelog]; this project follows
   answers are retried after their hint, and an interrupted run is
   resumed by running it again. Downloads pass the same validation as a
   client `EVENT`, NIP-86 moderation, and the write-policy plugin
-  (`"sourceType":"Sync"`); protected events and restricted kinds are
+  (`"sourceType":"Sync"`); protected events and events an
+  `[relay.access]` read rule hides from unauthenticated readers are
   never uploaded. Exit codes: 0 complete, 3 partial, 1 failed. NIP-42
   keys come only from `--auth-key-file` (mode 600); loopback and
   private addresses need `--allow-private`. See `guides/sync.md`.
