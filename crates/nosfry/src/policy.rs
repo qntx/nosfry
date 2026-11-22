@@ -24,7 +24,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nosfry_core::event::{Event, PublicKey};
 use nosfry_core::policy::{
-    Decision, ResponseError, parse_response, request_line, request_line_unix,
+    Decision, ResponseError, parse_response, request_line, request_line_sync, request_line_unix,
 };
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
@@ -67,10 +67,7 @@ impl WritePolicy {
         source: &Peer,
         authed: Option<PublicKey>,
     ) -> Decision {
-        let received_at = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs());
-        let (reply, rx) = oneshot::channel();
+        let received_at = now_seconds();
         let json = event.json();
         let line = match source {
             Peer::Ip(ip) => request_line(json, received_at, *ip, authed),
@@ -83,9 +80,23 @@ impl WritePolicy {
                 authed,
             ),
         };
+        self.send(line, &event.id().to_string()).await
+    }
+
+    /// Ask the plugin about one event `nosfry sync` downloaded:
+    /// `sourceType` `Sync`, `sourceInfo` the peer's URL, no `authed`.
+    pub(crate) async fn check_sync(&self, event: &Event, url: &str) -> Decision {
+        let line = request_line_sync(event.json(), now_seconds(), url);
+        self.send(line, &event.id().to_string()).await
+    }
+
+    /// Queue `line` for the policy task and await its verdict; any
+    /// transport failure is `error: internal error`.
+    async fn send(&self, line: String, id: &str) -> Decision {
+        let (reply, rx) = oneshot::channel();
         let request = Request {
             line,
-            id: event.id().to_string(),
+            id: id.to_owned(),
             reply,
         };
         if self.tx.send(request).await.is_err() {
@@ -94,6 +105,13 @@ impl WritePolicy {
         rx.await
             .unwrap_or_else(|_| Decision::Reject(INTERNAL.to_owned()))
     }
+}
+
+/// Unix seconds now.
+fn now_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// One queued request: the serialized input line plus the event id
