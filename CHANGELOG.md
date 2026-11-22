@@ -114,6 +114,22 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Added
 
+- `[relay] service_url_aliases` lists further `ws://`/`wss://` names
+  the relay answers to (for example its onion address); NIP-42 AUTH,
+  NIP-62 requests to vanish, and NIP-98 management calls accept the
+  canonical `service_url` and every alias, in both editions. NIP-11
+  and the landing page keep naming `service_url`.
+- Unix-domain-socket listeners (`address = "unix:/path"`), for a
+  reverse proxy on the same host or a torrc `HiddenServicePort
+  unix:` target. Without `real_ip_header`, all connections of such a
+  listener are one peer: its profile's per-peer cap and `ip_*`
+  buckets apply to the whole listener, the write-policy plugin sees
+  `"sourceType":"Unix"` with the socket path, and `blockip` does not
+  apply. A stale socket file is replaced at startup and the file is
+  removed at shutdown.
+- `connection closed` log lines carry `duration_ms`, and the relay
+  warns at most once a minute per listener when its `real_ip_header`
+  is missing or unparsable and the peer falls back to the transport.
 - Gift wraps (kind 1059) are deleted by their `p` recipient's
   NIP-09 kind 5, with re-publication blocked (NIP-59).
 - An AUTH challenge is sent whenever an unauthenticated REQ, COUNT,
@@ -157,6 +173,15 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Changed
 
+- **Listener configuration moved (native).** `[[relay.listen]]`
+  entries (`address`, `profile`, `real_ip_header`) replace `[relay]
+  bind`, `port`, and `real_ip_header`; each names a
+  `[relay.profiles.<name>]` (default `default`) holding
+  `max_connections_per_peer` (was `[relay] max_connections_per_ip`)
+  and `rate_limits` (was `[relay.rate_limits]`). There are no
+  aliases for the old keys: move them by hand, as in
+  `nosfry.example.toml`. Listeners are restart-only; profiles reload,
+  and a reload removing a profile in use is refused.
 - `restricted_read_kinds` defaults to 4, 1059, 21059 (was 4, 1059;
   strfry master has 4, 1059).
 - With AUTH disabled (empty `service_url`), writes of restricted
