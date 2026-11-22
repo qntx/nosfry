@@ -72,17 +72,20 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// Write a relay config into `dir`: rate limits and the per-IP cap off,
-/// a large `max_filter_limit` so verification REQs are never capped.
+/// Write a relay config into `dir`: rate limits and the per-peer cap
+/// off, a large `max_filter_limit` so verification REQs are never
+/// capped.
 fn write_config(dir: &Path, port: u16) -> PathBuf {
     let path = dir.join("nosfry.toml");
     std::fs::write(
         &path,
         format!(
             "[db]\npath = \"{}\"\n\
-             [relay]\nport = {port}\nnofiles = 0\nmax_connections_per_ip = 0\n\
+             [relay]\nnofiles = 0\n\
              [relay.limits]\nmax_filter_limit = 100_000\n\
-             [relay.rate_limits]\nevents_per_second = 0\nevents_burst = 0\n\
+             [[relay.listen]]\naddress = \"127.0.0.1:{port}\"\n\
+             [relay.profiles.default]\nmax_connections_per_peer = 0\n\
+             [relay.profiles.default.rate_limits]\nevents_per_second = 0\nevents_burst = 0\n\
              reqs_per_second = 0\nreqs_burst = 0\n",
             dir.join("db").display()
         ),
@@ -99,10 +102,12 @@ fn write_auth_config(dir: &Path, port: u16) -> PathBuf {
         &path,
         format!(
             "[db]\npath = \"{}\"\n\
-             [relay]\nport = {port}\nnofiles = 0\nmax_connections_per_ip = 0\n\
+             [relay]\nnofiles = 0\n\
              service_url = \"ws://127.0.0.1:{port}\"\n\
              [relay.limits]\nmax_filter_limit = 100_000\n\
-             [relay.rate_limits]\nevents_per_second = 0\nevents_burst = 0\n\
+             [[relay.listen]]\naddress = \"127.0.0.1:{port}\"\n\
+             [relay.profiles.default]\nmax_connections_per_peer = 0\n\
+             [relay.profiles.default.rate_limits]\nevents_per_second = 0\nevents_burst = 0\n\
              reqs_per_second = 0\nreqs_burst = 0\n",
             dir.join("db").display()
         ),

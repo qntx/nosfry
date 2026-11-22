@@ -19,7 +19,7 @@ mod common;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use common::Relay;
+use common::{Relay, default_profile};
 
 /// Both tests share the one global subscriber; `LOCK` serializes them
 /// so their log windows never interleave.
@@ -147,7 +147,7 @@ async fn cap_refusal_logs_the_peer() {
     let start = buf.lock().unwrap().len();
 
     let mut config = common::config();
-    config.relay.max_connections_per_ip = 1;
+    default_profile(&mut config).max_connections_per_peer = 1;
     let relay = Relay::start_with(config).await;
     let _ws = relay.connect().await;
     let url = format!("ws://{}/", relay.addr);

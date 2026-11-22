@@ -20,14 +20,17 @@
 
 use std::future::Future;
 use std::io;
-use std::net::IpAddr;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nosfry_core::event::{Event, PublicKey};
-use nosfry_core::policy::{Decision, ResponseError, parse_response, request_line};
+use nosfry_core::policy::{
+    Decision, ResponseError, parse_response, request_line, request_line_unix,
+};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tokio::sync::{mpsc, oneshot};
+
+use crate::peer::Peer;
 
 /// Request queue depth; extra callers wait in place.
 const QUEUE: usize = 1024;
@@ -55,19 +58,33 @@ impl WritePolicy {
 
     /// Ask the plugin about one verified event. `authed` is the
     /// connection's authenticated pubkey (NIP-42), sent as the
-    /// request's `authed` field when present.
+    /// request's `authed` field when present. An IP peer reports
+    /// `IP4`/`IP6` and its address; a listener peer (unix socket)
+    /// reports `Unix` and the socket path.
     pub(crate) async fn check(
         &self,
         event: &Event,
-        source: IpAddr,
+        source: &Peer,
         authed: Option<PublicKey>,
     ) -> Decision {
         let received_at = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         let (reply, rx) = oneshot::channel();
+        let json = event.json();
+        let line = match source {
+            Peer::Ip(ip) => request_line(json, received_at, *ip, authed),
+            // The listener id is `unix:<path>`; the plugin sees the
+            // socket path.
+            Peer::Listener(id) => request_line_unix(
+                json,
+                received_at,
+                id.strip_prefix("unix:").unwrap_or(id),
+                authed,
+            ),
+        };
         let request = Request {
-            line: request_line(event.json(), received_at, source, authed),
+            line,
             id: event.id().to_string(),
             reply,
         };

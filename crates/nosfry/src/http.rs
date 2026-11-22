@@ -1,11 +1,10 @@
 //! axum HTTP surface: WebSocket upgrade, NIP-11 document, landing page.
 
-use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
-use axum::extract::{ConnectInfo, DefaultBodyLimit, FromRequestParts, Request, State};
+use axum::extract::{DefaultBodyLimit, FromRequestParts, Request, State};
 use axum::http::request::Parts;
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -21,6 +20,7 @@ use crate::connection;
 use crate::limiter::ConnectionLimiter;
 use crate::management;
 use crate::metrics::Metrics;
+use crate::peer::{self, Origin, Peer};
 
 /// Everything a connection handler needs.
 #[derive(Clone)]
@@ -161,16 +161,13 @@ async fn nodeinfo() -> Response {
 
 async fn root(State(state): State<AppState>, request: Request) -> Response {
     let (mut parts, _body) = request.into_parts();
-    // The accept loop always inserts `ConnectInfo`; missing means a
+    // The accept path always inserts `Origin`; missing means a
     // broken wiring path, not a client error.
-    let Some(peer) = parts
-        .extensions
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|c| c.0)
-    else {
+    let Some(origin) = parts.extensions.get::<Origin>().cloned() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    if ip_blocked(&state, &parts.headers, peer.ip()) {
+    let peer = peer::resolve(&origin, &parts.headers);
+    if ip_blocked(&state, &peer) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let wants_upgrade = parts
@@ -178,7 +175,7 @@ async fn root(State(state): State<AppState>, request: Request) -> Response {
         .get(header::UPGRADE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
-    if wants_upgrade && let Some(response) = websocket(&state, &mut parts, peer).await {
+    if wants_upgrade && let Some(response) = websocket(&state, &mut parts, &origin, &peer).await {
         return response;
     }
     let accepts_nostr = parts
@@ -206,14 +203,15 @@ async fn root(State(state): State<AppState>, request: Request) -> Response {
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// Whether the effective client IP (the same address the per-IP
-/// limiter charges, `real_ip_header`-aware) is on the NIP-86 block
-/// list. Checked before upgrades, NIP-11, and the management RPC —
-/// existing WebSocket connections are not cut off (block applies to
-/// new requests only).
-pub(crate) fn ip_blocked(state: &AppState, headers: &header::HeaderMap, peer: IpAddr) -> bool {
-    let ip = client_ip(&state.live.borrow().config, headers, peer);
-    state.moderation.borrow().ip_blocked(&ip)
+/// Whether the request's peer — resolved `real_ip_header`-aware, the
+/// same identity the per-peer limiter charges — is an IP on the
+/// NIP-86 block list. A listener peer has no address and is never
+/// IP-blocked. Checked before upgrades, NIP-11, and the management
+/// RPC — existing WebSocket connections are not cut off (block
+/// applies to new requests only).
+pub(crate) fn ip_blocked(state: &AppState, peer: &Peer) -> bool {
+    let Peer::Ip(ip) = peer else { return false };
+    state.moderation.borrow().ip_blocked(ip)
 }
 
 /// Initial capacity of each socket's read buffer. 71% of corpus
@@ -268,7 +266,12 @@ fn upgrade_options(relay: &crate::config::Relay, pool: &yawc::DeflatePool) -> Op
 /// were malformed and the request falls through to NIP-11/plain text.
 /// Options come from [`upgrade_options`] on a per-upgrade config
 /// snapshot, so a reload only affects connections opened afterwards.
-async fn websocket(state: &AppState, parts: &mut Parts, peer: SocketAddr) -> Option<Response> {
+async fn websocket(
+    state: &AppState,
+    parts: &mut Parts,
+    origin: &Origin,
+    peer: &Peer,
+) -> Option<Response> {
     let Ok(upgrade) = IncomingUpgrade::from_request_parts(parts, &()).await else {
         return None;
     };
@@ -279,9 +282,8 @@ async fn websocket(state: &AppState, parts: &mut Parts, peer: SocketAddr) -> Opt
     // The cap is charged before the upgrade. Rejections log at
     // debug: a hostile peer may hammer the cap and must not flood
     // the log.
-    let ip = client_ip(&live.config, &parts.headers, peer.ip());
-    let Some(permit) = state.limiter.try_acquire(ip) else {
-        tracing::debug!(target: "nosfry::conn", peer = %ip, "connection cap reached");
+    let Some(permit) = state.limiter.try_acquire(&origin.listener.profile, peer) else {
+        tracing::debug!(target: "nosfry::conn", peer = %peer, "connection cap reached");
         state.metrics.connection_rejected();
         return Some((StatusCode::TOO_MANY_REQUESTS, "too many connections").into_response());
     };
@@ -289,20 +291,33 @@ async fn websocket(state: &AppState, parts: &mut Parts, peer: SocketAddr) -> Opt
         return Some(StatusCode::BAD_REQUEST.into_response());
     };
     let buckets = permit.buckets();
+    // The listener profile's session limits. Running listeners are
+    // validated against `profiles` at load and on every reload, so the
+    // entry always exists; a missing one means broken wiring, not a
+    // client error.
+    let Some(limits) = live.profile_limits.get(origin.listener.profile.as_ref()) else {
+        tracing::error!(
+            profile = %origin.listener.profile,
+            "validated listener profile missing"
+        );
+        return Some(StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    };
+    let limits = Arc::clone(limits);
     let conn = connection::next_conn_id();
     // INFO level so the span exists under the default `info` filter:
     // nothing logs at info inside it, but every warn/error/debug line
     // of this connection then carries id and peer.
-    let span = tracing::info_span!(target: "nosfry::conn", "conn", id = conn, peer = %ip);
+    let span = tracing::info_span!(target: "nosfry::conn", "conn", id = conn, peer = %peer);
     let handle = state.conn.clone();
     let tracker = handle.tracker.clone();
+    let peer = peer.clone();
     tracker.spawn(
         async move {
             let _permit = permit;
             match fut.await {
                 Ok(mut ws) => {
                     tracing::debug!(target: "nosfry::conn", "connection open");
-                    connection::run(&mut ws, &handle, conn, ip, buckets).await;
+                    connection::run(&mut ws, &handle, conn, peer, limits, buckets).await;
                 }
                 Err(err) => tracing::debug!(target: "nosfry::conn", %err, "upgrade failed"),
             }
@@ -310,26 +325,6 @@ async fn websocket(state: &AppState, parts: &mut Parts, peer: SocketAddr) -> Opt
         .instrument(span),
     );
     Some(response.into_response())
-}
-
-/// The client IP for logging, per-IP limits, and the write-policy
-/// plugin. When `relay.real_ip_header` is set, the header's LAST
-/// comma-separated value is trusted — a proxy appends its peer's
-/// address, so the last entry is the one written by the trusted proxy
-/// in front of nosfry; earlier entries are client-controlled. Set it
-/// only behind a proxy that sets or appends the header. Missing or
-/// unparsable values fall back to the socket peer.
-fn client_ip(config: &Config, headers: &header::HeaderMap, peer: IpAddr) -> IpAddr {
-    let header_name = &config.relay.real_ip_header;
-    if !header_name.is_empty()
-        && let Some(value) = headers.get(header_name.as_str())
-        && let Ok(value) = value.to_str()
-        && let Some(last) = value.split(',').next_back()
-        && let Ok(ip) = last.trim().parse()
-    {
-        return ip;
-    }
-    peer
 }
 
 /// The optional capabilities the `[relay]` configuration advertises
@@ -384,21 +379,6 @@ pub(crate) fn landing(
 #[allow(clippy::unwrap_used, reason = "unit tests may panic on failure")]
 mod tests {
     use super::*;
-
-    fn config_with(header_name: &str) -> Config {
-        let mut config = Config::default();
-        config.relay.real_ip_header = header_name.to_owned();
-        config
-    }
-
-    fn headers(name: &str, value: &str) -> header::HeaderMap {
-        let mut map = header::HeaderMap::new();
-        map.insert(
-            header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
-            header::HeaderValue::from_str(value).unwrap(),
-        );
-        map
-    }
 
     /// Compression off: no `DeflateOptions`, but the payload limit and
     /// the socket buffer capacities still apply.
@@ -462,47 +442,5 @@ mod tests {
         assert!(!deflate.client_no_context_takeover);
         assert_eq!(deflate.compression_threshold, COMPRESSION_THRESHOLD);
         assert!(deflate.pool.is_none());
-    }
-
-    #[test]
-    fn client_ip_single_value() {
-        let config = config_with("x-forwarded-for");
-        let peer: IpAddr = "127.0.0.1".parse().unwrap();
-        let got = client_ip(&config, &headers("x-forwarded-for", " 1.2.3.4 "), peer);
-        assert_eq!(got, "1.2.3.4".parse::<IpAddr>().unwrap());
-    }
-
-    /// A proxy appends to X-Forwarded-For: the last entry is the one the
-    /// trusted proxy wrote; earlier ones are client-controlled.
-    #[test]
-    fn client_ip_appended_list_takes_last() {
-        let config = config_with("x-forwarded-for");
-        let peer: IpAddr = "127.0.0.1".parse().unwrap();
-        let got = client_ip(
-            &config,
-            &headers("x-forwarded-for", "9.9.9.9, 10.0.0.1, 203.0.113.7"),
-            peer,
-        );
-        assert_eq!(got, "203.0.113.7".parse::<IpAddr>().unwrap());
-    }
-
-    #[test]
-    fn client_ip_garbage_falls_back_to_peer() {
-        let config = config_with("x-forwarded-for");
-        let peer: IpAddr = "127.0.0.1".parse().unwrap();
-        let got = client_ip(&config, &headers("x-forwarded-for", "not-an-ip"), peer);
-        assert_eq!(got, peer);
-    }
-
-    #[test]
-    fn client_ip_header_unset_or_absent() {
-        // Header name configured but absent from the request.
-        let config = config_with("x-forwarded-for");
-        let peer: IpAddr = "127.0.0.1".parse().unwrap();
-        assert_eq!(client_ip(&config, &header::HeaderMap::new(), peer), peer);
-        // No header name configured.
-        let unset = config_with("");
-        let got = client_ip(&unset, &headers("x-forwarded-for", "1.2.3.4"), peer);
-        assert_eq!(got, peer);
     }
 }

@@ -18,7 +18,9 @@ mod common;
 use std::future::Future;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use common::{Relay, close_wire, count_wire, event_wire, key, recv_text, req_wire, send_text};
+use common::{
+    Relay, close_wire, count_wire, default_profile, event_wire, key, recv_text, req_wire, send_text,
+};
 use futures_util::{SinkExt, StreamExt};
 use nosfry_core::event::Event;
 use serde_json::{Value, json};
@@ -1507,7 +1509,7 @@ async fn upgrade_status(addr: std::net::SocketAddr) -> String {
 #[tokio::test]
 async fn connection_cap_per_ip() {
     let mut config = common::config();
-    config.relay.max_connections_per_ip = 2;
+    default_profile(&mut config).max_connections_per_peer = 2;
     let relay = Relay::start_with(config).await;
     let ws1 = relay.connect().await;
     let ws2 = relay.connect().await;
@@ -1544,7 +1546,7 @@ async fn connection_cap_total() {
 #[tokio::test]
 async fn event_rate_limit_is_per_connection() {
     let mut config = common::config();
-    config.relay.rate_limits = nosfry_core::limits::RateLimits::default();
+    default_profile(&mut config).rate_limits = nosfry_core::limits::RateLimits::default();
     let relay = Relay::start_with(config).await;
 
     // Client A floods 500 events: past the 100-event burst the OKs
@@ -1599,8 +1601,10 @@ async fn event_rate_limit_is_per_connection() {
 #[tokio::test]
 async fn ip_rate_limit_shared_across_connections() {
     let mut config = common::config();
-    config.relay.rate_limits.ip_events_per_second = 1;
-    config.relay.rate_limits.ip_events_burst = 3;
+    default_profile(&mut config)
+        .rate_limits
+        .ip_events_per_second = 1;
+    default_profile(&mut config).rate_limits.ip_events_burst = 3;
     let relay = Relay::start_with(config).await;
     let mut a = relay.connect().await;
     let mut b = relay.connect().await;
@@ -1626,8 +1630,10 @@ async fn ip_rate_limit_shared_across_connections() {
 async fn ip_rate_limit_survives_reconnect() {
     let mut config = common::config();
     config.relay.metrics = true;
-    config.relay.rate_limits.ip_events_per_second = 1;
-    config.relay.rate_limits.ip_events_burst = 3;
+    default_profile(&mut config)
+        .rate_limits
+        .ip_events_per_second = 1;
+    default_profile(&mut config).rate_limits.ip_events_burst = 3;
     let relay = Relay::start_with(config).await;
     {
         let mut a = relay.connect().await;
@@ -1786,7 +1792,7 @@ async fn metrics_endpoint_is_404_by_default() {
 async fn metrics_count_rate_limited_events() {
     let mut config = common::config();
     config.relay.metrics = true;
-    config.relay.rate_limits = nosfry_core::limits::RateLimits::default();
+    default_profile(&mut config).rate_limits = nosfry_core::limits::RateLimits::default();
     let relay = Relay::start_with(config).await;
     let mut ws = relay.connect().await;
 
@@ -1815,7 +1821,7 @@ async fn metrics_count_rate_limited_events() {
 async fn metrics_count_rejected_upgrades() {
     let mut config = common::config();
     config.relay.metrics = true;
-    config.relay.max_connections_per_ip = 1;
+    default_profile(&mut config).max_connections_per_peer = 1;
     let relay = Relay::start_with(config).await;
     let _ws = relay.connect().await;
     let status = upgrade_status(relay.addr).await;
@@ -1936,7 +1942,10 @@ fn policy_config(plugin: &str, timeout_seconds: u64) -> nosfry::config::Config {
 }
 
 /// Receive one frame and assert it is `["OK", <event id>, ...]`.
-async fn recv_ok(ws: &mut yawc::TcpWebSocket, event: &Event) -> Value {
+async fn recv_ok<S>(ws: &mut yawc::WebSocket<S>, event: &Event) -> Value
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     let ok = json(&recv_text(ws, T).await);
     assert_eq!(ok[0], "OK", "{ok}");
     assert_eq!(ok[1], event.id().to_string(), "{ok}");
@@ -2348,13 +2357,13 @@ async fn reload_enables_policy_on_existing_connection() {
 #[tokio::test]
 async fn reload_lowers_per_ip_cap() {
     let mut config = common::config();
-    config.relay.max_connections_per_ip = 5;
+    default_profile(&mut config).max_connections_per_peer = 5;
     let relay = Relay::start_with(config).await;
     let mut first = relay.connect().await;
     let _second = relay.connect().await;
 
     let mut config = reload_config("cap lowered");
-    config.relay.max_connections_per_ip = 2;
+    default_profile(&mut config).max_connections_per_peer = 2;
     relay.reload(config);
     assert!(wait_until(|| async { nip11_name(relay.addr).await == "cap lowered" }).await);
 
@@ -2377,7 +2386,7 @@ async fn reload_rate_limits_apply_to_new_connections() {
     let mut old_ws = relay.connect().await;
 
     let mut config = reload_config("limits on");
-    config.relay.rate_limits = nosfry_core::limits::RateLimits {
+    default_profile(&mut config).rate_limits = nosfry_core::limits::RateLimits {
         events_per_second: 1,
         events_burst: 1,
         reqs_per_second: 0,
@@ -2479,14 +2488,18 @@ async fn reload_refuses_payload_below_event_frame() {
 }
 
 #[tokio::test]
-async fn reload_port_change_is_ignored() {
+async fn reload_listen_change_is_ignored() {
     let relay = Relay::start().await;
-    let mut config = reload_config("port changed");
-    config.relay.port = 1;
+    let mut config = reload_config("listen changed");
+    config.relay.listen = vec![nosfry::config::Listen {
+        address: nosfry::config::ListenAddress::Tcp("127.0.0.1:1".parse().unwrap()),
+        profile: "default".to_owned(),
+        real_ip_header: String::new(),
+    }];
     relay.reload(config);
-    assert!(wait_until(|| async { nip11_name(relay.addr).await == "port changed" }).await);
-    // Restart-only fields are kept: the relay still serves on the
-    // original port.
+    assert!(wait_until(|| async { nip11_name(relay.addr).await == "listen changed" }).await);
+    // `relay.listen` is restart-only: the relay still serves on the
+    // original listener, not port 1.
     let mut ws = relay.connect().await;
     let ev = common::event(&key(7), 1, now(), &json!([]), "hi");
     send_text(&mut ws, &event_wire(&ev)).await;
@@ -2500,11 +2513,11 @@ async fn reload_port_change_is_ignored() {
 #[tokio::test]
 async fn invalid_auth_reload_rejects_everything() {
     let mut config = common::config();
-    config.relay.max_connections_per_ip = 2;
+    default_profile(&mut config).max_connections_per_peer = 2;
     let relay = Relay::start_with(config).await;
 
     let mut bad = reload_config("must not apply");
-    bad.relay.max_connections_per_ip = 1;
+    default_profile(&mut bad).max_connections_per_peer = 1;
     bad.relay.service_url = "http://bad".into();
     relay.reload(bad);
     // Let the reload task consume (and reject) it. The name stays the
@@ -2590,8 +2603,8 @@ async fn sighup_reloads_config_and_ignores_broken() {
         std::fs::write(
             &cfg_path,
             format!(
-                "[db]\npath = {:?}\n[relay]\nport = {port}\n\
-                 [relay.info]\nname = \"{name}\"\n",
+                "[db]\npath = {:?}\n[relay.info]\nname = \"{name}\"\n\
+                 [[relay.listen]]\naddress = \"127.0.0.1:{port}\"\n",
                 dir.path().join("db")
             ),
         )
@@ -3999,7 +4012,9 @@ async fn nip86_moderation_hides_stored_events() {
 async fn nip86_ip_block_and_relay_info() {
     let admin = key(9);
     let mut config = mgmt_config(&admin);
-    config.relay.real_ip_header = "x-forwarded-for".into();
+    let mut listen = common::tcp_listen();
+    listen.real_ip_header = "x-forwarded-for".into();
+    config.relay.listen = vec![listen];
     let relay = Relay::start_with(config).await;
     // The management caller keeps a distinct apparent IP so blocking
     // the socket peer still allows unblock calls.
@@ -4718,4 +4733,307 @@ async fn req_flood_does_not_starve_victims() {
         latencies.len()
     );
     relay.stop().await;
+}
+
+// Unix-domain-socket listeners: the accept path is transport-neutral,
+// and every connection of a unix listener without a real-IP header is
+// the same peer — the listener itself — so its per-peer cap and rate
+// buckets bind listener-wide.
+
+/// A config listening only on `unix:<dir>/relay.sock`.
+fn unix_config(dir: &std::path::Path) -> nosfry::config::Config {
+    let mut config = common::config();
+    config.relay.listen = vec![common::unix_listen(&dir.join("relay.sock"))];
+    config
+}
+
+/// A unix-socket websocket handshake, err on a non-101 reply (429).
+async fn try_connect_unix(
+    path: &std::path::Path,
+) -> yawc::Result<yawc::WebSocket<tokio::net::UnixStream>> {
+    let io = tokio::net::UnixStream::connect(path).await.unwrap();
+    yawc::WebSocket::handshake(
+        "ws://localhost/".parse().unwrap(),
+        io,
+        yawc::Options::default(),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn unix_listener_serves_websocket() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("relay.sock");
+    let relay = Relay::start_with(unix_config(dir.path())).await;
+    assert!(sock.exists(), "listener bound the socket file");
+
+    let mut sub = relay.connect_unix().await;
+    send_text(&mut sub, &req_wire("s", r#"{"kinds":[1]}"#)).await;
+    assert_eq!(json(&recv_text(&mut sub, T).await), json!(["EOSE", "s"]));
+
+    let mut pub_ws = relay.connect_unix().await;
+    let ev = common::event(&key(7), 1, now(), &json!([]), "unix hi");
+    send_text(&mut pub_ws, &event_wire(&ev)).await;
+    assert_eq!(recv_ok(&mut pub_ws, &ev).await[2], true);
+    let live = json(&recv_text(&mut sub, T).await);
+    assert_eq!(live[0], "EVENT");
+    assert_eq!(live[2]["id"], ev.id().to_string());
+
+    relay.stop().await;
+    assert!(!sock.exists(), "socket file removed on shutdown");
+}
+
+#[tokio::test]
+async fn unix_peer_cap_is_listener_wide() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("relay.sock");
+    let mut config = unix_config(dir.path());
+    default_profile(&mut config).max_connections_per_peer = 1;
+    let relay = Relay::start_with(config).await;
+
+    let _ws = relay.connect_unix().await;
+    // Every unix connection is the same peer: the second hits cap 1
+    // and the handshake is refused before the websocket upgrade.
+    assert!(try_connect_unix(&sock).await.is_err());
+    relay.stop().await;
+}
+
+#[tokio::test]
+async fn unix_policy_sees_unix_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let seen = dir.path().join("requests.jsonl");
+    let plugin = dir.path().join("policy.sh");
+    std::fs::write(
+        &plugin,
+        format!(
+            "while IFS= read -r line; do\n  printf '%s\\n' \"$line\" >> '{}'\n  \
+             {PLUGIN_SED}\n  \
+             printf '{{\"id\":\"%s\",\"action\":\"accept\"}}\\n' \"$id\"\ndone\n",
+            seen.display()
+        ),
+    )
+    .unwrap();
+    make_executable(&plugin);
+    let sock = dir.path().join("relay.sock");
+    let mut config = unix_config(dir.path());
+    config.relay.write_policy = nosfry::config::WritePolicy {
+        plugin: plugin.to_str().unwrap().to_owned(),
+        timeout_seconds: 10,
+    };
+    let relay = Relay::start_with(config).await;
+    let mut ws = relay.connect_unix().await;
+    let ev = common::event(&key(7), 1, now(), &json!([]), "unix probe");
+    send_text(&mut ws, &event_wire(&ev)).await;
+    assert_eq!(recv_ok(&mut ws, &ev).await[2], true);
+    relay.stop().await;
+
+    let line = std::fs::read_to_string(&seen).unwrap();
+    let request: Value = serde_json::from_str(line.trim_end()).unwrap();
+    assert_eq!(request["sourceType"], "Unix");
+    assert_eq!(request["sourceInfo"], sock.display().to_string());
+}
+
+/// A TCP listener and a unix listener on different profiles in one
+/// relay admit independently: cap 1 each, and the unix connection is
+/// not the TCP peer.
+#[tokio::test]
+async fn tcp_and_unix_profiles_have_independent_caps() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("relay.sock");
+    let mut config = common::config();
+    config.relay.profiles.insert(
+        "tcp".to_owned(),
+        nosfry::config::Profile {
+            max_connections_per_peer: 1,
+            ..nosfry::config::Profile::default()
+        },
+    );
+    config.relay.profiles.insert(
+        "unix".to_owned(),
+        nosfry::config::Profile {
+            max_connections_per_peer: 1,
+            ..nosfry::config::Profile::default()
+        },
+    );
+    let mut tcp = common::tcp_listen();
+    tcp.profile = "tcp".to_owned();
+    let mut unix = common::unix_listen(&sock);
+    unix.profile = "unix".to_owned();
+    config.relay.listen = vec![tcp, unix];
+    let relay = Relay::start_with(config).await;
+
+    let _tcp1 = relay.connect().await;
+    // The unix listener's cap is its own profile's — this first unix
+    // connection succeeds even though the TCP cap is spent.
+    let _unix1 = relay.connect_unix().await;
+    assert!(try_connect_unix(&sock).await.is_err());
+    // And the TCP peer is at its own cap too.
+    let url = format!("ws://{}/", relay.addr);
+    assert!(
+        yawc::WebSocket::connect(url.parse().unwrap())
+            .await
+            .is_err()
+    );
+    relay.stop().await;
+}
+
+/// A raw websocket upgrade over a unix socket, optionally with a
+/// real-IP header; returns the open stream (hold it to keep the
+/// connection) and the HTTP status line.
+async fn unix_upgrade(
+    path: &std::path::Path,
+    real_ip: Option<&str>,
+) -> (tokio::net::UnixStream, String) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut io = tokio::net::UnixStream::connect(path).await.unwrap();
+    let header = real_ip.map_or_else(String::new, |ip| format!("x-real-ip: {ip}\r\n"));
+    io.write_all(
+        format!(
+            "GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\n\
+             Connection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+             Sec-WebSocket-Version: 13\r\n{header}\r\n"
+        )
+        .as_bytes(),
+    )
+    .await
+    .unwrap();
+    let mut buf = vec![0u8; 4096];
+    let n = io.read(&mut buf).await.unwrap();
+    let text = String::from_utf8_lossy(&buf[..n]).to_string();
+    let status = text.lines().next().unwrap_or("").to_owned();
+    (io, status)
+}
+
+/// On a unix listener with `real_ip_header` configured, the header
+/// value becomes the peer: two unix connections with different
+/// header IPs are different peers, the same header IP is refused at
+/// the per-peer cap, and no/invalid header falls back to the
+/// listener peer.
+#[tokio::test]
+async fn unix_real_ip_header_gives_ip_peer() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("relay.sock");
+    let mut config = unix_config(dir.path());
+    config.relay.listen[0].real_ip_header = "x-real-ip".to_owned();
+    default_profile(&mut config).max_connections_per_peer = 1;
+    let relay = Relay::start_with(config).await;
+
+    // Two distinct header IPs: two distinct peers, both admitted.
+    let (_one, s1) = unix_upgrade(&sock, Some("192.0.2.1")).await;
+    let (_two, s2) = unix_upgrade(&sock, Some("192.0.2.2")).await;
+    // The same header IP is the same peer — refused at cap 1.
+    let (_three, s3) = unix_upgrade(&sock, Some("192.0.2.1")).await;
+    // No header: the peer is the listener itself — a fresh bucket,
+    // admitted despite the spent IP caps.
+    let (_four, s4) = unix_upgrade(&sock, None).await;
+    // A malformed header falls back to the listener peer too — now
+    // occupied, so refused.
+    let (_five, s5) = unix_upgrade(&sock, Some("not-an-ip")).await;
+    assert!(s1.contains("101"), "{s1}");
+    assert!(s2.contains("101"), "{s2}");
+    assert!(s3.contains("429"), "{s3}");
+    assert!(s4.contains("101"), "{s4}");
+    assert!(s5.contains("429"), "{s5}");
+    relay.stop().await;
+}
+
+/// A stale socket file at the path is replaced on bind; a live socket
+/// already bound there — or a non-socket file — is an error.
+#[tokio::test]
+async fn unix_stale_socket_replaced_on_bind() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("relay.sock");
+    let mut config = unix_config(dir.path());
+
+    // A socket a dead process left behind refuses connections: it is
+    // stale, removed, and rebound (a dropped UnixListener leaves the
+    // file).
+    let stale = tokio::net::UnixListener::bind(&sock).unwrap();
+    drop(stale);
+    let relay = Relay::start_with(config.clone()).await;
+    let mut ws = relay.connect_unix().await;
+    send_text(&mut ws, &req_wire("s", r#"{"kinds":[1]}"#)).await;
+    assert_eq!(json(&recv_text(&mut ws, T).await), json!(["EOSE", "s"]));
+    relay.stop().await;
+
+    // A socket another process still holds is "address in use".
+    let _live = tokio::net::UnixListener::bind(&sock).unwrap();
+    config.db.path = dir.path().join("db2");
+    assert!(nosfry::bind(&config).await.is_err());
+
+    // A non-socket file at the path is an error too — only refused
+    // connections mean stale.
+    std::fs::remove_file(&sock).unwrap();
+    std::fs::write(&sock, b"not a socket").unwrap();
+    assert!(nosfry::bind(&config).await.is_err());
+}
+
+/// A reload that removes the profile a running listener uses is
+/// refused entirely: the relay keeps the running config.
+#[tokio::test]
+async fn reload_removing_a_used_profile_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("relay.sock");
+    let mut config = unix_config(dir.path());
+    config
+        .relay
+        .profiles
+        .insert("tor".to_owned(), nosfry::config::Profile::default());
+    config.relay.listen[0].profile = "tor".to_owned();
+    config.relay.info.name = "before".to_owned();
+    let relay = Relay::start_with(config).await;
+    assert_eq!(nip11_name_over_unix(&sock).await, "before");
+
+    // `reloadable_from` keeps the running `tor`-profile listener; the
+    // reload offers only `default`, so validation refuses it.
+    let mut next = common::config();
+    next.relay.info.name = "after".to_owned();
+    relay.reload(next);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(nip11_name_over_unix(&sock).await, "before");
+
+    // The relay still serves new unix connections.
+    let mut ws = relay.connect_unix().await;
+    send_text(&mut ws, &req_wire("s", r#"{"kinds":[1]}"#)).await;
+    assert_eq!(json(&recv_text(&mut ws, T).await), json!(["EOSE", "s"]));
+    relay.stop().await;
+}
+
+/// A profile change on reload applies to new acquisitions: the cap
+/// lifted, a refused peer connects.
+#[tokio::test]
+async fn reload_profile_change_applies_to_new_connections() {
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("relay.sock");
+    let mut config = unix_config(dir.path());
+    default_profile(&mut config).max_connections_per_peer = 1;
+    let relay = Relay::start_with(config).await;
+    let _ws = relay.connect_unix().await;
+    assert!(try_connect_unix(&sock).await.is_err());
+
+    // Lift the cap on reload; a second unix connection is admitted.
+    let mut next = common::config();
+    next.relay.info.name = "cap lifted".to_owned();
+    relay.reload(next);
+    assert!(
+        wait_until(|| async { try_connect_unix(&sock).await.is_ok() }).await,
+        "reloaded profile cap admits the second connection"
+    );
+    relay.stop().await;
+}
+
+/// GET the NIP-11 document over a unix socket.
+async fn nip11_name_over_unix(path: &std::path::Path) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut io = tokio::net::UnixStream::connect(path).await.unwrap();
+    io.write_all(
+        b"GET / HTTP/1.1\r\nHost: localhost\r\nAccept: application/nostr+json\r\nConnection: close\r\n\r\n",
+    )
+    .await
+    .unwrap();
+    let mut raw = Vec::new();
+    io.read_to_end(&mut raw).await.unwrap();
+    let text = String::from_utf8(raw).unwrap();
+    let body = text.split("\r\n\r\n").nth(1).unwrap();
+    json(body)["name"].as_str().unwrap().to_owned()
 }
