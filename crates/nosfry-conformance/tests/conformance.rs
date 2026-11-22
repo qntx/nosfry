@@ -161,14 +161,13 @@ fn events(frames: &[Value]) -> Vec<&Value> {
 fn eose_hints(eose: &Value) -> Vec<String> {
     eose.get(2)
         .and_then(Value::as_array)
-        .map(|hints| {
+        .map_or_default(|hints| {
             hints
                 .iter()
                 .filter_map(Value::as_str)
                 .map(str::to_owned)
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// A plain HTTP GET (no NIP-11 Accept), returning (status,
