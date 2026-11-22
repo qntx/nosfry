@@ -1,13 +1,13 @@
 //! `nosfry sync`: a windowed NIP-77 client that reconciles the local
 //! store with a remote relay (ADR `0010-sync-client`).
 //!
-//! [`run`] resolves and vets the URL ([`dial`]), fetches the peer's
-//! NIP-11 limits ([`nip11`]) over a first connection, opens the
-//! WebSocket ([`conn`]) over a second, then drives the windowed
-//! reconciliation engine ([`engine`]). Downloads pass the full wire
+//! [`run`] resolves and vets the URL (`dial`), fetches the peer's
+//! NIP-11 limits (`nip11`) over a first connection, opens the
+//! WebSocket (`conn`) over a second, then drives the windowed
+//! reconciliation engine (`engine`). Downloads pass the full wire
 //! validation plus moderation and the write-policy plugin
-//! ([`ingest`]); NIP-42 authentication signs a key file
-//! ([`auth`]).
+//! (`ingest`); NIP-42 authentication signs a key file
+//! (`auth`).
 
 mod auth;
 mod conn;

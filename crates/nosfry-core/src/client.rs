@@ -40,7 +40,7 @@ pub enum RelayMessage<'a> {
         /// The NIP-01 machine-readable message.
         message: String,
         /// The `rate-limited` retry hint in milliseconds, capped at
-        /// [`MAX_RETRY_MS`].
+        /// `MAX_RETRY_MS`.
         retry_after_ms: Option<u64>,
     },
     /// `["EOSE", <sub>]`.
@@ -55,7 +55,7 @@ pub enum RelayMessage<'a> {
         /// The NIP-01 machine-readable message.
         message: String,
         /// The `rate-limited` retry hint in milliseconds, capped at
-        /// [`MAX_RETRY_MS`].
+        /// `MAX_RETRY_MS`.
         retry_after_ms: Option<u64>,
     },
     /// `["NOTICE", <message>]`.
