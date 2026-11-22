@@ -31,13 +31,20 @@ unless marked fixed.
 - **Per connection:** subscriptions (`max_subs_per_connection`, 200); filters
   per `REQ` (200); `#x` conditions per filter (3); queued outbound bytes
   (`max_pending_outbound_bytes`, 32 MiB, then the connection is closed); EVENT
-  and REQ token buckets (20/s, burst 100); 8 authenticated pubkeys (fixed);
-  negentropy sessions close after 60 s idle (fixed).
+  and REQ token buckets (20/s, burst 100), which frames that fail to parse
+  spend too; queries waiting for a reader (twice `max_subs_per_connection`);
+  live matches buffered during a stored scan count against
+  `max_pending_outbound_bytes`, so a connection holds at most twice it; 8
+  authenticated pubkeys (fixed); negentropy sessions close after 60 s idle
+  (fixed).
 - **Per client address** (IPv4 address, IPv6 /64): connections
   (`max_connections_per_ip`, 128) and shared EVENT and REQ buckets (100/s,
   burst 500).
-- **Per process:** live-subscription memory, queued outbound bytes and
-  negentropy memory (1 GiB each); writer queue (65,536 requests and 64 MiB,
+- **Per process:** WebSocket connections (`max_connections`, derived from
+  the open-file limit unless set: 874,936 at the default `nofiles`; `0` is
+  refused); queries admitted to each reader (4,096, fixed — past it a query is
+  refused with `rate-limited: relay busy`); live-subscription memory, queued
+  outbound bytes and negentropy memory (1 GiB each); writer queue (65,536 requests and 64 MiB,
   fixed); stored-scan rows per filter (`max_filter_limit`, 500); `COUNT` index
   entries (1,000,000, then approximate); negentropy records per session
   (1,000,000).
@@ -50,19 +57,12 @@ unless marked fixed.
 These are open in the current release and are tracked in the audit
 (round 1 identifiers):
 
-<!-- feat/bounded-server closes the max_connections default, C-14 and
-C-13 below: it removes their entries here and adds the new bounds to
-"Enforced bounds" when it lands. -->
-
-- `relay.max_connections` defaults to `0`, unlimited. Set it.
-- The per-reader request queues inside the process are unbounded (C-14). A
-  flood of `REQ`s from many addresses can grow memory until the per-address
-  buckets and connection caps bind.
-- Frames that fail to parse are answered with a NOTICE each and are not charged
-  to any rate bucket (C-01); one connection can spend a few seconds of relay CPU
-  per half minute this way.
-- Subscriptions waiting for their first scan sit outside the subscription
-  memory budget (C-13).
+- Reader capacity is shared, not divided per client: once the readers are
+  saturated, queries are refused with `rate-limited: relay busy` instead of
+  queued, and enough connections flooding past their rate limits (rate limits
+  off, or many addresses) can get other clients' queries refused this way.
+- `relay.max_connections` defaults to a descriptor bound derived from the
+  open-file limit, not a memory bound; size it to the host.
 - HTTP has no request-rate limit (by design; the proxy does it).
 - A single panic aborts the whole process (`panic = "abort"`); the supervisor
   restarts it. Fuzzing covers the message, filter, event, NIP-98 and plugin
@@ -71,7 +71,8 @@ C-13 below: it removes their entries here and adds the new bounds to
 
 ## Recommended public profile
 
-On top of the defaults: a finite `max_connections`, a reverse proxy with TLS
-and HTTP rate limiting ([deployment.md](deployment.md)), `real_ip_header` set
-to the header the proxy overwrites, `metrics` scraped from the host only, the
-hardened systemd unit, and alerts on `nosfry_store_errors_total`.
+On top of the defaults: `max_connections` sized to the host's memory, a reverse
+proxy with TLS and HTTP rate limiting ([deployment.md](deployment.md)),
+`real_ip_header` set to the header the proxy overwrites, `metrics` scraped from
+the host only, the hardened systemd unit, and alerts on
+`nosfry_store_errors_total` and `nosfry_reader_busy_total`.

@@ -17,10 +17,6 @@ connections opened afterwards, and _live_ means it applies at once.
 
 ## Reference
 
-<!-- feat/bounded-server (the max_connections default, the
-pending-subscription budget) changes keys here: the docs test fails
-until these tables match nosfry.example.toml. -->
-
 ### `[db]`
 
 | Key                | Default          | Reload  | Meaning                                                                                                                                                   |
@@ -46,35 +42,47 @@ A Marmot-ready 2 MiB profile is `max_event_size = 2097152` with
 
 ### `[relay]`
 
-| Key                                         | Default       | Reload  | Meaning                                                                                                                                                                                            |
-| ------------------------------------------- | ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `relay.bind`                                | `"127.0.0.1"` | restart | Listen address.                                                                                                                                                                                    |
-| `relay.port`                                | `7777`        | restart | Listen port.                                                                                                                                                                                       |
-| `relay.service_url`                         | `""`          | new     | The relay's public `ws://` or `wss://` URL. Required for NIP-42 AUTH, NIP-62 requests naming this relay, and NIP-86. Empty disables AUTH: restricted kinds are then refused on write.              |
-| `relay.nofiles`                             | `1000000`     | restart | Raise the soft open-file limit to this value at startup, capped by the hard limit; `0` leaves it unchanged.                                                                                        |
-| `relay.real_ip_header`                      | `""`          | new     | Header carrying the client address; its last comma-separated value is trusted. Only behind a proxy that sets or appends it.                                                                        |
-| `relay.max_websocket_payload_size`          | `131072`      | new     | Maximum inbound WebSocket frame in bytes, after inflation — inclusive, one byte more closes with 1009. Must be at least `events.max_event_size + 10`, or the config is refused at load and reload. |
-| `relay.auto_ping_seconds`                   | `55`          | new     | WebSocket ping interval; at least 1. It also bounds socket writes and idle closes.                                                                                                                 |
-| `relay.tcp_keepalive`                       | `false`       | new     | Set `SO_KEEPALIVE` on accepted sockets.                                                                                                                                                            |
-| `relay.max_pending_outbound_bytes`          | `33554432`    | new     | Queued outbound bytes above which one connection is closed (1008).                                                                                                                                 |
-| `relay.max_pending_outbound_bytes_total`    | `1073741824`  | restart | Process-wide queued outbound bytes; over it, scans pause for connections that are behind. `0` is unlimited.                                                                                        |
-| `relay.max_sync_memory_bytes`               | `1073741824`  | restart | Process-wide negentropy budget, 40 bytes per record. `0` is unlimited.                                                                                                                             |
-| `relay.max_subscription_bytes_total`        | `1073741824`  | restart | Process-wide estimated memory of live subscriptions. `0` is unlimited.                                                                                                                             |
-| `relay.max_connections`                     | `0`           | live    | Maximum WebSocket connections. `0` is unlimited: set it on a public relay.                                                                                                                         |
-| `relay.max_connections_per_ip`              | `128`         | live    | Maximum WebSocket connections per client address (IPv6 per /64). `0` is unlimited.                                                                                                                 |
-| `relay.metrics`                             | `false`       | restart | Serve unauthenticated `GET /metrics` (Prometheus) on the relay port.                                                                                                                               |
-| `relay.query_timeslice_budget_microseconds` | `10000`       | restart | Time slice of one stored scan before it yields to the next.                                                                                                                                        |
+| Key                                         | Default       | Reload  | Meaning                                                                                                                                                                                                  |
+| ------------------------------------------- | ------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relay.bind`                                | `"127.0.0.1"` | restart | Listen address.                                                                                                                                                                                          |
+| `relay.port`                                | `7777`        | restart | Listen port.                                                                                                                                                                                             |
+| `relay.service_url`                         | `""`          | new     | The relay's public `ws://` or `wss://` URL. Required for NIP-42 AUTH, NIP-62 requests naming this relay, and NIP-86. Empty disables AUTH: restricted kinds are then refused on write.                    |
+| `relay.nofiles`                             | `1000000`     | restart | Raise the soft open-file limit to this value at startup, capped by the hard limit; `0` leaves it unchanged.                                                                                              |
+| `relay.real_ip_header`                      | `""`          | new     | Header carrying the client address; its last comma-separated value is trusted. Only behind a proxy that sets or appends it.                                                                              |
+| `relay.max_websocket_payload_size`          | `131072`      | new     | Maximum inbound WebSocket frame in bytes, after inflation — inclusive, one byte more closes with 1009. Must be at least `events.max_event_size + 10`, or the config is refused at load and reload.       |
+| `relay.auto_ping_seconds`                   | `55`          | new     | WebSocket ping interval; at least 1. It also bounds socket writes and idle closes.                                                                                                                       |
+| `relay.tcp_keepalive`                       | `false`       | new     | Set `SO_KEEPALIVE` on accepted sockets.                                                                                                                                                                  |
+| `relay.max_pending_outbound_bytes`          | `33554432`    | new     | Queued outbound bytes above which one connection is closed (1008). Live matches buffered while a subscription's stored scan runs reserve bytes against it too, so a connection holds at most twice this. |
+| `relay.max_pending_outbound_bytes_total`    | `1073741824`  | restart | Process-wide queued outbound bytes; over it, scans pause for connections that are behind. `0` is unlimited.                                                                                              |
+| `relay.max_sync_memory_bytes`               | `1073741824`  | restart | Process-wide negentropy budget, 40 bytes per record. `0` is unlimited.                                                                                                                                   |
+| `relay.max_subscription_bytes_total`        | `1073741824`  | restart | Process-wide estimated memory of live subscriptions. `0` is unlimited.                                                                                                                                   |
+| `relay.max_connections_per_ip`              | `128`         | live    | Maximum WebSocket connections per client address (IPv6 per /64). `0` is unlimited.                                                                                                                       |
+| `relay.metrics`                             | `false`       | restart | Serve unauthenticated `GET /metrics` (Prometheus) on the relay port.                                                                                                                                     |
+| `relay.query_timeslice_budget_microseconds` | `10000`       | restart | Time slice of one stored scan before it yields to the next.                                                                                                                                              |
+
+`relay.max_connections` (unset by default, reload: live) caps all WebSocket
+connections and is always finite. Unset, it is derived from the soft open-file
+limit after `relay.nofiles` raised it: `limit - 64 - limit/8`, which keeps 64
+descriptors for the process and one eighth of the limit for sockets the cap
+does not count (plain HTTP requests and handshakes in progress) — 874,936 at
+the default `nofiles`, 832 under a soft limit of 1,024. An explicit value must
+be at least 1 and at most that ceiling: `0` or a larger value stops the relay
+at startup with a `config:` error, and a reload carrying one is refused and
+keeps the running configuration. The relay logs the effective cap at startup
+(`connection cap max_connections=… soft_nofile=…`). The derived value bounds
+descriptors, not memory: on a host with less memory than the descriptors
+allow, set it explicitly.
 
 ### `[relay.limits]`
 
-| Key                                    | Default   | Reload  | Meaning                                                                                    |
-| -------------------------------------- | --------- | ------- | ------------------------------------------------------------------------------------------ |
-| `relay.limits.max_req_filter_size`     | `200`     | new     | Maximum filters per `REQ`.                                                                 |
-| `relay.limits.max_subs_per_connection` | `200`     | new     | Maximum open subscriptions per connection.                                                 |
-| `relay.limits.max_filter_limit`        | `500`     | restart | Cap on a filter's `limit` for stored scans.                                                |
-| `relay.limits.max_filter_limit_count`  | `1000000` | restart | Index entries one `COUNT` may examine before answering approximately; `0` disables NIP-45. |
-| `relay.limits.max_sync_events`         | `1000000` | restart | Records one negentropy sync may hold; `0` disables NIP-77.                                 |
-| `relay.limits.max_tags_per_filter`     | `3`       | new     | Maximum `#x` conditions per filter.                                                        |
+| Key                                    | Default   | Reload  | Meaning                                                                                                                               |
+| -------------------------------------- | --------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `relay.limits.max_req_filter_size`     | `200`     | new     | Maximum filters per `REQ`.                                                                                                            |
+| `relay.limits.max_subs_per_connection` | `200`     | new     | Maximum open subscriptions per connection. Twice this many queries (`REQ`, `COUNT`, `NEG-OPEN`) may wait for a reader per connection. |
+| `relay.limits.max_filter_limit`        | `500`     | restart | Cap on a filter's `limit` for stored scans.                                                                                           |
+| `relay.limits.max_filter_limit_count`  | `1000000` | restart | Index entries one `COUNT` may examine before answering approximately; `0` disables NIP-45.                                            |
+| `relay.limits.max_sync_events`         | `1000000` | restart | Records one negentropy sync may hold; `0` disables NIP-77.                                                                            |
+| `relay.limits.max_tags_per_filter`     | `3`       | new     | Maximum `#x` conditions per filter.                                                                                                   |
 
 ### `[relay.filter_validation]`
 
@@ -171,18 +179,20 @@ contact = "mailto:admin@example.com"
 Keep `relay.bind = "127.0.0.1"` and let the reverse proxy
 ([deployment.md](deployment.md)) terminate TLS and rate-limit HTTP. 100,000
 idle connections cost about 0.7 GiB at 7.2 KiB each; size `max_connections`
-to the memory you give the relay.
+to the memory you give the relay. Left unset it is derived from the open-file
+limit (874,936 at the default `nofiles`), which bounds descriptors, not memory.
 
 ## Behaviour behind the keys
 
 ### Limits and abuse resistance
 
-- **Rate limits.** `relay.rate_limits` throttles each connection with EVENT and REQ token buckets (default 20/s, burst 100). An over-limit EVENT gets `OK false rate-limited:` and an over-limit REQ gets `CLOSED rate-limited:`, each carrying the NIP-01 retry hint (milliseconds until the bucket refills). A `*_per_second` of 0 disables that bucket.
+- **Rate limits.** `relay.rate_limits` throttles each connection with EVENT and REQ token buckets (default 20/s, burst 100). An over-limit EVENT gets `OK false rate-limited:` and an over-limit REQ gets `CLOSED rate-limited:`, each carrying the NIP-01 retry hint (milliseconds until the bucket refills). A `*_per_second` of 0 disables that bucket. Frames that fail to parse spend REQ tokens too: within the budget each gets a `NOTICE` (an unknown verb is quoted to at most 32 bytes), past it none.
 - **Per-address buckets.** The `ip_*` keys add a second pair of buckets shared by every connection of one client address (default 100/s, burst 500 each). A message is refused when either its connection bucket or its address bucket is empty, so 128 connections cannot each spend 20 events per second.
-- **Connection caps.** `relay.max_connections` caps all WebSocket connections and `relay.max_connections_per_ip` (default 128) caps them per client address, with IPv6 grouped per /64. An over-cap upgrade is refused with `429 Too Many Requests` before the handshake.
+- **Connection caps.** `relay.max_connections` (derived from the open-file limit unless set, see [`[relay]`](#relay)) caps all WebSocket connections and `relay.max_connections_per_ip` (default 128) caps them per client address, with IPv6 grouped per /64. An over-cap upgrade is refused with `429 Too Many Requests` before the handshake.
 - **Client address.** Behind a proxy, set `relay.real_ip_header`; the last comma-separated value of that header is trusted, because the proxy appends its peer's address.
 - **Subscription memory.** `relay.max_subscription_bytes_total` (default 1 GiB, 0 disables, restart-only) bounds the estimated memory of all live subscriptions: the compiled filters plus 128 bytes per indexed value. A REQ past it gets `CLOSED blocked: subscription capacity exhausted`, and `nosfry_subscription_bytes` reports usage.
-- **Outbound memory.** `relay.max_pending_outbound_bytes` bounds one connection's queue, and a slow consumer past it is disconnected. `relay.max_pending_outbound_bytes_total` (default 1 GiB, 0 disables, restart-only) bounds the sum across connections. Over budget, scans pause only on connections already more than one chunk behind; caught-up readers keep scanning.
+- **Outbound memory.** `relay.max_pending_outbound_bytes` bounds one connection's queue, and a slow consumer past it is disconnected. `relay.max_pending_outbound_bytes_total` (default 1 GiB, 0 disables, restart-only) bounds the sum across connections. Over budget, scans pause only on connections already more than one chunk behind; caught-up readers keep scanning. Live events matched while a subscription's stored scan is still running are buffered against the same two budgets, so one connection holds at most twice `max_pending_outbound_bytes`; a subscription whose buffer no longer fits, or reaches 4,096 events, is closed with `CLOSED error: subscription fell behind` and the connection stays open.
+- **Reader admission.** Stored scans (`REQ`, `COUNT`, `NEG-OPEN`) and `NEG-MSG` steps wait for the reader threads in bounded queues: each reader admits at most 4,096 queries, and each connection may have at most twice `max_subs_per_connection` queries waiting (both fixed). A `REQ` or `COUNT` past its connection's bound is answered `CLOSED rate-limited: too many pending queries`, and one that finds the readers saturated `CLOSED rate-limited: relay busy`; a `NEG-OPEN` gets a `NEG-ERR` with the same reason, and a `NEG-MSG` on a saturated reader `NEG-ERR rate-limited: relay busy`. `nosfry_reader_busy_total{msg}` counts the refused work and `nosfry_reader_jobs` the admitted queries.
 
 ### Filter validation
 
@@ -208,13 +218,20 @@ Whatever this section does, filter `ids`, `authors`, `#e` and `#p` values must e
 
 Logs go to stderr at `info` (set `RUST_LOG_JSON=1` for JSON). strfry's `relay.logging` switches are `RUST_LOG` targets instead of configuration. They are off by default so a hostile client cannot flood the log:
 
-| strfry                                    | `RUST_LOG` directive    | Output                                                          |
-| ----------------------------------------- | ----------------------- | --------------------------------------------------------------- |
-| `invalidEvents`                           | `nosfry::ingest=debug`  | every `OK` sent, accepted or rejected, and every relay `CLOSED` |
-| `dumpInAll`, `dumpInEvents`, `dumpInReqs` | `nosfry::inbound=trace` | every inbound message                                           |
-| `dbScanPerf`                              | `nosfry::scan=debug`    | one line per finished stored scan or `COUNT`, with timings      |
+| strfry                                    | `RUST_LOG` directive    | Output                                                                               |
+| ----------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------ |
+| `invalidEvents`                           | `nosfry::ingest=debug`  | every `OK` sent, accepted or rejected, and every relay `CLOSED`                      |
+| `dumpInAll`, `dumpInEvents`, `dumpInReqs` | `nosfry::inbound=trace` | every inbound message                                                                |
+| `dbScanPerf`                              | `nosfry::scan=debug`    | one line per finished stored scan or `COUNT`, with timings                           |
+| —                                         | `nosfry::conn=debug`    | `connection open`, `connection closed reason=…`, and `connection cap reached peer=…` |
 
 For example: `RUST_LOG=info,nosfry::ingest=debug`.
+
+Every line a WebSocket connection logs sits inside a `conn{id, peer}` span,
+where `peer` is the client address after `real_ip_header`; JSON lines carry it
+as `"span":{"name":"conn","id":…,"peer":"…"}`. With
+`RUST_LOG=info,nosfry::conn=debug`, a fail2ban filter can match `connection
+cap reached peer=<HOST>`.
 
 `[relay] tcp_keepalive = true` (strfry `enableTcpKeepalive`) sets `SO_KEEPALIVE` on new sockets, with the operating system's timers, to detect connections a proxy dropped silently.
 
