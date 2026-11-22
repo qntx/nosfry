@@ -99,11 +99,10 @@ start_server() {
     native|native-unix)
         local src="$profile"
         [ "$pass" = "alt" ] && src="$profile_alt"
-        cat "$src" >"$tmpdir/config-$pass.toml"
         # The shared profile keeps [relay.rate_limits] for the worker
         # edition; native moved it under the `default` profile.
-        sed -i '' 's/^\[relay\.rate_limits\]$/[relay.profiles.default.rate_limits]/' \
-            "$tmpdir/config-$pass.toml"
+        sed 's/^\[relay\.rate_limits\]$/[relay.profiles.default.rate_limits]/' \
+            "$src" >"$tmpdir/config-$pass.toml"
         # `[[relay.listen]]` is its own table, so it can always be
         # appended — no splice needed when the profile owns `[relay]`.
         local address="127.0.0.1:$port"
