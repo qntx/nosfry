@@ -1,0 +1,60 @@
+# Hardened systemd unit for the native relay; see guides/deployment.md.
+# Expects the binary at /usr/local/bin/nosfry, the configuration at
+# /etc/nosfry/nosfry.toml with [db] path under /var/lib/nosfry, and a
+# system user: useradd --system --home-dir /var/lib/nosfry --shell /usr/sbin/nologin nosfry
+
+[Unit]
+Description=nosfry Nostr relay
+Documentation=https://github.com/qntx/nosfry/blob/main/guides/deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nosfry
+Group=nosfry
+ExecStart=/usr/local/bin/nosfry --config /etc/nosfry/nosfry.toml relay
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2s
+# On SIGTERM the relay commits every queued write before it exits; after
+# a long write backlog that took 11 to 13 s in the benchmarks.
+TimeoutStopSec=60s
+# The relay raises its own soft limit to relay.nofiles; this lifts the
+# hard limit above systemd's default of 524288.
+LimitNOFILE=1000000
+
+StateDirectory=nosfry
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/nosfry
+UMask=0077
+
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+# Remove this line if a write-policy plugin runs on a JIT runtime
+# (Node.js, LuaJIT); CPython and shell plugins work with it.
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
