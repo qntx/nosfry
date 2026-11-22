@@ -453,9 +453,9 @@ In scope:
 - Configuration surface: `nosfry.example.toml`, `docker/nosfry.toml`,
   `crates/nosfry-worker/wrangler.toml`
 - Build and release:
-  - `.github/workflows/{ci,container,publish,release,fuzz,dependabot}.yml`;
-  - the reusable workflows they call at `qntx/workflows@v2` (the caller side
-    and the permissions granted);
+  - `.github/workflows/{ci,audit,container,publish,release,fuzz}.yml`;
+  - the reusable workflows and actions they call from `qntx/workflows`,
+    pinned by commit SHA (the caller side and the permissions granted);
   - `Dockerfile`, `.dockerignore`, `rust-toolchain.toml`.
 - Dependency set: `Cargo.toml`, `Cargo.lock`, `deny.toml`
 - Fuzz targets: `fuzz/fuzz_targets` (coverage adequacy)
@@ -569,10 +569,6 @@ Ranked by risk:
   broadcast live. The window is narrow: vanish points satisfy
   `T <= now + 900 s` while ephemeral events are generally `now - 60 s` or
   newer.
-- **CI reusable workflows float.** The workflows reference the moving
-  `qntx/workflows@v2` tag rather than a commit SHA. The repository is
-  organization-owned and the referenced workflows are ours; third-party
-  actions are SHA-pinned.
 
 ## Prior internal review
 

@@ -20,15 +20,15 @@ project's [MIT](LICENSE-MIT) OR [Apache-2.0](LICENSE-APACHE) terms.
 
 ## Prerequisites
 
-| Tool                    | Notes                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------ |
-| Rust                    | The pinned toolchain (`rust-toolchain.toml`) plus nightly for fmt and clippy   |
-| `wasm32-unknown-unknown` | Target for `nosfry-core`, `nosfry-sql`, and `nosfry-worker`                    |
-| clang with wasm32       | `CC_wasm32_unknown_unknown`, for libsecp256k1 (e.g. `brew install llvm`)       |
-| `cargo-deny`            | License, ban, and advisory checks                                              |
-| Node                    | `npx` runs taplo and wrangler                                                  |
-| `worker-build` 0.8.7    | Workers edition builds (`cargo install worker-build --version 0.8.7 --locked`) |
-| `just`                  | Optional task runner (`Justfile`)                                              |
+| Tool                     | Notes                                                                                       |
+| ------------------------ | ------------------------------------------------------------------------------------------- |
+| Rust                     | The pinned toolchain (`rust-toolchain.toml`) plus `.github/nightly-toolchain` for fmt/clippy |
+| `wasm32-unknown-unknown` | Target for `nosfry-core`, `nosfry-sql`, and `nosfry-worker`                                  |
+| clang with wasm32        | `CC_wasm32_unknown_unknown`, for libsecp256k1 (e.g. `brew install llvm`)                     |
+| `cargo-deny`             | License, ban, and advisory checks                                                            |
+| Node                     | `npx` runs taplo and wrangler                                                                |
+| `worker-build` 0.8.7     | Workers edition builds (`cargo install worker-build --version 0.8.7 --locked`)               |
+| `just`                   | Optional task runner (`Justfile`)                                                            |
 
 ## Local gate
 
@@ -36,8 +36,8 @@ Run before every pull request; CI runs the same checks.
 
 ```bash
 npx --yes @taplo/cli@0.7.0 fmt --check
-cargo +nightly fmt --all -- --check
-cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
+cargo +"$(cat .github/nightly-toolchain)" fmt --all -- --check
+cargo +"$(cat .github/nightly-toolchain)" clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo deny check
@@ -46,6 +46,11 @@ CC_wasm32_unknown_unknown="$(brew --prefix llvm)/bin/clang" \
 CC_wasm32_unknown_unknown="$(brew --prefix llvm)/bin/clang" \
     cargo clippy -p nosfry-worker --target wasm32-unknown-unknown -- -D warnings
 ```
+
+The nightly in `.github/nightly-toolchain` is bumped deliberately by a
+maintainer pull request that also fixes any new lints; GitHub Actions is
+not allowed to create pull requests in this repository, so no bot does
+this.
 
 The black-box conformance suite runs the same cases against both editions:
 
@@ -58,7 +63,7 @@ Longer checks before a release:
 
 ```bash
 NOSFRY_CRASH_CYCLES=60 cargo test -p nosfry --test crash
-cargo +nightly fuzz run <target> -- -max_total_time=600
+cargo +"$(cat .github/nightly-toolchain)" fuzz run <target> -- -max_total_time=600
 ```
 
 ## Layout
