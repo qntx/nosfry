@@ -183,6 +183,9 @@ connection negotiate permessage-deflate; `PORT`, `RELAY_CPUS`, and
 `HARNESS_CPUS` move the soak off the default port and cores — a soak
 can share the box with a benchmark run this way.
 
+`run-soak-72h.sh` runs the gate workload at those defaults for 72 h;
+[SOAK.md](SOAK.md) is its checklist and pass criteria.
+
 Each `<name>` is a binary in `/bench/bin`; strfry always runs alongside.
 
 - `run-relaybench.sh` runs relayBench 3 times on the synthetic corpus
