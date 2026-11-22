@@ -93,3 +93,101 @@ header it prepends, and every connection would fail.
   `relay.info` contact and icon fields empty if that matters.
 - NIP-86 `blockip` cannot target onion clients; the write-policy plugin sees
   them as `"sourceType":"Unix"`.
+
+## Embedded mode (`--features onion`)
+
+nosfry can also embed an onion service inside the relay process through
+[Arti](https://arti.torproject.org/), the Tor implementation in Rust. It
+is an opt-in cargo feature: the published binaries and the container
+image do not include it. Build or install it yourself:
+
+```bash
+cargo install nosfry --locked --features onion
+```
+
+An `onion:<nickname>` address in `[[relay.listen]]` is an embedded onion
+service; the nickname labels logs and metrics and names the key
+directory. Give it its own profile, because every onion client is one
+peer (see below):
+
+```toml
+[[relay.listen]]
+address = "onion:main"
+profile = "onion"
+
+[relay.profiles.onion]
+max_connections_per_peer = 10000
+
+[relay.onion]
+state_dir = "./nosfry-onion"
+max_circuits = 256
+max_streams_per_circuit = 128
+intro_rate = 0
+intro_burst = 0
+onion_location = false
+```
+
+`state_dir` must be a directory only the relay user can read (mode
+`0700`); the relay refuses a looser one and says `chmod 700 <path>`.
+`max_circuits` bounds concurrent rendezvous circuits per listener — a
+circuit holds its slot until the client closes it, so clients holding
+idle circuits count against the budget —
+`max_streams_per_circuit` the streams Arti allows on each — a client
+multiplexes all its connections onto one circuit, so the default is
+sized for that and the profile's `max_connections_per_peer` is the
+connection bound — and
+`intro_rate`/`intro_burst` an optional token bucket sent to the
+introduction points (both 0 = unset). `onion_location` adds an
+`Onion-Location` header to NIP-11, landing-page and WebSocket-upgrade
+responses on the non-onion listeners, so Tor Browser is offered the
+onion address; it reloads with SIGHUP. Every other `[relay.onion]` key
+is restart-only.
+
+Print the service's address without starting the relay or touching the
+network (it creates the key on first run):
+
+```bash
+nosfry onion address --config nosfry.toml
+# ws://exampleabc.onion
+```
+
+The address lives on port 80, so the client URL is
+`ws://exampleabc.onion`. The identity key — the address — is
+
+```text
+<state_dir>/state/keystore/hss/<nickname>/ks_hs_id.ed25519_expanded_private
+```
+
+Back that file up: losing it changes the onion address; everything else
+in `state_dir` regenerates. With no `service_url` the first onion URL is
+the canonical relay URL, so NIP-42 AUTH names it and NIP-62 and NIP-86
+accept it; with a `service_url` every onion URL is an alias.
+
+Clearnet listeners do not wait for Tor: they serve immediately while the
+onion listener bootstraps in the background, retrying with a capped
+backoff when the Tor network is unreachable. `nosfry_onion_state`,
+`nosfry_onion_circuits`, `nosfry_onion_streams_total` and
+`nosfry_onion_circuits_rejected_total` report each listener's state,
+live circuits, accepted streams and refused circuits.
+
+The write-policy plugin sees onion connections as
+`"sourceType":"Onion"` with the listener id (`onion:<nickname>`) as
+`sourceInfo`.
+
+### Which to choose
+
+|                            | torrc (C tor)            | embedded (Arti)            |
+|----------------------------|--------------------------|----------------------------|
+| Extra process to run       | yes (`tor`)              | no                         |
+| Onion-service PoW          | available                | not wired in               |
+| Maturity                   | production               | see below                  |
+| Relay binary (macOS arm64) | 6.1 MB stripped          | 14.6 MB stripped           |
+| Setup                      | torrc + unix listener    | one listener line          |
+| Client IPs                 | hidden from the relay    | hidden from the relay      |
+| `sourceType` to the plugin | `Unix`                   | `Onion`                    |
+
+Arti's own documentation disagrees about readiness: `doc/OnionService.md`
+(tag `arti-v2.8.0`, "as of February 2024") still says onion services are
+"suitable for testing and experimentation only", while Arti MR !3464
+(merged 2025-11-13) made the onion-service features stable. Operators who
+need C tor's track record or onion PoW should stay on the torrc setup.

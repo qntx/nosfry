@@ -60,7 +60,9 @@ pub struct Relay {
     /// The relay's canonical `ws://`/`wss://` URL clients sign into an
     /// AUTH event's `relay` tag and name in a NIP-62 request to
     /// vanish. Empty disables AUTH: restricted kinds are refused on
-    /// write and never served, and protected events are rejected.
+    /// write and never served, and protected events are rejected —
+    /// unless an embedded onion listener exists, whose derived URL
+    /// then stands in as the canonical name (see [`Relay::service_url`]).
     pub service_url: String,
     /// Other `ws://`/`wss://` URLs the relay answers to — an onion
     /// address torrc forwards, an iroh name, an old domain. An AUTH
@@ -68,6 +70,16 @@ pub struct Relay {
     /// of them; they require a canonical `service_url`.
     #[serde(default)]
     pub service_url_aliases: Vec<String>,
+    /// `[relay.onion]` — embedded onion service settings (the `onion`
+    /// cargo feature).
+    #[serde(default)]
+    pub onion: Onion,
+    /// The `ws://<addr>.onion` URLs of the embedded onion listeners,
+    /// derived from their keys at startup — never read from the file.
+    /// With no `service_url` the first is the canonical name;
+    /// otherwise all are aliases.
+    #[serde(skip)]
+    pub onion_urls: Vec<String>,
     /// Soft open-file limit to raise to at startup, capped by the hard
     /// limit (0 = leave unchanged).
     pub nofiles: u64,
@@ -144,8 +156,8 @@ pub struct Listen {
     pub real_ip_header: String,
 }
 
-/// A `[[relay.listen]]` `address`: a TCP socket address or a
-/// unix-domain-socket path.
+/// A `[[relay.listen]]` `address`: a TCP socket address, a
+/// unix-domain-socket path, or an embedded onion service.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ListenAddress {
     /// `"<ip>:<port>"` or `"[v6]:<port>"`.
@@ -153,6 +165,20 @@ pub enum ListenAddress {
     /// `"unix:<absolute path>"` — the socket's directory and the umask
     /// decide its permissions; there is no mode key.
     Unix(PathBuf),
+    /// `"onion:<nickname>"` — an embedded onion service (the `onion`
+    /// cargo feature); the nickname names the service's key directory
+    /// under `[relay.onion] state_dir`.
+    Onion(String),
+}
+
+/// Arti's slug rule for an onion service nickname: non-empty, not
+/// starting with `-`, only lowercase ASCII alphanumerics, `_`, `-`.
+fn is_onion_nickname(nickname: &str) -> bool {
+    !nickname.is_empty()
+        && !nickname.starts_with('-')
+        && nickname
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
 }
 
 impl ListenAddress {
@@ -168,22 +194,34 @@ impl ListenAddress {
                 ))
             };
         }
+        if let Some(nickname) = value.strip_prefix("onion:") {
+            return if is_onion_nickname(nickname) {
+                Ok(Self::Onion(nickname.to_owned()))
+            } else {
+                Err(format!(
+                    "invalid listener address {value:?}: onion nickname must be non-empty, \
+                     not start with '-', and contain only [a-z0-9_-]"
+                ))
+            };
+        }
         value.parse().map(Self::Tcp).map_err(|_| {
             format!(
                 "invalid listener address {value:?}: expected \
-                 \"<ip>:<port>\", \"[v6]:<port>\", or \"unix:<absolute path>\""
+                 \"<ip>:<port>\", \"[v6]:<port>\", \"unix:<absolute path>\", \
+                 or \"onion:<nickname>\""
             )
         })
     }
 }
 
-/// The configured string: `unix:`-prefixed paths round-trip exactly,
-/// socket addresses in their canonical form.
+/// The configured string: `unix:`- and `onion:`-prefixed values
+/// round-trip exactly, socket addresses in their canonical form.
 impl std::fmt::Display for ListenAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Tcp(sock) => sock.fmt(f),
             Self::Unix(path) => write!(f, "unix:{}", path.display()),
+            Self::Onion(nickname) => write!(f, "onion:{nickname}"),
         }
     }
 }
@@ -192,6 +230,78 @@ impl<'de> Deserialize<'de> for ListenAddress {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = String::deserialize(deserializer)?;
         Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// `[relay.onion]` — process-wide settings of the embedded onion
+/// service (the `onion` cargo feature). Everything but
+/// `onion_location` is restart-only.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Onion {
+    /// Arti state root: `state` (including the onion service
+    /// keystores) and `cache` live beneath it. Must be a directory
+    /// with mode 0700 owned by the relay user; missing, it is created
+    /// with mode 0700.
+    pub state_dir: PathBuf,
+    /// Concurrent rendezvous circuits per onion listener, including
+    /// ones still being established; further introductions are
+    /// dropped.
+    pub max_circuits: usize,
+    /// Arti `max_concurrent_streams_per_circuit`: Arti closes a
+    /// circuit whose client opens more streams than this. A client
+    /// multiplexes all its streams to the service on one circuit, so
+    /// this must cover an ordinary client's connection count.
+    pub max_streams_per_circuit: u32,
+    /// Introduction rate limit sent to the intro points (Arti
+    /// `rate_limit_at_intro`, requests per second). `0` leaves the
+    /// network default; then `intro_burst` must be `0` too.
+    pub intro_rate: u32,
+    /// Introduction burst for `intro_rate`; `0` = unset.
+    pub intro_burst: u32,
+    /// Advertise the first onion address as `Onion-Location` on
+    /// NIP-11, the landing page and upgrade responses of non-onion
+    /// listeners (reloadable).
+    pub onion_location: bool,
+}
+
+impl Onion {
+    /// Field rules, checked at load and at reload through
+    /// [`Config::limits`].
+    fn check(&self) -> Result<(), ServerError> {
+        if self.state_dir.as_os_str().is_empty() {
+            return Err(ServerError::RelayValue(
+                "relay.onion.state_dir must not be empty".to_owned(),
+            ));
+        }
+        if self.max_circuits == 0 {
+            return Err(ServerError::RelayValue(
+                "relay.onion.max_circuits must be at least 1".to_owned(),
+            ));
+        }
+        if self.max_streams_per_circuit == 0 {
+            return Err(ServerError::RelayValue(
+                "relay.onion.max_streams_per_circuit must be at least 1".to_owned(),
+            ));
+        }
+        for (key, value) in [
+            ("intro_rate", self.intro_rate),
+            ("intro_burst", self.intro_burst),
+        ] {
+            if value > i32::MAX as u32 {
+                return Err(ServerError::RelayValue(format!(
+                    "relay.onion.{key} must not exceed {}",
+                    i32::MAX
+                )));
+            }
+        }
+        if (self.intro_rate == 0) != (self.intro_burst == 0) {
+            return Err(ServerError::RelayValue(
+                "relay.onion.intro_rate and intro_burst must both be 0 (unset) or both at least 1"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -291,6 +401,19 @@ impl Default for WritePolicy {
     }
 }
 
+impl Default for Onion {
+    fn default() -> Self {
+        Self {
+            state_dir: PathBuf::from("./nosfry-onion"),
+            max_circuits: 256,
+            max_streams_per_circuit: 128,
+            intro_rate: 0,
+            intro_burst: 0,
+            onion_location: false,
+        }
+    }
+}
+
 impl Default for Db {
     fn default() -> Self {
         Self {
@@ -309,6 +432,16 @@ impl Relay {
         let mut profiles = self.profiles.clone();
         profiles.entry(default_profile()).or_default();
         profiles
+    }
+
+    /// The relay's canonical name: `service_url`, or the first
+    /// derived onion URL when `service_url` is empty, or `""` when
+    /// the relay has no name at all (AUTH disabled).
+    pub fn service_url(&self) -> &str {
+        if !self.service_url.is_empty() {
+            return &self.service_url;
+        }
+        self.onion_urls.first().map_or("", String::as_str)
     }
 
     /// `[[relay.listen]]` invariants, checked at load and at reload
@@ -335,6 +468,21 @@ impl Relay {
                     listen.address, listen.profile
                 )));
             }
+            if let ListenAddress::Onion(nickname) = &listen.address
+                && !listen.real_ip_header.is_empty()
+            {
+                return Err(ServerError::RelayValue(format!(
+                    "relay.listen: onion listener \"onion:{nickname}\" cannot set \
+                     real_ip_header (onion connections carry no client address)"
+                )));
+            }
+            #[cfg(not(feature = "onion"))]
+            if let ListenAddress::Onion(nickname) = &listen.address {
+                return Err(ServerError::RelayValue(format!(
+                    "relay.listen: \"onion:{nickname}\" needs nosfry built with the onion \
+                     cargo feature (cargo install nosfry --features onion)"
+                )));
+            }
         }
         Ok(())
     }
@@ -347,6 +495,8 @@ impl Default for Relay {
             profiles: BTreeMap::from([("default".to_owned(), Profile::default())]),
             service_url: String::new(),
             service_url_aliases: Vec::new(),
+            onion: Onion::default(),
+            onion_urls: Vec::new(),
             nofiles: 1_000_000,
             max_websocket_payload_size: 131_072,
             auto_ping_seconds: 55,
@@ -434,15 +584,22 @@ impl Config {
             ));
         }
         self.relay.check_listeners()?;
+        self.relay.onion.check()?;
         nosfry_core::limits::check_payload_size(
             self.relay.max_websocket_payload_size,
             &self.events,
         )
         .map_err(|e| ServerError::RelayValue(e.to_string()))?;
-        let names = nosfry_core::url::RelayNames::parse(
-            &self.relay.service_url,
-            &self.relay.service_url_aliases,
-        )?;
+        // The configured aliases, then the derived onion URLs — parse
+        // dedups, so the canonical onion name is not repeated.
+        let aliases: Vec<String> = self
+            .relay
+            .service_url_aliases
+            .iter()
+            .chain(&self.relay.onion_urls)
+            .cloned()
+            .collect();
+        let names = nosfry_core::url::RelayNames::parse(self.relay.service_url(), &aliases)?;
         self.relay
             .management
             .admin_keys()
@@ -539,8 +696,10 @@ impl Config {
     /// `relay.limits.max_filter_limit_count`,
     /// `relay.limits.max_sync_events`, and
     /// `relay.max_sync_memory_bytes` (reader threads hold them),
-    /// `relay.max_pending_outbound_bytes_total`, and
-    /// `relay.max_subscription_bytes_total` (ditto).
+    /// `relay.max_pending_outbound_bytes_total`,
+    /// `relay.max_subscription_bytes_total` (ditto), and every
+    /// `[relay.onion]` key but `onion_location`. `relay.onion_urls`
+    /// is derived at startup and always carries over.
     #[must_use]
     pub fn reloadable_from(&self, mut new: Self) -> (Self, Vec<&'static str>) {
         let mut ignored = Vec::new();
@@ -595,6 +754,19 @@ impl Config {
             ignored.push("relay.max_subscription_bytes_total");
             relay.max_subscription_bytes_total = running.max_subscription_bytes_total;
         }
+        // `[relay.onion]` is restart-only except `onion_location`;
+        // `onion_urls` is derived at startup, never from the file.
+        let onion_location = relay.onion.onion_location;
+        if (Onion {
+            onion_location: running.onion.onion_location,
+            ..relay.onion.clone()
+        }) != running.onion
+        {
+            ignored.push("relay.onion");
+        }
+        relay.onion.clone_from(&running.onion);
+        relay.onion.onion_location = onion_location;
+        relay.onion_urls.clone_from(&running.onion_urls);
         (new, ignored)
     }
 }
@@ -972,5 +1144,132 @@ mod tests {
                 && err_merged.to_string().contains("tor"),
             "{err_merged}"
         );
+    }
+
+    /// `onion:<nickname>` address forms: Arti's slug rule, and the
+    /// display/parse round-trip.
+    #[test]
+    fn onion_address_forms() {
+        for good in ["a", "nosfry", "relay_1", "a-b_c-9"] {
+            let listen = ListenAddress::parse(&format!("onion:{good}")).unwrap();
+            assert_eq!(listen.to_string(), format!("onion:{good}"));
+        }
+        for bad in ["", "-x", "UPPER", "a.b", "a/b", "a+b", "a:b", "x y"] {
+            assert!(
+                ListenAddress::parse(&format!("onion:{bad}")).is_err(),
+                "onion:{bad} must not parse"
+            );
+        }
+        // The generic error text lists every form.
+        let err = ListenAddress::parse("nope").unwrap_err();
+        assert!(err.contains("onion:<nickname>"), "{err}");
+    }
+
+    /// An onion listener cannot set `real_ip_header`: circuits carry
+    /// no client address, so the header would be silently ignored.
+    #[test]
+    fn onion_listener_refuses_real_ip_header() {
+        let mut config = Config::default();
+        config.relay.listen = vec![Listen {
+            address: ListenAddress::Onion("x".to_owned()),
+            profile: "default".to_owned(),
+            real_ip_header: "X-Forwarded-For".to_owned(),
+        }];
+        let err = config.limits().unwrap_err().to_string();
+        assert!(err.contains("real_ip_header"), "{err}");
+    }
+
+    /// Builds without the `onion` feature refuse an onion listener
+    /// with a message naming the feature, at load and at reload
+    /// (both go through `limits()`).
+    #[cfg(not(feature = "onion"))]
+    #[test]
+    fn onion_listener_needs_the_feature() {
+        let mut config = Config::default();
+        config.relay.listen = vec![Listen {
+            address: ListenAddress::Onion("x".to_owned()),
+            profile: "default".to_owned(),
+            real_ip_header: String::new(),
+        }];
+        let err = config.limits().unwrap_err().to_string();
+        assert!(err.contains("onion") && err.contains("feature"), "{err}");
+    }
+
+    /// Every `[relay.onion]` rule is enforced through `limits()`,
+    /// which the load and reload paths share.
+    #[test]
+    fn onion_settings_validate() {
+        let mut config = Config::default();
+        config.relay.onion.state_dir = PathBuf::new();
+        assert!(config.limits().is_err());
+
+        config.relay.onion = Onion {
+            max_circuits: 0,
+            ..Onion::default()
+        };
+        assert!(config.limits().is_err());
+
+        config.relay.onion = Onion {
+            max_streams_per_circuit: 0,
+            ..Onion::default()
+        };
+        assert!(config.limits().is_err());
+
+        for (rate, burst) in [(1, 0), (0, 1)] {
+            config.relay.onion = Onion {
+                intro_rate: rate,
+                intro_burst: burst,
+                ..Onion::default()
+            };
+            assert!(config.limits().is_err(), "rate {rate} burst {burst}");
+        }
+
+        config.relay.onion = Onion {
+            intro_rate: i32::MAX as u32 + 1,
+            intro_burst: 1,
+            ..Onion::default()
+        };
+        assert!(config.limits().is_err());
+    }
+
+    /// The first derived onion URL is canonical with no
+    /// `service_url`; with one it joins the aliases.
+    #[test]
+    fn onion_urls_name_the_relay() {
+        let mut config = Config::default();
+        config.relay.onion_urls = vec!["ws://aaa.onion".into(), "ws://bbb.onion".into()];
+        assert_eq!(config.relay.service_url(), "ws://aaa.onion");
+        let limits = config.limits().unwrap();
+        assert!(limits.auth.names().matches("ws://aaa.onion"));
+        assert!(limits.auth.names().matches("ws://bbb.onion"));
+
+        config.relay.service_url = "wss://relay.example.com".into();
+        let limits_named = config.limits().unwrap();
+        assert!(limits_named.auth.names().matches("wss://relay.example.com"));
+        assert!(limits_named.auth.names().matches("ws://aaa.onion"));
+    }
+
+    /// `onion_location` reloads; every other `[relay.onion]` key is
+    /// restart-only, and `onion_urls` always carries over.
+    #[test]
+    fn reload_keeps_onion_settings() {
+        let mut running = Config::default();
+        running.relay.onion.max_circuits = 64;
+        running.relay.onion_urls = vec!["ws://aaa.onion".into()];
+        let mut new = Config::default();
+        new.relay.onion.max_circuits = 128;
+        new.relay.onion.onion_location = true;
+        let (merged, ignored) = running.reloadable_from(new);
+        assert!(ignored.contains(&"relay.onion"), "{ignored:?}");
+        assert_eq!(merged.relay.onion.max_circuits, 64);
+        assert!(merged.relay.onion.onion_location);
+        assert_eq!(merged.relay.onion_urls, vec!["ws://aaa.onion"]);
+
+        // Only `onion_location` differing does not report the table.
+        let mut changed = running.clone();
+        changed.relay.onion.onion_location = true;
+        let (merged2, ignored2) = running.reloadable_from(changed);
+        assert!(!ignored2.contains(&"relay.onion"), "{ignored2:?}");
+        assert!(merged2.relay.onion.onion_location);
     }
 }

@@ -2732,6 +2732,74 @@ async fn nip11_lists_42_59_only_with_auth_service_url() {
     relay.stop().await;
 }
 
+/// `relay.onion_urls` (derived from the embedded onion listeners at
+/// startup, or set directly in a build without the feature) names the
+/// relay over the wire: the first URL is canonical with no
+/// `service_url`, so AUTH is on and the NIP-42 relay tag may name it.
+/// `Onion-Location` advertises the first URL on NIP-11, the landing
+/// page and the WebSocket upgrade response while
+/// `relay.onion.onion_location` is on.
+#[tokio::test]
+async fn onion_urls_name_the_relay_on_the_wire() {
+    let mut config = common::config();
+    config.relay.onion_urls = vec!["ws://abcdefghij.onion".into()];
+    config.relay.onion.onion_location = true;
+    let relay = Relay::start_with(config).await;
+
+    // NIP-11, the landing page and the 101 upgrade all carry the
+    // header.
+    let text = http_get(relay.addr, "/").await;
+    assert!(
+        text.contains("onion-location: http://abcdefghij.onion/"),
+        "{text}"
+    );
+    let doc = nip11_body(&text);
+    assert!(
+        doc["supported_nips"]
+            .as_array()
+            .unwrap()
+            .contains(&json!(42)),
+        "{doc}"
+    );
+    let text = http_get_browser(relay.addr, "/").await;
+    assert!(
+        text.contains("onion-location: http://abcdefghij.onion/"),
+        "{text}"
+    );
+    let head = http_head(relay.addr, WS_UPGRADE).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    assert!(
+        head.contains("onion-location: http://abcdefghij.onion/"),
+        "{head}"
+    );
+
+    // The relay tag in a NIP-42 answer may name the onion URL.
+    let mut ws = relay.connect().await;
+    send_text(&mut ws, &req_wire("sub", "{\"kinds\":[4]}")).await;
+    let auth = json(&recv_text(&mut ws, T).await);
+    assert_eq!(auth[0], "AUTH", "{auth}");
+    let challenge = auth[1].as_str().unwrap().to_owned();
+    drop(json(&recv_text(&mut ws, T).await)); // CLOSED
+    send_text(
+        &mut ws,
+        &auth_wire(&key(1), &challenge, "ws://abcdefghij.onion"),
+    )
+    .await;
+    assert_eq!(json(&recv_text(&mut ws, T).await)[2], true);
+    relay.stop().await;
+
+    // With `onion_location` off the header stays out.
+    let mut config = common::config();
+    config.relay.onion_urls = vec!["ws://abcdefghij.onion".into()];
+    let relay = Relay::start_with(config).await;
+    let text = http_get(relay.addr, "/").await;
+    assert!(!text.contains("onion-location"), "{text}");
+    let head = http_head(relay.addr, WS_UPGRADE).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    assert!(!head.contains("onion-location"), "{head}");
+    relay.stop().await;
+}
+
 #[tokio::test]
 async fn auth_dm_flow_restricts_reads_to_involved() {
     let relay = Relay::start_with(auth_config()).await;
@@ -4021,6 +4089,61 @@ async fn nip62_vanish_deletes_covered_events_and_blocks_republish() {
     relay.stop().await;
 }
 
+/// With no `service_url` the derived onion URL is canonical: a
+/// kind-62 request to vanish naming it erases the author's events on
+/// this relay, while one naming a foreign relay is only stored.
+#[tokio::test]
+async fn nip62_vanish_names_the_onion_url() {
+    let mut config = common::config();
+    config.relay.onion_urls = vec!["ws://abcdefghij.onion".into()];
+    config.relay.access.rules = vec![];
+    let relay = Relay::start_with(config).await;
+    let mut ws = relay.connect().await;
+    let (author, other) = (key(63), key(64));
+    let t = now();
+    let note = common::event(&author, 1, t - 10, &json!([]), "gone");
+    let keep = common::event(&other, 1, t - 4, &json!([]), "untouched");
+    for ev in [&note, &keep] {
+        send_text(&mut ws, &event_wire(ev)).await;
+        assert_eq!(recv_ok(&mut ws, ev).await[2], true);
+    }
+    // A request naming a relay that is not this one is stored but
+    // honored nowhere here.
+    let foreign = common::event(
+        &other,
+        62,
+        t - 1,
+        &json!([["relay", "wss://elsewhere.test"]]),
+        "not you",
+    );
+    send_text(&mut ws, &event_wire(&foreign)).await;
+    assert_eq!(recv_ok(&mut ws, &foreign).await[2], true);
+    let mut want = vec![
+        note.id().to_string(),
+        keep.id().to_string(),
+        foreign.id().to_string(),
+    ];
+    settled_ids(&mut ws, "v", &mut want).await;
+
+    // Naming the canonical onion URL erases the author's window.
+    let vanish = common::event(
+        &author,
+        62,
+        t,
+        &json!([["relay", "ws://abcdefghij.onion"]]),
+        "bye",
+    );
+    send_text(&mut ws, &event_wire(&vanish)).await;
+    assert_eq!(recv_ok(&mut ws, &vanish).await[2], true);
+    let mut want = vec![
+        vanish.id().to_string(),
+        keep.id().to_string(),
+        foreign.id().to_string(),
+    ];
+    settled_ids(&mut ws, "v", &mut want).await;
+    relay.stop().await;
+}
+
 #[tokio::test]
 async fn nip62_vanish_bypasses_write_policy() {
     let (_dir, plugin) = write_plugin(&loop_plugin(
@@ -4122,6 +4245,30 @@ async fn http_raw(addr: std::net::SocketAddr, request: &str, body: &str) -> (u16
     )
 }
 
+/// A raw WebSocket upgrade request.
+const WS_UPGRADE: &str = "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: \
+                         Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                         Sec-WebSocket-Version: 13\r\n\r\n";
+
+/// The response head of one raw request whose reply keeps the
+/// connection open (a 101 WebSocket upgrade): read until the blank
+/// line and stop.
+async fn http_head(addr: std::net::SocketAddr, request: &str) -> String {
+    let mut tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+    tcp.write_all(request.as_bytes()).await.unwrap();
+    let mut buf = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    while !buf.windows(4).any(|window| window == b"\r\n\r\n") {
+        let read = tokio::time::timeout(T, tcp.read(&mut chunk))
+            .await
+            .expect("response head deadline")
+            .unwrap();
+        assert!(read > 0, "connection closed before the head");
+        buf.extend_from_slice(&chunk[..read]);
+    }
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 /// CORS on the browser-facing surface: the preflight advertises POST
 /// and Authorization (the Fetch wildcard never covers
 /// `Authorization`), and every NIP-86 answer — 401 and 200 — carries
@@ -4176,12 +4323,13 @@ async fn cors_preflight_and_management() {
 /// `u` tag normalizes to `relay.example.com` — the `service_url`
 /// every management test configures.
 fn nip98(k: &secp256k1::Keypair, body: &str) -> String {
+    nip98_u(k, body, "http://relay.example.com/")
+}
+
+/// [`nip98`] with an explicit `u` tag value.
+fn nip98_u(k: &secp256k1::Keypair, body: &str, u: &str) -> String {
     let payload = faster_hex::hex_string(&sha2::Sha256::digest(body.as_bytes()));
-    let tags = json!([
-        ["u", "http://relay.example.com/"],
-        ["method", "POST"],
-        ["payload", payload],
-    ]);
+    let tags = json!([["u", u], ["method", "POST"], ["payload", payload]]);
     auth_b64(&common::event(k, 27235, now(), &tags, ""))
 }
 
@@ -4241,6 +4389,29 @@ fn mgmt_config(admin: &secp256k1::Keypair) -> nosfry::config::Config {
     config.relay.service_url = "wss://relay.example.com".into();
     config.relay.management.admins = vec![pubkey_hex(admin)];
     config
+}
+
+/// With no `service_url` the derived onion URL is canonical, so a
+/// NIP-98 `u` tag naming its host is a valid management credential.
+#[tokio::test]
+async fn nip98_u_tag_may_name_the_onion_url() {
+    let admin = key(10);
+    let mut config = common::config();
+    config.relay.onion_urls = vec!["ws://abcdefghij.onion".into()];
+    config.relay.management.admins = vec![pubkey_hex(&admin)];
+    let relay = Relay::start_with(config).await;
+    let body = json!({"method": "supportedmethods", "params": []}).to_string();
+    let auth = nip98_u(&admin, &body, "http://abcdefghij.onion/");
+    let (status, text) = http_post(
+        relay.addr,
+        &body,
+        Some(&auth),
+        "application/nostr+json+rpc",
+        &[],
+    )
+    .await;
+    assert_eq!(status, 200, "{text}");
+    relay.stop().await;
 }
 
 #[tokio::test]

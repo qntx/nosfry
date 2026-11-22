@@ -62,3 +62,30 @@ unless you ask otherwise, when the fixed release is out.
 - A write-policy plugin runs as a child process with the relay's
   privileges and sees every verified event. The container image has no
   shell, so it refuses to start with a plugin configured.
+- The embedded onion listener (`--features onion`) learns no client IP
+  addresses: each connection arrives on a Tor rendezvous circuit, all
+  circuits of one listener share the listener-wide peer identity (its
+  profile's `max_connections_per_peer` and `ip_*` buckets bind them
+  together), and circuit numbers appear only in debug logs. The onion
+  listener additionally bounds concurrent circuits
+  (`relay.onion.max_circuits`), streams per circuit
+  (`max_streams_per_circuit`), and optionally the introduction-point
+  request rate (`intro_rate`/`intro_burst`). A rendezvous circuit
+  holds its `max_circuits` slot until the client closes it, so clients
+  that merely hold idle circuits open still count against the budget.
+  Arti's experimental onion proof-of-work is not wired in (it would
+  pull LGPL-3.0 dependencies), so a client multiplying circuits can
+  exhaust the onion listener — but not the clearnet listeners or the
+  store, which have their own limits.
+  The onion address is the service's identity key under
+  `relay.onion.state_dir`; anyone who copies it can serve the address.
+  Arti's own documents disagree about onion-service maturity. Arti tag
+  `arti-v2.8.0`'s `doc/OnionService.md` — the document begins "As of
+  February 2024" and was read 2026-11-22 — says: "Arti's Onion Service
+  (hidden service) support is **suitable for testing and
+  experimentation only** and should not be used for anything you care
+  about." Arti MR !3464 (merged 2025-11-13) says: "We have made these
+  features stable, so they should be safe to use. As far as I know,
+  there aren't any outstanding issues that make onion service support
+  (clients or services) insecure." Operators who need C tor's maturity
+  or onion PoW should use the torrc setup in `guides/tor.md` instead.

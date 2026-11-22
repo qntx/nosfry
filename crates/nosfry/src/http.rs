@@ -136,9 +136,9 @@ async fn preflight() -> Response {
 }
 
 /// `/.well-known/nodeinfo`: discovery pointing at `/nodeinfo/2.1` on
-/// the configured `service_url` host — 404 when it is unset.
+/// the canonical URL's host — 404 when the relay has no name.
 async fn nodeinfo_links(State(state): State<AppState>) -> Response {
-    let service_url = state.live.borrow().config.relay.service_url.clone();
+    let service_url = state.live.borrow().config.relay.service_url().to_owned();
     let Some(body) = nosfry_core::site::nodeinfo_links(&service_url) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -157,6 +157,35 @@ async fn nodeinfo() -> Response {
         )
             .into_response(),
     )
+}
+
+/// `Onion-Location` header name (`http://<addr>.onion/` value,
+/// computed per [`Live`] snapshot).
+const ONION_LOCATION: header::HeaderName = header::HeaderName::from_static("onion-location");
+
+/// The `Onion-Location` advertisement value: `http://<first onion
+/// host>/` when `relay.onion.onion_location` is set and the relay has
+/// a derived onion URL; `None` otherwise.
+pub(crate) fn onion_location(relay: &crate::config::Relay) -> Option<header::HeaderValue> {
+    if !relay.onion.onion_location {
+        return None;
+    }
+    let host = relay.onion_urls.first()?.strip_prefix("ws://")?;
+    header::HeaderValue::from_str(&format!("http://{host}/")).ok()
+}
+
+/// Insert `Onion-Location` into a response unless the request already
+/// arrived over the onion — advertising it there would send clients
+/// in circles.
+fn with_onion_location(response: Response, live: &Live, origin: &Origin) -> Response {
+    if origin.is_onion() {
+        return response;
+    }
+    let mut response = response;
+    if let Some(value) = &live.onion_location {
+        response.headers_mut().insert(ONION_LOCATION, value.clone());
+    }
+    response
 }
 
 async fn root(State(state): State<AppState>, request: Request) -> Response {
@@ -187,12 +216,16 @@ async fn root(State(state): State<AppState>, request: Request) -> Response {
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("application/nostr+json"));
     if accepts_nostr {
-        return with_cors(
-            (
-                [(header::CONTENT_TYPE, "application/nostr+json")],
-                state.live.borrow().nip11.clone(),
-            )
-                .into_response(),
+        return with_onion_location(
+            with_cors(
+                (
+                    [(header::CONTENT_TYPE, "application/nostr+json")],
+                    state.live.borrow().nip11.clone(),
+                )
+                    .into_response(),
+            ),
+            &state.live.borrow(),
+            &origin,
         );
     }
     let mut builder = Response::builder()
@@ -201,9 +234,10 @@ async fn root(State(state): State<AppState>, request: Request) -> Response {
     for (name, value) in nosfry_core::site::LANDING_HEADERS {
         builder = builder.header(name, value);
     }
-    builder
+    let response = builder
         .body(Body::from(state.live.borrow().landing.clone()))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+    with_onion_location(response, &state.live.borrow(), &origin)
 }
 
 /// Whether the request's peer — resolved `real_ip_header`-aware, the
@@ -293,6 +327,7 @@ async fn websocket(
     let Ok((response, fut)) = upgrade.upgrade(options) else {
         return Some(StatusCode::BAD_REQUEST.into_response());
     };
+    let response = with_onion_location(response.into_response(), &live, origin);
     let buckets = permit.buckets();
     // The listener profile's session limits. Running listeners are
     // validated against `profiles` at load and on every reload, so the
@@ -327,7 +362,7 @@ async fn websocket(
         }
         .instrument(span),
     );
-    Some(response.into_response())
+    Some(response)
 }
 
 /// The optional capabilities the `[relay]` configuration advertises
@@ -339,7 +374,7 @@ fn features(
     nosfry_core::info::Features {
         count: relay.limits.max_filter_limit_count > 0,
         sync: relay.limits.max_sync_events > 0,
-        auth: !relay.service_url.is_empty(),
+        auth: !relay.service_url().is_empty(),
         gift_wrap: auth.guards_gift_wraps(),
         management: !relay.management.admins.is_empty(),
     }
@@ -374,7 +409,7 @@ pub(crate) fn landing(
         &relay.info,
         moderation,
         features(relay, &limits.auth),
-        &relay.service_url,
+        relay.service_url(),
     )
 }
 

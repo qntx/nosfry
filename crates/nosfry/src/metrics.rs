@@ -9,6 +9,10 @@
 //! locks, no allocation, all `Relaxed`.
 
 use std::fmt::Write as _;
+#[cfg(feature = "onion")]
+use std::sync::Arc;
+#[cfg(feature = "onion")]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use nosfry_core::message::{ClientVerb, RelayVerb};
@@ -129,6 +133,92 @@ impl EventOutcome {
     }
 }
 
+/// The `nosfry_onion_state{listener,state}` label values, in render
+/// order. `tor_bootstrapping` covers the time between startup and the
+/// service launch attempt; the rest map Arti's `State` variants.
+#[cfg(feature = "onion")]
+pub(crate) const ONION_STATES: [&str; 8] = [
+    "tor_bootstrapping",
+    "bootstrapping",
+    "running",
+    "degraded_reachable",
+    "degraded_unreachable",
+    "recovering",
+    "broken",
+    "shutdown",
+];
+
+/// One embedded onion listener's series. The `listener` label is the
+/// configured nickname, so the series count is bounded by the
+/// `[[relay.listen]]` set.
+#[cfg(feature = "onion")]
+#[derive(Debug)]
+pub(crate) struct OnionListener {
+    /// The `listener` label value (the configured nickname).
+    listener: Arc<str>,
+    /// Index into [`ONION_STATES`] of the current state.
+    state: AtomicUsize,
+    /// `nosfry_onion_circuits` — open rendezvous circuits.
+    circuits: AtomicU64,
+    /// `nosfry_onion_circuits_rejected_total`.
+    circuits_rejected: AtomicU64,
+    /// `nosfry_onion_streams_total`.
+    streams: AtomicU64,
+}
+
+#[cfg(feature = "onion")]
+impl OnionListener {
+    /// All series at zero, state `tor_bootstrapping`.
+    pub(crate) const fn new(listener: Arc<str>) -> Self {
+        Self {
+            listener,
+            state: AtomicUsize::new(0),
+            circuits: AtomicU64::new(0),
+            circuits_rejected: AtomicU64::new(0),
+            streams: AtomicU64::new(0),
+        }
+    }
+
+    /// Record a `State` (or the pre-launch `tor_bootstrapping`) index
+    /// into [`ONION_STATES`].
+    pub(crate) fn set_state(&self, index: usize) {
+        self.state.store(index, Ordering::Relaxed);
+    }
+
+    /// One rendezvous circuit opened.
+    pub(crate) fn circuit_open(&self) {
+        self.circuits.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// One rendezvous circuit closed.
+    pub(crate) fn circuit_close(&self) {
+        self.circuits.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    /// One introduction dropped because `max_circuits` was full.
+    pub(crate) fn circuit_rejected(&self) {
+        self.circuits_rejected.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// One stream opened on a rendezvous circuit.
+    pub(crate) fn stream(&self) {
+        self.streams.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[cfg(all(feature = "onion", test))]
+impl OnionListener {
+    /// Test readout: open circuits, rejected introductions, served
+    /// streams.
+    pub(crate) fn counters(&self) -> (u64, u64, u64) {
+        (
+            self.circuits.load(Ordering::Relaxed),
+            self.circuits_rejected.load(Ordering::Relaxed),
+            self.streams.load(Ordering::Relaxed),
+        )
+    }
+}
+
 /// One `nosfry_reader_busy_total{msg}` class: work a shard dropped
 /// because the reader admission limits were hit.
 #[derive(Debug, Clone, Copy)]
@@ -189,6 +279,10 @@ pub(crate) struct Metrics {
     store_errors: [AtomicU64; StoreOp::ALL.len()],
     /// `nosfry_reader_busy_total{msg}`.
     reader_busy: [AtomicU64; ReaderBusy::ALL.len()],
+    /// One [`OnionListener`] slot per `onion:` listener in the
+    /// startup config, in listener order.
+    #[cfg(feature = "onion")]
+    onion: Vec<Arc<OnionListener>>,
 }
 
 impl Metrics {
@@ -212,7 +306,30 @@ impl Metrics {
             rejected: AtomicU64::new(0),
             store_errors: [const { AtomicU64::new(0) }; StoreOp::ALL.len()],
             reader_busy: [const { AtomicU64::new(0) }; ReaderBusy::ALL.len()],
+            #[cfg(feature = "onion")]
+            onion: Vec::new(),
         }
+    }
+
+    /// Add the per-listener slots the `nosfry_onion_*` series hang
+    /// on — one per `onion:` listener in the startup config.
+    /// Called once in `Server::new`, before the `Metrics` is shared.
+    #[cfg(feature = "onion")]
+    pub(crate) fn with_onion_listeners(
+        mut self,
+        listeners: impl IntoIterator<Item = Arc<str>>,
+    ) -> Self {
+        self.onion = listeners
+            .into_iter()
+            .map(|listener| Arc::new(OnionListener::new(listener)))
+            .collect();
+        self
+    }
+
+    /// The onion listeners' metric slots, in `[[relay.listen]]` order.
+    #[cfg(feature = "onion")]
+    pub(crate) fn onion_listeners(&self) -> &[Arc<OnionListener>] {
+        &self.onion
     }
 
     /// One inbound text frame with a recognized client verb, counted
@@ -462,7 +579,87 @@ impl Metrics {
             subscription_bytes,
             reader_jobs,
         );
+        #[cfg(feature = "onion")]
+        self.render_onion(&mut out);
         out
+    }
+
+    /// The `nosfry_onion_*` series, one slot per configured onion
+    /// listener. State and circuits are gauges and always emitted;
+    /// the totals follow the existing convention and appear once
+    /// non-zero.
+    #[cfg(feature = "onion")]
+    fn render_onion(&self, out: &mut String) {
+        if self.onion.is_empty() {
+            return;
+        }
+        family(
+            out,
+            "nosfry_onion_state",
+            "Embedded onion service state by listener.",
+            "gauge",
+        );
+        for slot in &self.onion {
+            let current = slot.state.load(Ordering::Relaxed);
+            for (index, state) in ONION_STATES.iter().enumerate() {
+                writeln!(
+                    out,
+                    "nosfry_onion_state{{listener=\"{}\",state=\"{state}\"}} {}",
+                    slot.listener,
+                    usize::from(index == current)
+                )
+                .ok();
+            }
+        }
+        family(
+            out,
+            "nosfry_onion_circuits",
+            "Open rendezvous circuits per embedded onion listener.",
+            "gauge",
+        );
+        for slot in &self.onion {
+            writeln!(
+                out,
+                "nosfry_onion_circuits{{listener=\"{}\"}} {}",
+                slot.listener,
+                slot.circuits.load(Ordering::Relaxed)
+            )
+            .ok();
+        }
+        family(
+            out,
+            "nosfry_onion_circuits_rejected_total",
+            "Introductions dropped because the listener's circuit budget was full.",
+            "counter",
+        );
+        for slot in &self.onion {
+            let value = slot.circuits_rejected.load(Ordering::Relaxed);
+            if value > 0 {
+                writeln!(
+                    out,
+                    "nosfry_onion_circuits_rejected_total{{listener=\"{}\"}} {value}",
+                    slot.listener
+                )
+                .ok();
+            }
+        }
+        family(
+            out,
+            "nosfry_onion_streams_total",
+            "Streams served on rendezvous circuits per embedded onion listener.",
+            "counter",
+        );
+        for slot in &self.onion {
+            let value = slot.streams.load(Ordering::Relaxed);
+            if value > 0 {
+                writeln!(
+                    out,
+                    "nosfry_onion_streams_total{{listener=\"{}\"}} {value}",
+                    slot.listener
+                )
+                .ok();
+            }
+        }
     }
 }
 

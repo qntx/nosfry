@@ -122,6 +122,9 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Security
 
+- The `cargo deny` advisories and licence exceptions added for Arti's
+  dependency tree are tracked in #116.
+
 - NIP-86 `banpubkey`, `disallowkind` and the allow lists only refused
   new publishes: events stored before the entry was added were still
   served to every `REQ`, `COUNT` and `NEG-OPEN`. They are now hidden at
@@ -192,6 +195,28 @@ The format is based on [Keep a Changelog]; this project follows
   `anonymous_kinds` exempts single-use-key kinds such as 445 from
   the allow-list author check so allow-list relays can carry Marmot
   content.
+
+- **Embedded Tor onion service (native, opt-in).** A `[[relay.listen]]`
+  address of `onion:<nickname>` serves the relay as a Tor onion service
+  embedded in the process through Arti 0.48, behind the new `onion`
+  cargo feature — off by default, and absent from the published
+  binaries and container image (`cargo install nosfry --locked
+  --features onion`). Each rendezvous circuit is a connection on the
+  shared HTTP/WebSocket path, all circuits of a listener share the
+  listener-wide peer identity (so its profile's
+  `max_connections_per_peer` and per-peer buckets bind them together),
+  and `[relay.onion]` bounds circuits (`max_circuits`), streams per
+  circuit (`max_streams_per_circuit`) and optionally the
+  introduction-point rate (`intro_rate`/`intro_burst`). Clearnet
+  listeners serve while the onion listener bootstraps in the
+  background with capped retries. The first derived onion URL is the
+  canonical `service_url` when none is set (every onion URL is an
+  alias otherwise), `onion_location` advertises it to non-onion
+  clients, `nosfry onion address` prints the `ws://<addr>.onion` URLs
+  without starting the relay, and `nosfry_onion_*` metrics report
+  state, circuits, streams and rejections. Write-policy plugins see
+  onion connections as `"sourceType":"Onion"`.
+
 - `nosfry sync <url> [--filter] [--dir down|up|both] [--since]
   [--until]` reconciles the local database with any NIP-77 relay
   (nosfry, strfry) and transfers the difference (native). Memory stays
@@ -281,6 +306,13 @@ The format is based on [Keep a Changelog]; this project follows
   up deterministically on signal (guide: `guides/test-relay.md`).
 
 ### Changed
+
+- `rusqlite` is held at 0.40.2 (libsqlite3-sys 0.38.2) across the whole
+  workspace lockfile so Arti 0.48 resolves (#116). The default native
+  binary and the Workers bundle link no SQLite, so neither changes;
+  SQLite is linked by nosfry-sql's optional `rusqlite` feature (tests
+  and downstream users) and by `--features onion` builds (Arti's
+  directory cache).
 
 - **Listener configuration moved (native).** `[[relay.listen]]`
   entries (`address`, `profile`, `real_ip_header`) replace `[relay]

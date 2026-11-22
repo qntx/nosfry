@@ -84,8 +84,12 @@ and NodeInfo name only `service_url`.
 
 Each `[[relay.listen]]` table holds:
 
-- `address` (required): `"<ip>:<port>"`, `"[<ipv6>]:<port>"`, or
-  `"unix:<absolute path>"` for a Unix-domain socket.
+- `address` (required): `"<ip>:<port>"`, `"[<ipv6>]:<port>"`,
+  `"unix:<absolute path>"` for a Unix-domain socket, or
+  `"onion:<nickname>"` for an embedded onion service (needs a build
+  with `--features onion`; the nickname is lowercase ASCII
+  alphanumerics, `_` and `-`, non-empty, not starting with `-`;
+  `real_ip_header` must be empty on an onion listener).
 - `profile` (default `"default"`): the `[relay.profiles.<name>]` whose
   connection cap and rate limits apply to this listener's connections.
 - `real_ip_header` (default `""`): a header carrying the client address,
@@ -96,6 +100,23 @@ At least one listener is required, addresses must be unique, and every
 `profile` must exist; the relay refuses to start otherwise. A reload keeps the
 running listeners and logs `relay.listen` among the ignored restart-only keys. See
 [Listeners and peers](#listeners-and-peers).
+
+### `[relay.onion]`
+
+Settings of the embedded onion service — used only by `onion:`
+listeners, which need a build with `--features onion`. The derived
+`ws://<addr>.onion` URLs act as the relay's name: with an empty
+`service_url` the first is the canonical URL, otherwise all are
+aliases.
+
+| Key                                   | Default           | Reload  | Meaning                                                                                                                                                 |
+| ------------------------------------- | ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relay.onion.state_dir`               | `"./nosfry-onion"` | restart | Arti state root (`state/` with the service keystores, `cache/` beneath it). A missing directory is created with mode 0700; an existing one must already be mode 0700. |
+| `relay.onion.max_circuits`            | `256`             | restart | Concurrent rendezvous circuits per onion listener, including ones being established; further introductions are dropped.                                   |
+| `relay.onion.max_streams_per_circuit` | `128`             | restart | Streams a client may open on one circuit before Arti closes it; a client multiplexes all its connections onto that circuit.   |                                                                                         |
+| `relay.onion.intro_rate`              | `0`               | restart | Introduction rate limit announced to the intro points (requests per second); `0` = unset, and then `intro_burst` must be `0` too.                        |
+| `relay.onion.intro_burst`             | `0`               | restart | Introduction burst paired with `intro_rate`.                                                                                                            |
+| `relay.onion.onion_location`          | `false`           | live    | Advertise the first onion address as `Onion-Location` on NIP-11, the landing page and upgrade responses of non-onion listeners.                           |
 
 ### `[relay.limits]`
 

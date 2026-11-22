@@ -118,6 +118,37 @@ real_ip_header = ""
 # [[relay.listen]]
 # address = "unix:/run/nosfry/nosfry.sock"
 # profile = "unix"
+# Embedded onion service (needs a build with --features onion; the
+# address is derived from the service's persistent key under
+# [relay.onion] state_dir — `nosfry onion address` prints it):
+# [[relay.listen]]
+# address = "onion:nosfry"
+# profile = "onion"
+
+# Embedded onion service settings (the `onion` cargo feature).
+# Everything here is restart-only except `onion_location`.
+[relay.onion]
+# Arti state root: `state/` (with the onion service keystores) and
+# `cache/` live beneath it. Must be a directory with mode 0700 owned
+# by the relay user; missing, it is created with mode 0700. Losing
+# `state/keystore/hss/<nickname>/ks_hs_id.ed25519_expanded_private`
+# changes the onion address.
+state_dir = "./nosfry-onion"
+# Concurrent rendezvous circuits per onion listener, including ones
+# still being established; further introductions are dropped.
+max_circuits = 256
+# Streams one client may open on a circuit before Arti closes it
+# (Arti `max_concurrent_streams_per_circuit`). A client multiplexes
+# all its connections on one circuit, so this covers all of them.
+max_streams_per_circuit = 128
+# Introduction rate limit announced to the intro points (requests
+# per second and burst). Both 0 = network default; setting one
+# requires the other.
+intro_rate  = 0
+intro_burst = 0
+# Advertise the first onion address as `Onion-Location` on NIP-11,
+# the landing page and upgrade responses of non-onion listeners.
+onion_location = false
 
 [relay.limits]
 # Maximum filters per REQ.

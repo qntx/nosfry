@@ -30,6 +30,8 @@ mod http;
 mod limiter;
 mod management;
 mod metrics;
+#[cfg(feature = "onion")]
+pub mod onion;
 mod peer;
 mod policy;
 mod reader;
@@ -135,6 +137,10 @@ pub enum ServerError {
     /// A worker thread failed to start.
     #[error("thread spawn failed: {0}")]
     Spawn(#[source] std::io::Error),
+    /// An embedded-onion (Arti) failure.
+    #[cfg(feature = "onion")]
+    #[error("onion: {0}")]
+    Onion(String),
 }
 
 /// The live-reloadable slice of server state. Every reader clones the
@@ -163,6 +169,10 @@ pub(crate) struct Live {
     /// Parsed `[relay.management] admins` — hex strings are validated
     /// at load; this set is parsed once per snapshot.
     pub(crate) admins: Arc<[PublicKey]>,
+    /// `Onion-Location` advertisement for non-onion listeners —
+    /// `Some` when `relay.onion.onion_location` is set and the relay
+    /// has a derived onion URL. Rebuilt on each reload.
+    pub(crate) onion_location: Option<axum::http::HeaderValue>,
 }
 
 /// The `monitors` shard channel pairs.
@@ -394,7 +404,7 @@ fn log_invalid_reload(err: &ServerError) {
 /// One notice when access rules gate kinds but AUTH is off: gated
 /// writes are refused because the gate cannot run.
 fn log_restricted_writes(config: &Config) {
-    if !config.relay.service_url.is_empty() {
+    if !config.relay.service_url().is_empty() {
         return;
     }
     let Ok(rules) = nosfry_core::access::AccessRules::compile(&config.relay.access) else {
@@ -436,6 +446,7 @@ fn apply_reload(
     };
     log_restricted_writes(&merged);
     tracing::info!("configuration reloaded");
+    let onion_location = http::onion_location(&merged.relay);
     Live {
         nip11: live.nip11.clone(),
         landing: live.landing.clone(),
@@ -444,6 +455,7 @@ fn apply_reload(
         profile_limits: Arc::new(profile_limits),
         policy,
         admins,
+        onion_location,
     }
 }
 
@@ -488,7 +500,12 @@ impl Server {
         let store = Arc::new(Store::open(&config.db.path, &config.store_options())?);
         let monitors = config.relay.threads.monitors.max(1);
         let readers = config.relay.threads.readers.max(1);
-        let metrics = Arc::new(metrics::Metrics::new());
+        // Process metrics, with one slot per `onion:` listener under
+        // the `onion` feature.
+        let metrics = metrics::Metrics::new();
+        #[cfg(feature = "onion")]
+        let metrics = metrics.with_onion_listeners(onion_nicknames(&config));
+        let metrics = Arc::new(metrics);
         // Process-wide pending outbound bytes, shared by every
         // connection's `Outbound`; process-wide sealed-sync-storage
         // bytes, shared by every reader; process-wide live-subscription
@@ -546,6 +563,7 @@ impl Server {
             profile_limits: Arc::new(profile_limits),
             policy: start_policy(&config.relay.write_policy),
             admins,
+            onion_location: http::onion_location(&config.relay),
         }));
 
         // Writer.
@@ -646,6 +664,37 @@ impl Server {
     }
 }
 
+/// The `onion:` listeners' nicknames, in `[[relay.listen]]` order —
+/// the labels of the per-listener `nosfry_onion_*` metric slots.
+#[cfg(feature = "onion")]
+fn onion_nicknames(config: &Config) -> impl Iterator<Item = Arc<str>> + '_ {
+    config.relay.listen.iter().filter_map(|listen| {
+        if let ListenAddress::Onion(nickname) = &listen.address {
+            Some(Arc::from(nickname.as_str()))
+        } else {
+            None
+        }
+    })
+}
+
+/// `config` with `relay.onion_urls` set from the bound onion
+/// listeners — the `ws://<addr>.onion` URLs exist only after `bind`
+/// derives the keys.
+#[cfg(feature = "onion")]
+fn with_onion_urls(mut config: Config, listeners: &[Listener]) -> Config {
+    let derived: Vec<String> = listeners
+        .iter()
+        .filter_map(|listener| match &listener.0 {
+            ListenerKind::Onion { bound, .. } => Some(bound.url.clone()),
+            _ => None,
+        })
+        .collect();
+    if !derived.is_empty() {
+        config.relay.onion_urls = derived;
+    }
+    config
+}
+
 /// Read deadline for a complete HTTP request head: a client holding a
 /// connection without finishing its headers is dropped (slowloris).
 const HEADER_READ_TIMEOUT: Duration = Duration::from_secs(10);
@@ -703,6 +752,16 @@ enum ListenerKind {
         /// Unlinks the socket file on drop.
         guard: UnixSocketGuard,
     },
+    /// An embedded onion listener (the `onion` feature): nothing is
+    /// bound at `bind` time; the shared Arti client and the service
+    /// configuration wait for the supervisor task `serve` spawns.
+    #[cfg(feature = "onion")]
+    Onion {
+        /// This listener's fixed metadata.
+        info: Arc<ListenerInfo>,
+        /// The onion service's bound state.
+        bound: onion::Bound,
+    },
 }
 
 /// Unlinks a bound unix socket's path on drop (server shutdown).
@@ -731,6 +790,8 @@ impl Listener {
             ListenerKind::Tcp { listener, .. } => listener.local_addr().ok(),
             #[cfg(unix)]
             ListenerKind::Unix { .. } => None,
+            #[cfg(feature = "onion")]
+            ListenerKind::Onion { .. } => None,
         }
     }
 }
@@ -746,6 +807,8 @@ impl std::fmt::Display for Listener {
             },
             #[cfg(unix)]
             ListenerKind::Unix { info, .. } => info.id.fmt(f),
+            #[cfg(feature = "onion")]
+            ListenerKind::Onion { info, bound } => write!(f, "{} ({})", bound.url, info.id),
         }
     }
 }
@@ -763,6 +826,11 @@ impl std::fmt::Display for Listener {
 /// already in use.
 pub async fn bind(config: &Config) -> Result<Vec<Listener>, ServerError> {
     let mut listeners = Vec::with_capacity(config.relay.listen.len());
+    // Onion identities are derived first and the shared Arti client is
+    // created once every key exists, so a keystore or filesystem
+    // mistrust error fails startup before anything serves.
+    #[cfg(feature = "onion")]
+    let mut onion_client = None;
     for listen in &config.relay.listen {
         let info = Arc::new(ListenerInfo {
             id: Arc::from(listen.address.to_string().as_str()),
@@ -789,6 +857,19 @@ pub async fn bind(config: &Config) -> Result<Vec<Listener>, ServerError> {
                 return Err(ServerError::RelayValue(format!(
                     "unix listeners are unsupported on this platform: {}",
                     path.display()
+                )));
+            }
+            ListenAddress::Onion(nickname) => {
+                #[cfg(feature = "onion")]
+                {
+                    let bound =
+                        onion::bind_service(&config.relay.onion, nickname, &mut onion_client)?;
+                    listeners.push(Listener(ListenerKind::Onion { info, bound }));
+                }
+                #[cfg(not(feature = "onion"))]
+                return Err(ServerError::RelayValue(format!(
+                    "relay.listen: \"onion:{nickname}\" needs nosfry built with the onion \
+                     cargo feature (cargo install nosfry --features onion)"
                 )));
             }
         }
@@ -863,16 +944,16 @@ async fn accept_tcp(
         tune(&tcp, keepalive);
         let origin = Origin {
             listener: Arc::clone(&info),
-            transport: Some(peer),
+            transport: peer::Transport::Tcp(peer),
         };
         serve_stream(tcp, origin, &router, &http_stop_rx, &http_tracker);
     }
 }
 
 /// Accept HTTP/1 connections on one unix listener until `http_stop`
-/// fires. A unix connection has no client address: its `Origin`
-/// transport is `None` and its peer resolves to the listener
-/// identity unless the listener's `real_ip_header` supplies one.
+/// fires. A unix connection has no client address: its peer resolves
+/// to the listener identity unless the listener's `real_ip_header`
+/// supplies one.
 #[cfg(unix)]
 async fn accept_unix(
     listener: UnixListener,
@@ -899,7 +980,7 @@ async fn accept_unix(
         };
         let origin = Origin {
             listener: Arc::clone(&info),
-            transport: None,
+            transport: peer::Transport::Unix,
         };
         serve_stream(io, origin, &router, &http_stop_rx, &http_tracker);
     }
@@ -977,6 +1058,13 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
     reload: watch::Receiver<Config>,
 ) -> Result<(), ServerError> {
+    // Derive the onion listeners' `ws://` URLs before `Server::new`
+    // freezes the config: they decide the canonical name when
+    // `service_url` is unset and join the alias set either way.
+    #[cfg(feature = "onion")]
+    let config = with_onion_urls(config, &listeners);
+    #[cfg(feature = "onion")]
+    let max_circuits = config.relay.onion.max_circuits;
     log_restricted_writes(&config);
     let server = Server::new(config)?;
     // The reload task ends when the sender side drops; it shares
@@ -997,6 +1085,8 @@ pub async fn serve(
     let http_tracker = tokio_util::task::TaskTracker::new();
     let router = server.router();
     // One accept loop per listener, sharing the trackers and shutdown.
+    #[cfg(feature = "onion")]
+    let mut onion_listeners = Vec::new();
     for listener in listeners {
         match listener.0 {
             ListenerKind::Tcp { listener, info } => {
@@ -1024,7 +1114,23 @@ pub async fn serve(
                     http_tracker.clone(),
                 ));
             }
+            #[cfg(feature = "onion")]
+            ListenerKind::Onion { info, bound } => onion_listeners.push((info, bound)),
         }
+    }
+    // One supervisor for every onion listener: it bootstraps the
+    // shared Arti client in the background, so clearnet listeners
+    // already serve while Tor is unreachable.
+    #[cfg(feature = "onion")]
+    if !onion_listeners.is_empty() {
+        http_tracker.spawn(onion::supervise(
+            onion_listeners,
+            max_circuits,
+            server.state.metrics.onion_listeners().to_vec(),
+            router.clone(),
+            http_stop_rx.clone(),
+            http_tracker.clone(),
+        ));
     }
     shutdown.await;
     stop.send_replace(true);

@@ -7,13 +7,14 @@
 //! to a service binding.
 //!
 //! - Request: `{"type":"new","event":<raw>,"receivedAt":<unix>,`
-//!   `"sourceType":"IP4"|"IP6"|"Unix"|"Sync","sourceInfo":"<ip, path,`
+//!   `"sourceType":"IP4"|"IP6"|"Unix"|"Onion"|"Sync","sourceInfo":"<ip, path,`
 //!   `or peer url>"[,"authed":"<hex pubkey>"]}` — IPv4-mapped IPv6
 //!   reports `IP4` with the v4 address; a unix-socket listener
-//!   reports `Unix` with its socket path; a `nosfry sync` download
-//!   reports `Sync` with the peer's URL (strfry's plugin input for
-//!   sync); `authed` appears only after the connection authenticated
-//!   (NIP-42), which sync never does.
+//!   reports `Unix` with its socket path; an embedded onion listener
+//!   reports `Onion` with its listener address; a `nosfry sync`
+//!   download reports `Sync` with the peer's URL (strfry's plugin
+//!   input for sync); `authed` appears only after the connection
+//!   authenticated (NIP-42), which sync never does.
 //! - Response: `{"id":"<event id>","action":"accept"|"reject"|`
 //!   `"shadowReject","msg":"..."}` (`msg` optional). Non-JSON lines
 //!   are [`ResponseError::Noise`] so transports that stream lines may
@@ -67,15 +68,15 @@ fn source_parts(ip: IpAddr) -> (&'static str, String) {
     }
 }
 
-/// The request line for a source with no client address — a
-/// unix-socket listener.
-///
-/// Reports `"sourceType":"Unix"` and the socket path, JSON-escaped —
-/// filesystem paths may carry characters a raw interpolation would
-/// break.
-pub fn request_line_unix(
+/// The request line for one connection of a listener that has no
+/// client addresses: `source_type` is `"Unix"` or `"Onion"`,
+/// `source_info` the identifying value (socket path, listener
+/// address), JSON-escaped.
+#[must_use]
+pub fn request_line_listener(
     event_json: &str,
     received_at: u64,
+    source_type: &str,
     source_info: &str,
     authed: Option<PublicKey>,
 ) -> String {
@@ -85,7 +86,7 @@ pub fn request_line_unix(
     });
     format!(
         "{{\"type\":\"new\",\"event\":{event_json},\"receivedAt\":{received_at},\
-         \"sourceType\":\"Unix\",\"sourceInfo\":{info}{authed}}}"
+         \"sourceType\":\"{source_type}\",\"sourceInfo\":{info}{authed}}}"
     )
 }
 
@@ -248,11 +249,28 @@ mod tests {
         assert_eq!(parsed.source_info, "ws://a\"b\n/");
     }
 
+    /// An onion listener reports `sourceType` `Onion` with the
+    /// listener id (`onion:<nickname>`) as the source info.
+    #[test]
+    fn request_line_onion_shape() {
+        let line = request_line_listener(EVENT_JSON, 1_700_000_000, "Onion", "onion:main", None);
+        let request: Req<'_> = serde_json::from_str(&line).unwrap();
+        assert_eq!(request.source_type, "Onion");
+        assert_eq!(request.source_info, "onion:main");
+        assert_eq!(request.event.get(), EVENT_JSON);
+    }
+
     /// A unix-socket listener reports `sourceType` `Unix` with the
     /// socket path, escaped as a JSON string.
     #[test]
     fn request_line_unix_shape() {
-        let line = request_line_unix(EVENT_JSON, 1_700_000_000, "/run/nosfry/tor.sock", None);
+        let line = request_line_listener(
+            EVENT_JSON,
+            1_700_000_000,
+            "Unix",
+            "/run/nosfry/tor.sock",
+            None,
+        );
         let request: Req<'_> = serde_json::from_str(&line).unwrap();
         assert_eq!(request.kind, "new");
         assert_eq!(request.received_at, 1_700_000_000);
@@ -260,7 +278,7 @@ mod tests {
         assert_eq!(request.source_info, "/run/nosfry/tor.sock");
         assert_eq!(request.event.get(), EVENT_JSON);
         // A path with JSON metacharacters still parses.
-        let escaped = request_line_unix(EVENT_JSON, 0, "/tmp/a\"b\nsock", None);
+        let escaped = request_line_listener(EVENT_JSON, 0, "Unix", "/tmp/a\"b\nsock", None);
         let parsed: Req<'_> = serde_json::from_str(&escaped).unwrap();
         assert_eq!(parsed.source_info, "/tmp/a\"b\nsock");
     }

@@ -47,6 +47,15 @@ Run the relay locally:
 cargo run --release -p nosfry -- relay --config nosfry.example.toml
 ```
 
+Embedded onion e2e (needs the real Tor network) and the local
+TCP-to-onion bridge used to run the conformance suite through the
+onion address (`run.sh remote`):
+
+```bash
+cargo test -p nosfry --features onion-e2e --test onion -- --ignored --nocapture
+cargo run -p nosfry --features onion-e2e --example onion_bridge -- <onion-host> <local-port>
+```
+
 Crash-recovery testing (kill -9 cycles): the `crash` test defaults to
 6 cycles; raise `NOSFRY_CRASH_CYCLES` for long runs before a release:
 
