@@ -1,7 +1,8 @@
 //! TOML configuration: the native `[relay]`/`[events]` keys Workers
 //! keeps, plus the `[worker]` section.
 
-use nosfry_core::auth::{AuthConfig, AuthRules};
+use nosfry_core::access::{AccessConfig, AccessError, AccessRules};
+use nosfry_core::auth::AuthRules;
 use nosfry_core::event::EventLimits;
 use nosfry_core::info::Info;
 use nosfry_core::limits::{
@@ -57,8 +58,8 @@ pub struct Relay {
     /// Per-connection EVENT/REQ rate limits
     /// (`nosfry_core::limits::RateLimits` verbatim).
     pub rate_limits: RateLimits,
-    /// NIP-42 authentication and restricted read kinds.
-    pub auth: AuthConfig,
+    /// `[relay.access]` — per-kind read/write access rules.
+    pub access: AccessConfig,
     /// NIP-86 management API.
     pub management: ManagementConfig,
     /// The write-policy service binding's knobs. There is no
@@ -124,7 +125,7 @@ impl Default for Relay {
             limits: ReqLimits::default(),
             filter_validation: FilterValidationConfig::default(),
             rate_limits: RateLimits::default(),
-            auth: AuthConfig::default(),
+            access: AccessConfig::default(),
             management: ManagementConfig::default(),
             write_policy: WritePolicy::default(),
             max_sync_memory_bytes: 33_554_432,
@@ -171,6 +172,9 @@ pub enum ConfigError {
     /// allowed EVENT frame.
     #[error(transparent)]
     PayloadTooSmall(#[from] nosfry_core::limits::PayloadTooSmall),
+    /// An invalid `[relay.access]` rule.
+    #[error("relay.access: {0}")]
+    Access(#[from] AccessError),
 }
 
 impl Config {
@@ -199,7 +203,7 @@ impl Config {
 
     /// `nosfry_core::limits::Limits` assembled from `[events]`,
     /// `[relay.limits]`, `[relay.filter_validation]`,
-    /// `[relay.rate_limits]`, and `[relay.auth]`. `max_sync_events`
+    /// `[relay.rate_limits]`, and `[relay.access]`. `max_sync_events`
     /// reaches the session verbatim; the effective sync event cap is
     /// its minimum with `[worker] max_scan_rows`.
     ///
@@ -224,22 +228,20 @@ impl Config {
         })
     }
 
-    /// The shared `AuthRules` from `service_url`, the restricted
-    /// kinds, and the involved-only setting.
+    /// The shared `AuthRules` from `service_url` and the compiled
+    /// `[relay.access]` rules.
     ///
     /// # Errors
     ///
     /// [`ConfigError::ServiceUrl`] on an invalid
-    /// `[relay] service_url` or `service_url_aliases` entry.
+    /// `[relay] service_url` or `service_url_aliases` entry,
+    /// [`ConfigError::Access`] on an invalid `[relay.access]` rule.
     pub fn auth_rules(&self) -> Result<std::sync::Arc<AuthRules>, ConfigError> {
         let names = nosfry_core::url::RelayNames::parse(
             &self.relay.service_url,
             &self.relay.service_url_aliases,
         )?;
-        Ok(std::sync::Arc::new(AuthRules::new(
-            names,
-            &self.relay.auth.restricted_read_kinds,
-            self.relay.auth.restrict_read_to_involved,
-        )))
+        let access = AccessRules::compile(&self.relay.access)?;
+        Ok(std::sync::Arc::new(AuthRules::new(names, access)))
     }
 }

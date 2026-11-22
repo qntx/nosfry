@@ -187,13 +187,35 @@ plugin = ""
 # `error: internal error` and the plugin process is restarted.
 timeout_seconds = 10
 
-[relay.auth]
-# Kinds served only to authenticated readers (strfry default: DMs and
-# both gift-wrap kinds).
-restricted_read_kinds = [4, 1059, 21059]
-# Serve restricted kinds only to authenticated pubkeys involved in the
-# event (author or "p" tag); false serves them to any authed reader.
-restrict_read_to_involved = true
+[relay.access]
+# Kinds whose author is not an identity: exempt from the NIP-86 pubkey
+# allow list (Marmot group messages, kind 445, use single-use keys).
+anonymous_kinds = []
+
+# A kind follows the rule that lists it, else the rule without
+# `kinds`, else it is open. Listing [[relay.access.rules]] replaces
+# the default; `rules = []` disables all access gating.
+[[relay.access.rules]]
+kinds = [4, 1059, 21059]
+read  = ["author", "recipient"]
+# `read`: [] = anyone; else after AUTH: "authenticated", "author",
+# "recipient", "allowed" (a pubkey on the NIP-86 allow list).
+write = "open"
+# `write`: "open", "authenticated" (AUTH first), or "author" (AUTH
+# as the event's author).
+
+# Owner-only storage (NIP-78 app data, NIP-37 drafts): readable and
+# writable only by the authenticated author.
+# [[relay.access.rules]]
+# kinds = [30078, 31234]
+# read  = ["author"]
+# write = "author"
+
+# Private relay: every unlisted kind requires a pubkey on the NIP-86
+# allow list (members manage it through [relay.management]); the
+# catch-all rule omits `kinds`.
+# [[relay.access.rules]]
+# read = ["allowed"]
 
 [relay.management]
 # NIP-86 management API: POST / with application/nostr+json+rpc and a

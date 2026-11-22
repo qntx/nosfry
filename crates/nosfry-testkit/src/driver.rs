@@ -3,6 +3,7 @@
 
 use std::sync::Arc;
 
+use nosfry_core::access::{AccessConfig, AccessRules, Reader, RuleConfig, Writer};
 use nosfry_core::auth::{AuthRules, ReadGate};
 use nosfry_core::event::{Event, EventId, PublicKey};
 use nosfry_core::filter::Filter;
@@ -173,10 +174,27 @@ pub struct Aftermath {
 }
 
 /// The gate the shared restricted scan applies: kind 3 is restricted
-/// to involved keys and the authed set is the first pool signer, the
-/// same rules the LMDB COUNT check uses.
+/// to involved keys and kind 0 to its author only, and the authed
+/// set is the first pool signer — the same rules the LMDB COUNT
+/// check uses.
 fn restricted_gate() -> ReadGate {
-    let rules = AuthRules::new(RelayNames::parse(SERVICE_URL, &[]).unwrap(), &[3], true);
+    let access = AccessRules::compile(&AccessConfig {
+        rules: vec![
+            RuleConfig {
+                kinds: Some(vec![3]),
+                read: vec![Reader::Author, Reader::Recipient],
+                write: Writer::Open,
+            },
+            RuleConfig {
+                kinds: Some(vec![0]),
+                read: vec![Reader::Author],
+                write: Writer::Open,
+            },
+        ],
+        anonymous_kinds: Vec::new(),
+    })
+    .unwrap();
+    let rules = AuthRules::new(RelayNames::parse(SERVICE_URL, &[]).unwrap(), access);
     let authed: Arc<[PublicKey]> = Arc::from(vec![PublicKey(
         keys()[0].x_only_public_key().0.to_byte_array(),
     )]);

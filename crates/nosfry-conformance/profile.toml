@@ -24,3 +24,22 @@ banner           = "https://example.com/banner.png"
 self             = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
 terms_of_service = "https://example.com/terms"
 privacy_policy   = "https://example.com/privacy"
+
+# Per-kind access rules (PR 2). Listing [[relay.access.rules]]
+# replaces the shipped default, so the DM/gift-wrap rule is spelled
+# out, then two owner-only kinds the gate_* cases exercise.
+[relay.access]
+
+[[relay.access.rules]]
+kinds = [4, 1059, 21059]
+read  = ["author", "recipient"]
+
+[[relay.access.rules]]
+kinds = [30078]
+read  = ["author"]
+write = "author"
+
+[[relay.access.rules]]
+kinds = [31234]
+read  = ["author"]
+write = "authenticated"

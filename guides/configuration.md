@@ -146,12 +146,12 @@ removes a profile a running listener uses is refused.
 | `relay.write_policy.plugin`          | `""`    | live   | strfry-compatible plugin command, run with `/bin/sh -c`; empty disables it.             |
 | `relay.write_policy.timeout_seconds` | `10`    | live   | Seconds the plugin has to answer before the event is rejected and the plugin restarted. |
 
-### `[relay.auth]`
+### `[relay.access]`
 
-| Key                                    | Default            | Reload | Meaning                                                                                |
-| -------------------------------------- | ------------------ | ------ | -------------------------------------------------------------------------------------- |
-| `relay.auth.restricted_read_kinds`     | `[4, 1059, 21059]` | new    | Kinds served only to authenticated readers (direct messages and both gift-wrap kinds). |
-| `relay.auth.restrict_read_to_involved` | `true`             | new    | Serve restricted kinds only to the author or a `p`-tagged pubkey.                      |
+| Key                            | Default                                                                          | Reload | Meaning                                                                                                 |
+| ------------------------------ | -------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------- |
+| `relay.access.anonymous_kinds` | `[]`                                                                             | new    | Kinds whose author is not an identity: exempt from the NIP-86 pubkey allow list (e.g. Marmot kind 445). |
+| `relay.access.rules`           | `[{ kinds = [4, 1059, 21059], read = ["author", "recipient"], write = "open" }]` | new    | `[[relay.access.rules]]` entries; `[]` disables all gating. See Access rules below.                     |
 
 ### `[relay.management]`
 
@@ -330,12 +330,73 @@ cap reached peer=<HOST>`.
 
 `[relay] service_url` (empty by default) is the relay's canonical `ws://` or `wss://` address. Clients echo it in the AUTH event's `relay` tag, and NIP-62 requests name it. `service_url_aliases` adds further names the relay accepts in those tags and in NIP-98 `u` tags.
 
-- When it is set, NIP-11 lists 42 and the relay sends each connection at most one AUTH challenge: when an unauthenticated REQ, COUNT or NEG-OPEN could match a restricted kind — the request still proceeds, with the restricted events hidden — or when one publishes a protected event. A connection may authenticate up to 8 pubkeys.
-- `[relay.auth] restricted_read_kinds` (default `[4, 1059, 21059]`, direct messages and the stored and ephemeral gift-wrap kinds) are served only to authenticated readers. With `restrict_read_to_involved = true` (the default), they are served only to the author or a `p`-tagged recipient.
-- A REQ whose filters list only restricted kinds is refused: `CLOSED auth-required:` when AUTH is enabled, `CLOSED restricted:` otherwise. Mixed filters still subscribe but hide restricted events, and hidden events never consume `limit`.
-- Without a `service_url`, publishing a restricted kind is refused with `restricted:` — there is no reader who could ever be served. Set `restricted_read_kinds = []` to accept and serve them openly.
-- A gift wrap (kind 1059) is also deleted by a kind-5 request from the pubkey its `p` tag names, and re-publication stays blocked (NIP-59); NIP-11 lists 59 while AUTH is on and 1059 is restricted.
+- When it is set, NIP-11 lists 42 and the relay sends each connection at most one AUTH challenge: when an unauthenticated REQ, COUNT or NEG-OPEN could match a read-gated kind — the request still proceeds, with the gated events hidden — when one publishes a protected event, or when a `write` rule requires it. A connection may authenticate up to 8 pubkeys.
+- A REQ whose filters can only match read-gated kinds is refused: `CLOSED auth-required:` when AUTH is enabled, `CLOSED restricted:` otherwise. Mixed filters still subscribe but hide gated events, and hidden events never consume `limit`.
+- Without a `service_url`, publishing a gated kind is refused with `restricted:` — the gate needs NIP-42 AUTH, which is disabled. Set `relay.access.rules = []` to accept and serve everything openly.
+- A gift wrap (kind 1059) is also deleted by a kind-5 request from the pubkey its `p` tag names, and re-publication stays blocked (NIP-59); NIP-11 lists 59 while AUTH is on and kind 1059 is read-gated.
 - NIP-70 protected events (a `["-"]` tag) are rejected unless AUTH is configured and the author is authenticated. Reposts (kinds 6 and 16) embedding a protected event are always blocked. AUTH events (kind 22242) are never stored or broadcast.
+
+### Access rules
+
+`[relay.access]` compiles to a sorted rule table validated at load and at every reload: a kind follows the `[[relay.access.rules]]` entry listing it, else the one entry without `kinds` (the catch-all), else it is open — rule order never matters. The loader refuses a kind listed twice, two catch-alls, an empty `kinds` list, a duplicated `read` principal, and `authenticated` combined with another principal (it is redundant).
+
+Each rule carries two sides. `read` is a set of principals — an event is served when any listed principal is satisfied by a pubkey the connection authenticated: `authenticated` (any), `author` (the event's author), `recipient` (any `p` tag value), `allowed` (a pubkey on the NIP-86 allow list — an empty allow list admits nobody). `read = []` is open to every reader. `write` is one of `open` (the default), `authenticated` (challenge first, any authed pubkey may publish), or `author` (only the event's own author, authenticated). The same rules gate stored scans, live delivery, COUNT, and NEG, so hidden events leak nothing — not through `limit`, `COUNT` answers, NEG sets, or NIP-67 EOSE hints.
+
+`anonymous_kinds` exempts listed kinds from the NIP-86 pubkey allow list: gift wraps (1059/21059) already pass when any `p` tag names an allowed pubkey, but kinds signed by single-use keys (Marmot group messages, kind 445) would otherwise be refused and hidden. Bans, banned ids, and kind allow/disallow lists still apply to anonymous kinds.
+
+#### DM and gift-wrap inbox (default)
+
+```toml
+[[relay.access.rules]]
+kinds = [4, 1059, 21059]
+read  = ["author", "recipient"]
+```
+
+#### Private storage (NIP-78 app data, NIP-37 drafts)
+
+Owner-only reads and writes: the event's author must authenticate.
+
+```toml
+[[relay.access.rules]]
+kinds = [30078, 31234]
+read  = ["author"]
+write = "author"
+```
+
+#### AUTH before write for kind 1059
+
+NIP-59 suggests authenticating senders as a spam defence: a stranger may no longer drop a gift wrap anonymously, at the cost of one AUTH per sender. Listing `[[relay.access.rules]]` replaces the default rule table, so 1059 keeps its read gate and the other DM kinds are re-listed.
+
+```toml
+[[relay.access.rules]]
+kinds = [1059]
+read  = ["author", "recipient"]
+write = "authenticated"
+
+[[relay.access.rules]]
+kinds = [4, 21059]
+read  = ["author", "recipient"]
+```
+
+#### Members-only relay with Marmot
+
+A `read = ["allowed"]` catch-all serves members only, while Marmot traffic still flows: kind 445 is carved out of the read gate and exempted from the allow-list identity (its authors are single-use keys, and gift wraps already pass by recipient). The trade-off is that anyone may store kind 445 — bound it with `relay.profiles` rate limits.
+
+```toml
+[relay.access]
+anonymous_kinds = [445]
+
+[[relay.access.rules]]
+kinds = [4, 1059, 21059]
+read  = ["author", "recipient"]
+
+[[relay.access.rules]]
+kinds = [445]
+read  = []
+
+[[relay.access.rules]]
+read = ["allowed"]
+```
 
 ### Request to vanish (NIP-62)
 

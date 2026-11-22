@@ -53,7 +53,7 @@ Every key is documented in `nosfry.example.toml`; sections are
 `[db]`, `[events]`, `[relay]`, `[[relay.listen]]`, `[relay.limits]`,
 `[relay.filter_validation]`, `[relay.profiles.<name>]` (with
 `.rate_limits`), `[relay.write_policy]`,
-`[relay.auth]`, `[relay.management]`, `[relay.threads]`,
+`[relay.access]`, `[relay.management]`, `[relay.threads]`,
 `[relay.compression]`, `[relay.info]`. `[db]`, `[[relay.listen]]` and
 `[relay.threads]` are restart-only.
 
@@ -80,8 +80,11 @@ limits; `[relay.filter_validation]` (`enabled`, `allowed_kinds`,
 `[relay.profiles.<name>]` sets `max_connections_per_peer` and, under
 `.rate_limits`, per-connection and per-peer (`ip_*`) event/REQ token buckets; `[relay.write_policy].plugin` loads an
 external write-policy plugin with `timeout_seconds`;
-`[relay.auth].restricted_read_kinds` / `restrict_read_to_involved` gate
-reads on NIP-42 auth; `[relay.compression]` (`enabled`, `sliding_window`)
+`[relay.access]` per-kind rules gate reads (`read` principals:
+`authenticated`, `author`, `recipient`, `allowed`) and writes
+(`write`: `open`, `authenticated`, `author`) on NIP-42 auth, with
+`anonymous_kinds` exempting single-use-key kinds from the NIP-86
+allow list; `[relay.compression]` (`enabled`, `sliding_window`)
 controls permessage-deflate; `[relay.info]` feeds the NIP-11 document
 (`name`, `description`, `pubkey`, `contact`, `icon`, `banner`, `self`,
 `terms_of_service`, `privacy_policy`).

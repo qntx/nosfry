@@ -897,7 +897,11 @@ impl<E: Executor, S: Socket> Relay<E, S> {
     ) {
         if event.kind() != AUTH_KIND
             && !event.requests_vanish(self.limits.auth.names())
-            && let Some(reason) = self.moderation.blocked_reason(event)
+            && let Some(reason) = self
+                .limits
+                .auth
+                .access()
+                .write_blocked(&self.moderation, event)
         {
             self.send(conn, &ok_frame(&event.id(), false, reason));
             return;

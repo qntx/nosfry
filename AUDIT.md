@@ -123,10 +123,10 @@ Trust boundaries:
 
 - **Acknowledged events.** An event answered `["OK", id, true, …]` must
   survive a crash, unless the answer carried the `duplicate:` prefix.
-- **Read confidentiality of restricted kinds.** NIP-42 `restricted_read_kinds`
-  (DMs and NIP-59 gift wraps by default, kinds 4 and 1059) and
-  `restrict_read_to_involved` must be served only
-  to authorized readers, by both stored scans and live delivery.
+- **Read confidentiality of gated kinds.** `[relay.access]` rules
+  (DMs and NIP-59 gift wraps by default, kinds 4, 1059 and 21059)
+  must be served only to readers satisfying the rule's principals —
+  by stored scans, live delivery, COUNT and NEG.
 - **Deletion and vanish guarantees.**
   - A NIP-09 deletion by the author removes the targets and blocks their
     re-publication.
@@ -664,7 +664,8 @@ Load, soak and durability reproduction: `bench/README.md` (round 7:
   - `monitor.rs`: the live index (`Monitors`).
   - `limits.rs`: `Limits`, `ReqLimits`, `RateLimits`, `AddressBuckets`,
     `TokenBucket`, `FilterValidation`.
-  - `auth.rs`: `AuthConfig`, `AuthRules`, `ReadGate`.
+  - `access.rs`: `AccessConfig`, `AccessRules`, `Reader`, `Writer`.
+  - `auth.rs`: `AuthRules`, `ReadGate`.
   - `deletion.rs`: NIP-09 targets.
   - `packed.rs`: the packed index record.
   - `sync.rs`: the negentropy round and limits.

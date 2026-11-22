@@ -29,8 +29,18 @@ use nosfry_core::url::RelayNames;
 fn restricted_event_reaches_only_involved_authed_subs() {
     let rules = Arc::new(AuthRules::new(
         RelayNames::parse("wss://relay.example.com", &[]).unwrap(),
-        &[4],
-        true,
+        nosfry_core::access::AccessRules::compile(&nosfry_core::access::AccessConfig {
+            rules: vec![nosfry_core::access::RuleConfig {
+                kinds: Some(vec![4]),
+                read: vec![
+                    nosfry_core::access::Reader::Author,
+                    nosfry_core::access::Reader::Recipient,
+                ],
+                write: nosfry_core::access::Writer::Open,
+            }],
+            anonymous_kinds: Vec::new(),
+        })
+        .unwrap(),
     ));
     let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[4]}").unwrap()]);
     let mut monitors = Monitors::<u8>::new();

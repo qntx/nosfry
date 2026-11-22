@@ -995,8 +995,7 @@ fn scan_completion_limit_at_end_is_exhausted() {
 fn scan_completion_hidden_event_is_never_a_witness() {
     let rules = Arc::new(nosfry_core::auth::AuthRules::new(
         RelayNames::default(),
-        &[4],
-        true,
+        nosfry_core::access::AccessRules::involved(&[4]),
     ));
     let gate = ReadGate::new(rules, Arc::from(&[][..]));
     let k = key(1);

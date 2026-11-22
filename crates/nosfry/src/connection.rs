@@ -305,7 +305,15 @@ impl<'a> Connection<'a> {
         {
             return true;
         }
-        let Some(reason) = self.handle.moderation.borrow().blocked_reason(event) else {
+        let Some(reason) = self
+            .handle
+            .live
+            .borrow()
+            .limits
+            .auth
+            .access()
+            .write_blocked(&self.handle.moderation.borrow(), event)
+        else {
             return true;
         };
         self.handle.metrics.event_outcome(EventOutcome::Moderated);

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::access::Writer;
 use crate::auth::{AUTH_KIND, MAX_AUTHED_PUBKEYS, ReadGate};
 use crate::event::{Event, EventId, PublicKey, UnverifiedEvent};
 use crate::filter::Filter;
@@ -496,26 +497,11 @@ impl Session {
                 return;
             }
         }
-        // A restricted kind is only served to authenticated readers;
-        // with AUTH disabled there is no reader to serve, so the
-        // write is refused — ephemeral restricted kinds too (they are
-        // never stored, and imports bypass this gate by design).
-        if !limits.auth.enabled() && limits.auth.is_restricted(unverified.kind().0) {
-            out.push(Command::Send {
-                verb: RelayVerb::Ok,
-                text: ok_frame(
-                    &unverified.id(),
-                    false,
-                    &Reason::Restricted.message(&format!(
-                        "kind {} is only served to authenticated readers and AUTH is disabled on this relay",
-                        unverified.kind().0
-                    )),
-                ),
-            });
+        if self.access_write_gate(&unverified, out) {
             return;
         }
         let id = unverified.id();
-        match unverified.verify(&limits.event) {
+        match unverified.verify(&self.limits.event) {
             Ok(event) => {
                 let authed = if self.authed.contains(&event.pubkey()) {
                     Some(event.pubkey())
@@ -532,6 +518,71 @@ impl Session {
                 text: ok_frame(&id, false, &error.reason()),
             }),
         }
+    }
+
+    /// The `[relay.access]` write gate, run before signature
+    /// verification. Returns true when the event was refused (the
+    /// `OK false` is already on `out`).
+    ///
+    /// A kind gated for reads or writes needs AUTH to be served or
+    /// published; with AUTH disabled the gate cannot run, so the
+    /// write is refused — gated ephemeral kinds too (they are never
+    /// stored, and imports bypass this gate by design).
+    fn access_write_gate(
+        &mut self,
+        unverified: &UnverifiedEvent<'_>,
+        out: &mut Vec<Command>,
+    ) -> bool {
+        let limits = &*self.limits;
+        let rule = limits.auth.access().rule(unverified.kind().0);
+        if !limits.auth.enabled() && rule.restricts() {
+            out.push(Command::Send {
+                verb: RelayVerb::Ok,
+                text: ok_frame(
+                    &unverified.id(),
+                    false,
+                    &Reason::Restricted.message(&format!(
+                        "kind {} needs NIP-42 AUTH, which is disabled on this relay",
+                        unverified.kind().0
+                    )),
+                ),
+            });
+            return true;
+        }
+        // `write = "authenticated" | "author"`: challenge first, then
+        // refuse the unauthenticated writer.
+        if rule.write != Writer::Open && self.authed.is_empty() {
+            self.issue_challenge(out);
+            out.push(Command::Send {
+                verb: RelayVerb::Ok,
+                text: ok_frame(
+                    &unverified.id(),
+                    false,
+                    &Reason::AuthRequired.message(&format!(
+                        "kind {} requires authentication",
+                        unverified.kind().0
+                    )),
+                ),
+            });
+            return true;
+        }
+        // `write = "author"`: the event's own author must have
+        // authenticated — another connection pubkey does not count.
+        if rule.write == Writer::Author && !self.authed.contains(&unverified.pubkey()) {
+            out.push(Command::Send {
+                verb: RelayVerb::Ok,
+                text: ok_frame(
+                    &unverified.id(),
+                    false,
+                    &Reason::Restricted.message(&format!(
+                        "kind {} must be published by its authenticated author",
+                        unverified.kind().0
+                    )),
+                ),
+            });
+            return true;
+        }
+        false
     }
 
     /// NIP-42 AUTH: verifies the event, then adds its pubkey to the

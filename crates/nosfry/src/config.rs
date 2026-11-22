@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use nosfry_core::auth::AuthConfig;
+use nosfry_core::access::AccessConfig;
 use nosfry_core::event::{EventLimits, PublicKey};
 use nosfry_core::info::Info;
 use nosfry_core::limits::{FilterValidationConfig, Limits, RateLimits, ReqLimits};
@@ -118,8 +118,8 @@ pub struct Relay {
     pub compression: Compression,
     /// Write-policy plugin.
     pub write_policy: WritePolicy,
-    /// NIP-42 authentication and restricted read kinds.
-    pub auth: AuthConfig,
+    /// `[relay.access]` — per-kind read/write access rules.
+    pub access: AccessConfig,
     /// NIP-86 management API.
     pub management: ManagementConfig,
     /// NIP-11 relay information.
@@ -363,7 +363,7 @@ impl Default for Relay {
             threads: Threads::default(),
             compression: Compression::default(),
             write_policy: WritePolicy::default(),
-            auth: AuthConfig::default(),
+            access: AccessConfig::default(),
             management: ManagementConfig::default(),
             info: Info::default(),
         }
@@ -413,7 +413,7 @@ impl Config {
 
     /// `nosfry_core::limits::Limits` assembled from `[events]`,
     /// `[relay.limits]`, `[relay.filter_validation]`, the `default`
-    /// profile's `rate_limits`, and `[relay.auth]`.
+    /// profile's `rate_limits`, and `[relay.access]`.
     ///
     /// # Errors
     ///
@@ -422,8 +422,8 @@ impl Config {
     /// `[relay.management] admins` entry,
     /// [`ServerError::FilterValidation`] on an invalid
     /// `[relay.filter_validation]` value, [`ServerError::RelayValue`]
-    /// on `relay.auto_ping_seconds = 0` or an invalid
-    /// `[[relay.listen]]` set.
+    /// on `relay.auto_ping_seconds = 0`, an invalid `[[relay.listen]]`
+    /// set, or an invalid `[relay.access]` rule.
     pub fn limits(&self) -> Result<Limits, ServerError> {
         // `interval(Duration::ZERO)` panics and the interval doubles
         // as the write deadline — unlike strfry, 0 cannot mean
@@ -447,6 +447,8 @@ impl Config {
             .management
             .admin_keys()
             .map_err(|e| ServerError::Admins(e.0))?;
+        let access = nosfry_core::access::AccessRules::compile(&self.relay.access)
+            .map_err(|e| ServerError::RelayValue(format!("relay.access: {e}")))?;
         Ok(Limits {
             event: self.events,
             req: ReqLimits {
@@ -458,11 +460,7 @@ impl Config {
                 .profiles()
                 .get("default")
                 .map_or_else(RateLimits::default, |profile| profile.rate_limits),
-            auth: std::sync::Arc::new(nosfry_core::auth::AuthRules::new(
-                names,
-                &self.relay.auth.restricted_read_kinds,
-                self.relay.auth.restrict_read_to_involved,
-            )),
+            auth: std::sync::Arc::new(nosfry_core::auth::AuthRules::new(names, access)),
         })
     }
 

@@ -73,10 +73,14 @@ fn enabling(condition: &str, admin_hex: &str) -> Vec<(&'static str, String)> {
         "when `relay.service_url` is set" => {
             vec![("relay", "service_url = \"ws://127.0.0.1:7777\"".to_owned())]
         }
-        "when `relay.service_url` is set and `relay.auth.restricted_read_kinds` holds 1059" => {
+        "when `relay.service_url` is set and `relay.access` gates kind 1059 reads" => {
             vec![
                 ("relay", "service_url = \"ws://127.0.0.1:7777\"".to_owned()),
-                ("relay.auth", "restricted_read_kinds = [1059]".to_owned()),
+                ("[[relay.access.rules]]", "kinds = [1059]".to_owned()),
+                (
+                    "[[relay.access.rules]]",
+                    "read = [\"author\", \"recipient\"]".to_owned(),
+                ),
             ]
         }
         "when `max_filter_limit_count` is not 0" => {
@@ -106,9 +110,14 @@ fn render(lines: &[(&'static str, String)]) -> String {
     }
     let mut out = String::new();
     for section in order {
-        out.push('[');
-        out.push_str(section);
-        out.push_str("]\n");
+        if section.starts_with('[') {
+            out.push_str(section);
+        } else {
+            out.push('[');
+            out.push_str(section);
+            out.push(']');
+        }
+        out.push('\n');
         for line in sections[&section].values() {
             out.push_str(line);
             out.push('\n');
@@ -118,13 +127,19 @@ fn render(lines: &[(&'static str, String)]) -> String {
 }
 
 /// The config with every optional NIP off: no `service_url`, no
-/// admins, no restricted kinds, COUNT and sync disabled.
+/// admins, no access rules, COUNT and sync disabled.
 fn off_lines() -> Vec<(&'static str, String)> {
     vec![
         ("relay.limits", "max_filter_limit_count = 0".to_owned()),
         ("relay.limits", "max_sync_events = 0".to_owned()),
-        ("relay.auth", "restricted_read_kinds = []".to_owned()),
+        ("relay.access", "rules = []".to_owned()),
     ]
+}
+
+/// Drop the off-state `rules = []` scalar — it cannot render beside
+/// a `[[relay.access.rules]]` table in one document.
+fn drop_scalar_access_rules(lines: &mut Vec<(&'static str, String)>) {
+    lines.retain(|(section, line)| !(*section == "relay.access" && line.starts_with("rules")));
 }
 
 /// Parse `text` as a configuration file through `Config::load`, the
@@ -193,7 +208,13 @@ async fn readme_nip_table_matches_the_relay() {
             continue;
         }
         let mut lines = off_lines();
-        lines.extend(enabling(condition, &admin_hex));
+        let add = enabling(condition, &admin_hex);
+        // An array-of-tables rule replaces the off-state `rules = []`
+        // — both cannot render in one document.
+        if add.iter().any(|(section, _)| section.starts_with('[')) {
+            drop_scalar_access_rules(&mut lines);
+        }
+        lines.extend(add);
         let mut want = always.clone();
         want.extend(
             rows.iter()
@@ -213,8 +234,8 @@ async fn readme_nip_table_matches_the_relay() {
     }
 
     // Everything on: every row. A second run restores the stock
-    // `restricted_read_kinds` default — the NIP-59 row must exist for
-    // the sets to stay equal, so a dropped row fails here instead of
+    // `relay.access` default — the NIP-59 row must exist for the
+    // sets to stay equal, so a dropped row fails here instead of
     // silently shrinking both sides.
     let mut lines = off_lines();
     let mut want = always;
@@ -222,7 +243,11 @@ async fn readme_nip_table_matches_the_relay() {
         if condition == "always" {
             continue;
         }
-        lines.extend(enabling(condition, &admin_hex));
+        let add = enabling(condition, &admin_hex);
+        if add.iter().any(|(section, _)| section.starts_with('[')) {
+            drop_scalar_access_rules(&mut lines);
+        }
+        lines.extend(add);
         want.insert(*nip);
     }
     assert_eq!(
@@ -230,11 +255,23 @@ async fn readme_nip_table_matches_the_relay() {
         want,
         "with every feature on the NIP-11 list must be the whole table"
     );
-    let mut stock = lines.clone();
-    stock.push((
-        "relay.auth",
-        "restricted_read_kinds = [4, 1059, 21059]".to_owned(),
-    ));
+    // `rules = []` from `off_lines` cannot coexist with the stock
+    // rule table — rebuild the set without it.
+    let mut stock: Vec<(&'static str, String)> = lines
+        .iter()
+        .filter(|(section, line)| !(*section == "relay.access" && line.starts_with("rules")))
+        .cloned()
+        .collect();
+    stock.extend([
+        (
+            "[[relay.access.rules]]",
+            "kinds = [4, 1059, 21059]".to_owned(),
+        ),
+        (
+            "[[relay.access.rules]]",
+            "read = [\"author\", \"recipient\"]".to_owned(),
+        ),
+    ]);
     assert_eq!(
         advertised(&stock).await,
         want,

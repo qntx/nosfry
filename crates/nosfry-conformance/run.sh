@@ -9,14 +9,20 @@
 #   run.sh remote   run the suite against an already-running relay;
 #                   NOSFRY_URL must be set (e.g. ws:// or wss://host)
 #
-# Local editions run TWO sequential passes against fresh relays:
+# Local editions run THREE sequential passes against fresh relays:
 #   pass 1 — profile.toml plus an injected service_url (AUTH on;
 #            native also gets the write-policy plugin): every test
-#            except those named `alt_*`.
+#            except those named `alt_*` or `access_*`.
 #   pass 2 — profile-alt.toml (no service_url, AUTH off, shipped
 #            defaults otherwise): only `alt_*` tests. A case named
 #            `alt_*` may only assert behavior that holds on a relay
 #            started with profile-alt.toml.
+#   pass 3 — profile-access.toml plus an injected service_url (AUTH
+#            on; no write-policy plugin): only `access_*` tests, one
+#            at a time — the NIP-86 allow list each case manages is
+#            relay-wide. A case named `access_*` may only assert
+#            behavior that holds on a relay started with
+#            profile-access.toml.
 # `remote` runs pass 1 only.
 set -euo pipefail
 
@@ -25,6 +31,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 profile="$here/profile.toml"
 profile_alt="$here/profile-alt.toml"
+profile_access="$here/profile-access.toml"
 tmpdir="$(mktemp -d)"
 server_pid=""
 bridge_pid=""
@@ -88,10 +95,10 @@ wait_ready() {
 }
 
 # Start one relay for `pass` ("main" = profile + service_url +
-# native write policy; "alt" = profile-alt, no service_url) and wait
-# for it to answer HTTP. The build is shared: the second worker
-# `wrangler dev` startup is warm, and the two never build or run
-# concurrently.
+# native write policy; "alt" = profile-alt, no service_url;
+# "access" = profile-access + service_url) and wait for it to
+# answer HTTP. The build is shared: later worker `wrangler dev`
+# startups are warm, and the passes never build or run concurrently.
 start_server() {
     local pass="$1"
     local server_log="$tmpdir/server-$pass.log"
@@ -99,6 +106,7 @@ start_server() {
     native|native-unix)
         local src="$profile"
         [ "$pass" = "alt" ] && src="$profile_alt"
+        [ "$pass" = "access" ] && src="$profile_access"
         # The shared profile keeps [relay.rate_limits] for the worker
         # edition; native moved it under the `default` profile.
         sed 's/^\[relay\.rate_limits\]$/[relay.profiles.default.rate_limits]/' \
@@ -115,7 +123,7 @@ path = "$tmpdir/db-$pass"
 [[relay.listen]]
 address = "$address"
 EOF
-        if [ "$pass" = "main" ]; then
+        if [ "$pass" = "main" ] || [ "$pass" = "access" ]; then
             if grep -q '^\[relay\]' "$tmpdir/config-$pass.toml"; then
                 # The profile already owns a [relay] table: splice
                 # service_url into it — TOML tables may not be
@@ -136,6 +144,8 @@ service_url = "$NOSFRY_URL"
 service_url_aliases = ["wss://alias.nosfry.test"]
 EOF
             fi
+        fi
+        if [ "$pass" = "main" ]; then
             cat >>"$tmpdir/config-$pass.toml" <<EOF
 
 [relay.write_policy]
@@ -154,8 +164,9 @@ EOF
     worker)
         local src="$profile"
         [ "$pass" = "alt" ] && src="$profile_alt"
+        [ "$pass" = "access" ] && src="$profile_access"
         cat "$src" >"$tmpdir/config-$pass.toml"
-        if [ "$pass" = "main" ]; then
+        if [ "$pass" = "main" ] || [ "$pass" = "access" ]; then
             cat >>"$tmpdir/config-$pass.toml" <<EOF
 
 [relay]
@@ -220,16 +231,22 @@ worker)
 esac
 
 if [ "$edition" = "remote" ]; then
-    cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 8 --skip alt_
+    cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 8 --skip alt_ --skip access_
 else
     # Pass 1: the shared profile plus service_url (AUTH on).
     start_server main
-    cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 8 --skip alt_
+    cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 8 --skip alt_ --skip access_
     stop_server
 
     # Pass 2: profile-alt.toml, AUTH disabled — `alt_*` cases only.
     start_server alt
     cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 8 alt_
+    stop_server
+
+    # Pass 3: profile-access.toml, members-only reads — `access_*`
+    # cases only, serialized: the NIP-86 allow list is relay-wide.
+    start_server access
+    cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 1 access_
     stop_server
 fi
 set +m
