@@ -8,10 +8,11 @@
 
 use std::sync::Arc;
 
-use crate::access::AccessRules;
+use crate::access::{AccessRules, Writer};
 use crate::event::PublicKey;
 use crate::filter::Filter;
 use crate::kind::Kind;
+use crate::message::Reason;
 use crate::moderation::Moderation;
 use crate::packed::PackedRef;
 use crate::url::RelayNames;
@@ -90,6 +91,83 @@ impl AuthRules {
     /// reader to serve either way.
     pub(crate) fn fully_restricts(&self, filters: &[Filter]) -> bool {
         self.access.fully_restricts(filters)
+    }
+
+    /// The `[relay.access]` write gate's verdict on an `EVENT` of
+    /// `kind` by `pubkey` while the connection holds `authed`:
+    /// `None` when the write proceeds to signature verification.
+    ///
+    /// The session applies this before verifying signatures;
+    /// `nosfry sync` calls it with an empty `authed` — its downloads
+    /// are stored for an unauthenticated writer, so a gated kind
+    /// AUTH cannot fix (AUTH disabled) and every `authenticated` /
+    /// `author` write rule refuse them.
+    #[must_use]
+    pub fn write_gate(
+        &self,
+        kind: u16,
+        pubkey: &PublicKey,
+        authed: &[PublicKey],
+    ) -> Option<WriteRefusal> {
+        let rule = self.access.rule(kind);
+        // A gated kind needs AUTH to be served or published; with
+        // AUTH disabled the gate cannot run, so the write is refused.
+        if !self.enabled() && rule.restricts() {
+            return Some(WriteRefusal::AuthDisabled);
+        }
+        // `write = "authenticated" | "author"`: challenge first,
+        // then refuse the unauthenticated writer.
+        if rule.write != Writer::Open && authed.is_empty() {
+            return Some(WriteRefusal::AuthRequired);
+        }
+        // `write = "author"`: the event's own author must have
+        // authenticated — another connection pubkey does not count.
+        if rule.write == Writer::Author && !authed.contains(pubkey) {
+            return Some(WriteRefusal::AuthorRequired);
+        }
+        None
+    }
+}
+
+/// Why the `[relay.access]` write gate refuses an `EVENT`:
+/// [`AuthRules::write_gate`]'s verdict, which the session turns into
+/// the matching `OK false` (and an AUTH challenge on
+/// [`WriteRefusal::AuthRequired`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteRefusal {
+    /// The kind is read- or write-gated and AUTH is disabled on
+    /// this relay — authentication cannot fix the refusal here.
+    AuthDisabled,
+    /// `write` is `authenticated` or `author` and the connection
+    /// holds no authenticated pubkey.
+    AuthRequired,
+    /// `write = "author"`: the event's own author is not among the
+    /// connection's authenticated pubkeys.
+    AuthorRequired,
+}
+
+impl WriteRefusal {
+    /// The `OK` reason prefix for the refusal.
+    #[must_use]
+    pub const fn reason(self) -> Reason {
+        match self {
+            Self::AuthRequired => Reason::AuthRequired,
+            Self::AuthDisabled | Self::AuthorRequired => Reason::Restricted,
+        }
+    }
+
+    /// The detail sentence the `OK false` carries for `kind`.
+    #[must_use]
+    pub fn detail(self, kind: u16) -> String {
+        match self {
+            Self::AuthDisabled => {
+                format!("kind {kind} needs NIP-42 AUTH, which is disabled on this relay")
+            }
+            Self::AuthRequired => format!("kind {kind} requires authentication"),
+            Self::AuthorRequired => {
+                format!("kind {kind} must be published by its authenticated author")
+            }
+        }
     }
 }
 

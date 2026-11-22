@@ -192,11 +192,19 @@ async fn check(
             "reposts can't embed protected events".to_owned(),
         ));
     }
-    // (6) Restricted kinds while local AUTH is off have no reader.
-    if !ctx.limits.auth.enabled() && ctx.limits.auth.is_restricted(unverified.kind().0) {
+    // (6) The `[relay.access]` write gate for an unauthenticated
+    // writer — the same verdict the session applies: a gated kind
+    // AUTH cannot fix is refused when AUTH is disabled, and every
+    // `authenticated`/`author` write rule refuses the sync peer,
+    // which is never an authenticated author.
+    if let Some(refusal) =
+        ctx.limits
+            .auth
+            .write_gate(unverified.kind().0, &unverified.pubkey(), &[])
+    {
         return Err(Refusal::local(
             Some(id),
-            "kind is only served to authenticated readers and AUTH is disabled".to_owned(),
+            refusal.detail(unverified.kind().0),
         ));
     }
     // (7) The BIP-340 signature — never skipped.
@@ -214,7 +222,7 @@ async fn check(
     // NIP-62 requests naming this relay skip moderation and policy.
     let vanish = event.requests_vanish(ctx.limits.auth.names());
     // (9) NIP-86 moderation.
-    if !vanish && let Some(reason) = moderation.blocked_reason(&event) {
+    if !vanish && let Some(reason) = ctx.limits.auth.access().write_blocked(moderation, &event) {
         return Err(Refusal::local(Some(id), reason.to_owned()));
     }
     // (10) The write-policy plugin, `sourceType` `Sync`.

@@ -3,8 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::access::Writer;
-use crate::auth::{AUTH_KIND, MAX_AUTHED_PUBKEYS, ReadGate};
+use crate::auth::{AUTH_KIND, MAX_AUTHED_PUBKEYS, ReadGate, WriteRefusal};
 use crate::event::{Event, EventId, PublicKey, UnverifiedEvent};
 use crate::filter::Filter;
 use crate::kind::Kind;
@@ -533,56 +532,28 @@ impl Session {
         unverified: &UnverifiedEvent<'_>,
         out: &mut Vec<Command>,
     ) -> bool {
-        let limits = &*self.limits;
-        let rule = limits.auth.access().rule(unverified.kind().0);
-        if !limits.auth.enabled() && rule.restricts() {
-            out.push(Command::Send {
-                verb: RelayVerb::Ok,
-                text: ok_frame(
-                    &unverified.id(),
-                    false,
-                    &Reason::Restricted.message(&format!(
-                        "kind {} needs NIP-42 AUTH, which is disabled on this relay",
-                        unverified.kind().0
-                    )),
-                ),
-            });
-            return true;
-        }
+        let kind = unverified.kind().0;
+        let Some(refusal) = self
+            .limits
+            .auth
+            .write_gate(kind, &unverified.pubkey(), &self.authed)
+        else {
+            return false;
+        };
         // `write = "authenticated" | "author"`: challenge first, then
         // refuse the unauthenticated writer.
-        if rule.write != Writer::Open && self.authed.is_empty() {
+        if refusal == WriteRefusal::AuthRequired {
             self.issue_challenge(out);
-            out.push(Command::Send {
-                verb: RelayVerb::Ok,
-                text: ok_frame(
-                    &unverified.id(),
-                    false,
-                    &Reason::AuthRequired.message(&format!(
-                        "kind {} requires authentication",
-                        unverified.kind().0
-                    )),
-                ),
-            });
-            return true;
         }
-        // `write = "author"`: the event's own author must have
-        // authenticated — another connection pubkey does not count.
-        if rule.write == Writer::Author && !self.authed.contains(&unverified.pubkey()) {
-            out.push(Command::Send {
-                verb: RelayVerb::Ok,
-                text: ok_frame(
-                    &unverified.id(),
-                    false,
-                    &Reason::Restricted.message(&format!(
-                        "kind {} must be published by its authenticated author",
-                        unverified.kind().0
-                    )),
-                ),
-            });
-            return true;
-        }
-        false
+        out.push(Command::Send {
+            verb: RelayVerb::Ok,
+            text: ok_frame(
+                &unverified.id(),
+                false,
+                &refusal.reason().message(&refusal.detail(kind)),
+            ),
+        });
+        true
     }
 
     /// NIP-42 AUTH: verifies the event, then adds its pubkey to the

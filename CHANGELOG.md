@@ -202,7 +202,8 @@ The format is based on [Keep a Changelog]; this project follows
   answers are retried after their hint, and an interrupted run is
   resumed by running it again. Downloads pass the same validation as a
   client `EVENT`, NIP-86 moderation, and the write-policy plugin
-  (`"sourceType":"Sync"`); protected events and restricted kinds are
+  (`"sourceType":"Sync"`); protected events and events an
+  `[relay.access]` read rule hides from unauthenticated readers are
   never uploaded. Exit codes: 0 complete, 3 partial, 1 failed. NIP-42
   keys come only from `--auth-key-file` (mode 600); loopback and
   private addresses need `--allow-private`. See `guides/sync.md`.

@@ -132,8 +132,9 @@ pub struct SyncStats {
     /// Events refused for peer-side reasons (unrequested, malformed,
     /// bad signature, outside the window) or `OK false`ed by the peer.
     pub refused_remote: u64,
-    /// Local events skipped for upload (protected, restricted kinds,
-    /// over the peer's message limit, gone from the store).
+    /// Local events skipped for upload (protected, hidden from an
+    /// unauthenticated reader, over the peer's message limit, gone
+    /// from the store).
     pub skipped: u64,
     /// Downloads whose store outcome was superseded, deleted or
     /// vanished.

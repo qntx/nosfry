@@ -268,6 +268,17 @@ where
         Ok(ReadGate::default().with_moderation(Arc::new(moderation)))
     }
 
+    /// The upload read gate: the unauthenticated-reader view of the
+    /// store — moderation bans plus every kind gated to a non-open
+    /// read rule by `[relay.access]` (a catch-all hides everything).
+    fn upload_gate(&self) -> Result<ReadGate, SyncError> {
+        let moderation = self.store.moderation().map_err(SyncError::Store)?;
+        Ok(
+            ReadGate::new(Arc::clone(&self.limits.auth), Arc::from(Vec::new()))
+                .with_moderation(Arc::new(moderation)),
+        )
+    }
+
     /// Reconcile and transfer one window: retryable failures wait and
     /// reopen, capped passes transfer then split, and everything else
     /// either splits the window or counts `failed_windows`.
@@ -738,20 +749,20 @@ where
     }
 
     /// Scan the store for `ids` and return each event's `(id, json)`
-    /// that may leave the relay: NIP-70 protected events and
-    /// restricted kinds (when local AUTH is off) are skipped. Ids
-    /// that produce no event count `skipped`.
+    /// that may leave the relay: NIP-70 protected events and kinds an
+    /// unauthenticated reader may not see are skipped. Ids that
+    /// produce no event count `skipped`.
     fn load_events(&mut self, ids: &[EventId]) -> Result<Vec<(EventId, String)>, SyncError> {
         let list: Vec<String> = ids.iter().map(ToString::to_string).collect();
         let filter = Filter::parse(&json!({"ids": list}).to_string())
             .map_err(|err| SyncError::Usage(format!("ids filter failed: {err}")))?;
-        let gate = self.gate()?;
+        let gate = self.upload_gate()?;
         let snapshot = self.store.snapshot().map_err(SyncError::Store)?;
         let mut scan = Scan::new(Arc::from([filter]), gate, snapshot, u64::MAX, now_secs());
         let mut out: Vec<(EventId, String)> = Vec::new();
         loop {
             match scan.step(self.store, STEP_BUDGET, &mut |_seq, json| {
-                push_uploadable(&mut out, json, self.limits);
+                push_uploadable(&mut out, json);
             }) {
                 Ok(Progress::Pending) => {}
                 Ok(Progress::Done) => break,
@@ -800,13 +811,12 @@ fn backoff(attempt: u8) -> Duration {
 }
 
 /// Whether a stored event may be uploaded: never NIP-70 protected
-/// (the event itself or one it embeds), never a restricted kind —
-/// the local relay serves those only to authenticated authors and
-/// recipients, and the peer is neither.
-fn uploadable(unverified: &UnverifiedEvent<'_>, limits: &Limits) -> bool {
-    !unverified.is_protected()
-        && !unverified.embeds_protected()
-        && !limits.auth.is_restricted(unverified.kind().0)
+/// (the event itself or one it embeds). Read rules are applied by
+/// the scan's gate — an unauthenticated reader's view is exactly
+/// what the peer, which authenticates as neither author nor
+/// recipient, may receive.
+fn uploadable(unverified: &UnverifiedEvent<'_>) -> bool {
+    !unverified.is_protected() && !unverified.embeds_protected()
 }
 
 /// Map a `NEG-ERR` to the retry decision: `blocked` with a limit
@@ -830,9 +840,9 @@ fn neg_err(message: &str, limit: Option<u64>) -> Retry {
 /// a tightened `max_num_tags`/`max_tag_val_size`, so parse
 /// structurally — a stored event must never be dropped for a newer
 /// bound.
-fn push_uploadable(out: &mut Vec<(EventId, String)>, json: &str, limits: &Limits) {
+fn push_uploadable(out: &mut Vec<(EventId, String)>, json: &str) {
     if let Ok(unverified) = UnverifiedEvent::parse_structural(json)
-        && uploadable(&unverified, limits)
+        && uploadable(&unverified)
     {
         out.push((unverified.id(), json.to_owned()));
     }
