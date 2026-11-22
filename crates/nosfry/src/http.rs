@@ -42,6 +42,11 @@ pub(crate) struct AppState {
     /// Process-wide charged live-subscription bytes (the
     /// `nosfry_subscription_bytes` gauge).
     pub(crate) subscription_bytes: Arc<std::sync::atomic::AtomicUsize>,
+    /// Per-reader scan-job counters, summed into the
+    /// `nosfry_reader_jobs` gauge. The inboxes' senders stay with
+    /// `Server` — holding them here would keep the reader channels
+    /// connected past `stop`'s `drop` while router clones live.
+    pub(crate) reader_jobs: Arc<[Arc<std::sync::atomic::AtomicUsize>]>,
     /// Latest NIP-86 snapshot; read-only copies for the handlers.
     /// The writer thread publishes in commit order on this channel —
     /// nothing else may send.
@@ -102,6 +107,11 @@ async fn metrics(State(state): State<AppState>) -> Response {
             state
                 .subscription_bytes
                 .load(std::sync::atomic::Ordering::Relaxed),
+            state
+                .reader_jobs
+                .iter()
+                .map(|jobs| jobs.load(std::sync::atomic::Ordering::Relaxed))
+                .sum(),
         ),
     )
         .into_response()

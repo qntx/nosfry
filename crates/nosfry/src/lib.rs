@@ -4,6 +4,16 @@
 //! tasks, one OS writer thread, M monitor shard threads, and N reader
 //! threads. LMDB is only touched by the writer and reader threads;
 //! everything else communicates over bounded channels.
+//!
+//! Send order (the deadlock-freedom argument): connection tasks send
+//! to the writer and their shard over async channels that
+//! backpressure the task itself; the writer `blocking_send`s
+//! committed batches to shards; readers `blocking_send` scan
+//! completions (`Activate`) to shards; shards only ever `try_send` to
+//! readers, shedding work on a full inbox; and every thread pushes
+//! replies to the byte-capped per-connection `Outbound` queues, which
+//! never block. The shard waits on nothing, so the wait-for graph is
+//! acyclic.
 #![cfg_attr(
     test,
     allow(
@@ -47,7 +57,7 @@ use tokio::sync::{mpsc, watch};
 use tower::ServiceExt as _;
 use tracing_subscriber as _;
 
-use crate::channels::{ReaderMsg, ShardMsg, WriterMsg};
+use crate::channels::{ReaderInbox, ReaderMsg, ShardMsg, WriterMsg};
 use crate::config::Config;
 
 /// How many publish requests the writer queues before backpressuring
@@ -65,6 +75,20 @@ const WRITER_QUEUE_BYTES: usize = 64 << 20;
 
 /// How many messages one monitor shard queues.
 const SHARD_QUEUE: usize = 4096;
+
+/// Scan jobs (REQ, COUNT, and NEG-OPEN `Start`s) admitted to one
+/// reader and not yet finished. This — not the inbox size — is the
+/// binding admission limit: one reader's live scan count can never
+/// exceed it, so time-sliced work stays bounded no matter how many
+/// subscriptions clients open, and the shard sheds the excess with
+/// `rate-limited: relay busy` instead of queueing unboundedly.
+const READER_JOBS: usize = 16_384;
+
+/// One reader inbox's capacity: `READER_JOBS` scan slots plus
+/// `SHARD_QUEUE` of headroom for the control messages (`Cancel`,
+/// `CancelConn`, `NegClose`, `NegMsg`) that share it, so the job cap — not
+/// the channel — is what sheds new `Start`s.
+const READER_QUEUE: usize = READER_JOBS + SHARD_QUEUE;
 
 /// Fatal server errors.
 #[derive(Debug, thiserror::Error)]
@@ -133,18 +157,26 @@ fn shard_channels(monitors: usize) -> (Vec<mpsc::Sender<ShardMsg>>, Vec<mpsc::Re
         .unzip()
 }
 
-/// The `readers` reader channel pairs; senders are shared by every
-/// shard for scan routing.
+/// The `readers` reader channel pairs; the shared routing table lets
+/// every shard forward scan work — and charge the job slot it
+/// admits — without ever blocking on a reader.
 fn reader_channels(
     readers: usize,
 ) -> (
-    Arc<[std::sync::mpsc::Sender<ReaderMsg>]>,
+    Arc<[ReaderInbox]>,
     Vec<std::sync::mpsc::Receiver<ReaderMsg>>,
 ) {
     let (txs, rxs): (Vec<_>, Vec<_>) = (0..readers)
-        .map(|_| std::sync::mpsc::channel::<ReaderMsg>())
+        .map(|_| std::sync::mpsc::sync_channel::<ReaderMsg>(READER_QUEUE))
         .unzip();
-    (txs.into(), rxs)
+    let inboxes: Arc<[ReaderInbox]> = txs
+        .into_iter()
+        .map(|tx| ReaderInbox {
+            tx,
+            jobs: Arc::new(AtomicUsize::new(0)),
+        })
+        .collect();
+    (inboxes, rxs)
 }
 
 /// Start the write-policy task unless the plugin command is empty.
@@ -178,24 +210,69 @@ async fn reload_loop(
 }
 
 /// Spawn one monitor-shard thread per inbox, all sharing the
-/// process-wide live-subscription charge.
+/// process-wide live-subscription charge and the metrics sink.
 fn spawn_shards(
     store: &Arc<Store>,
     shard_rxs: Vec<mpsc::Receiver<ShardMsg>>,
-    readers: &Arc<[std::sync::mpsc::Sender<ReaderMsg>]>,
+    readers: &Arc<[ReaderInbox]>,
     charge: &Arc<AtomicUsize>,
     budget: usize,
+    metrics: &Arc<metrics::Metrics>,
     threads: &mut Vec<JoinHandle<()>>,
 ) -> Result<(), ServerError> {
     for rx in shard_rxs {
         let shard_store = Arc::clone(store);
         let shard_readers = Arc::clone(readers);
         let shard_charge = Arc::clone(charge);
+        let shard_metrics = Arc::clone(metrics);
         threads.push(
             std::thread::Builder::new()
                 .name("nosfry-monitor".into())
                 .spawn(move || {
-                    shard::run(&shard_store, rx, shard_readers, shard_charge, budget);
+                    shard::run(
+                        &shard_store,
+                        rx,
+                        shard_readers,
+                        shard_charge,
+                        budget,
+                        shard_metrics,
+                    );
+                })
+                .map_err(ServerError::Spawn)?,
+        );
+    }
+    Ok(())
+}
+
+/// Spawn one reader thread per inbox, all sharing the shard routing
+/// table, `tuning`, `metrics`, and the shutdown watch.
+fn spawn_readers(
+    store: &Arc<Store>,
+    reader_rxs: Vec<std::sync::mpsc::Receiver<ReaderMsg>>,
+    shard_txs: &[mpsc::Sender<ShardMsg>],
+    tuning: &Arc<reader::Tuning>,
+    metrics: &Arc<metrics::Metrics>,
+    stop_rx: &watch::Receiver<bool>,
+    threads: &mut Vec<JoinHandle<()>>,
+) -> Result<(), ServerError> {
+    for rx in reader_rxs {
+        let reader_store = Arc::clone(store);
+        let reader_shards = shard_txs.to_vec();
+        let reader_shutdown = stop_rx.clone();
+        let reader_metrics = Arc::clone(metrics);
+        let reader_tuning = Arc::clone(tuning);
+        threads.push(
+            std::thread::Builder::new()
+                .name("nosfry-reader".into())
+                .spawn(move || {
+                    reader::run(
+                        &reader_store,
+                        &rx,
+                        &reader_shards,
+                        &reader_tuning,
+                        &reader_metrics,
+                        &reader_shutdown,
+                    );
                 })
                 .map_err(ServerError::Spawn)?,
         );
@@ -306,7 +383,7 @@ pub struct Server {
     /// Dropping this unblocks the expiry timer's `recv_timeout` at once.
     expire_stop: std::sync::mpsc::Sender<()>,
     shard_txs: Vec<mpsc::Sender<ShardMsg>>,
-    reader_txs: Arc<[std::sync::mpsc::Sender<ReaderMsg>]>,
+    reader_txs: Arc<[ReaderInbox]>,
     threads: Vec<JoinHandle<()>>,
 }
 
@@ -351,33 +428,20 @@ impl Server {
             &reader_txs,
             &subscription_bytes,
             config.relay.max_subscription_bytes_total,
+            &metrics,
             &mut threads,
         )?;
 
         // Readers.
-        let tuning = Arc::new(tuning);
-        for rx in reader_rxs {
-            let reader_store = Arc::clone(&store);
-            let reader_shards = shard_txs.clone();
-            let reader_shutdown = stop_rx.clone();
-            let reader_metrics = Arc::clone(&metrics);
-            let reader_tuning = Arc::clone(&tuning);
-            threads.push(
-                std::thread::Builder::new()
-                    .name("nosfry-reader".into())
-                    .spawn(move || {
-                        reader::run(
-                            &reader_store,
-                            &rx,
-                            &reader_shards,
-                            &reader_tuning,
-                            &reader_metrics,
-                            &reader_shutdown,
-                        );
-                    })
-                    .map_err(ServerError::Spawn)?,
-            );
-        }
+        spawn_readers(
+            &store,
+            reader_rxs,
+            &shard_txs,
+            &Arc::new(tuning),
+            &metrics,
+            &stop_rx,
+            &mut threads,
+        )?;
 
         // NIP-86 state persisted in the store becomes the first
         // snapshot; the management handler publishes the snapshot the
@@ -448,6 +512,10 @@ impl Server {
                 conn,
                 sync_memory,
                 subscription_bytes,
+                reader_jobs: reader_txs
+                    .iter()
+                    .map(|inbox| Arc::clone(&inbox.jobs))
+                    .collect(),
                 metrics,
                 deflate_pool: deflate_pool(),
                 moderation: mod_rx,

@@ -3,6 +3,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
 
@@ -148,11 +149,72 @@ pub(crate) enum ShardMsg {
     },
 }
 
+/// One reader thread's inbox plus its job counter: the shards route
+/// `conn % readers.len()` here and charge one job per admitted
+/// `Start`, so a shard's `try_send` never has to wait for a reader.
+#[derive(Debug)]
+pub(crate) struct ReaderInbox {
+    /// The bounded inbox (`sync_channel`, `crate::READER_QUEUE` slots).
+    pub(crate) tx: SyncSender<ReaderMsg>,
+    /// Scan jobs admitted to this reader and not yet finished —
+    /// summed into the `nosfry_reader_jobs` gauge.
+    pub(crate) jobs: Arc<AtomicUsize>,
+}
+
+/// RAII lease on one reader job slot: the shard takes it at admission
+/// and the scan entry drops it — finished, errored, cancelled, or the
+/// connection gone.
+#[derive(Debug)]
+pub(crate) struct JobSlot {
+    /// The counter this lease decrements on drop.
+    jobs: Arc<AtomicUsize>,
+}
+
+impl JobSlot {
+    /// Take one job slot; `None` once `cap` jobs are in flight. CAS
+    /// loop like `shard::try_charge`: refuse, never overshoot.
+    pub(crate) fn try_acquire(jobs: &Arc<AtomicUsize>, cap: usize) -> Option<Self> {
+        let mut current = jobs.load(Ordering::Relaxed);
+        loop {
+            if current >= cap {
+                return None;
+            }
+            match jobs.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Some(Self {
+                        jobs: Arc::clone(jobs),
+                    });
+                }
+                Err(now) => current = now,
+            }
+        }
+    }
+}
+
+impl Drop for JobSlot {
+    fn drop(&mut self) {
+        self.jobs.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
 /// Inbox item for a reader thread.
 #[derive(Debug)]
 pub(crate) enum ReaderMsg {
-    /// Start a snapshot-bounded scan (boxed: it dwarfs the other variants).
-    Start(Box<ScanStart>),
+    /// Start a snapshot-bounded scan (boxed start: it dwarfs the
+    /// other variants). `slot` is the job lease admitted with it; the
+    /// reader keeps it inside the scan entry so it releases whenever
+    /// the entry drops.
+    Start {
+        /// The scan arguments.
+        start: Box<ScanStart>,
+        /// The job lease counted toward `nosfry_reader_jobs`.
+        slot: JobSlot,
+    },
     /// Cancel one scan.
     Cancel {
         /// Owning connection.
