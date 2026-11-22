@@ -121,6 +121,8 @@ jobs:
           key: conformance-native
       - name: Run the conformance suite against the native edition
         run: crates/nosfry-conformance/run.sh native
+      - name: Run the conformance suite through a unix-socket listener
+        run: crates/nosfry-conformance/run.sh native-unix
 
   conformance-worker:
     runs-on: ubuntu-latest
