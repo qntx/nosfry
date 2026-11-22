@@ -166,7 +166,10 @@ async fn root(State(state): State<AppState>, request: Request) -> Response {
     let Some(origin) = parts.extensions.get::<Origin>().cloned() else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    let peer = peer::resolve(&origin, &parts.headers);
+    let (peer, fell_back) = peer::resolve(&origin, &parts.headers);
+    if fell_back {
+        peer::warn_fallback(&origin.listener);
+    }
     if ip_blocked(&state, &peer) {
         return StatusCode::FORBIDDEN.into_response();
     }

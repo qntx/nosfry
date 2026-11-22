@@ -121,8 +121,8 @@ async fn connection_lines_carry_the_conn_span() {
         .find(|l| l.contains("connection closed"))
         .unwrap();
     assert!(
-        closed.contains(&span) && closed.contains("reason="),
-        "closed line should carry {span} and a reason: {closed}"
+        closed.contains(&span) && closed.contains("reason=") && closed.contains("duration_ms="),
+        "closed line should carry {span}, a reason and duration_ms: {closed}"
     );
 
     for line in text
@@ -162,6 +162,64 @@ async fn cap_refusal_logs_the_peer() {
     assert!(
         line.contains("peer=127.0.0.1"),
         "cap refusal should name the peer: {line}"
+    );
+
+    relay.stop().await;
+}
+
+/// A unix listener trusting `real_ip_header` warns once per minute
+/// when requests lack or mangle it; the client-controlled header
+/// value never reaches the log.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn real_ip_fallback_warns_once_without_the_value() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let _g = LOCK.lock().await;
+    let buf = log_buf();
+    let start = buf.lock().unwrap().len();
+
+    let dir = tempfile::tempdir().unwrap();
+    let sock = dir.path().join("relay.sock");
+    let mut config = common::config();
+    config.relay.listen = vec![common::unix_listen(&sock)];
+    config.relay.listen[0].real_ip_header = "x-real-ip".to_owned();
+    let relay = Relay::start_with(config).await;
+
+    // Two requests that cannot resolve a real IP: the first warns,
+    // the second is throttled inside the minute.
+    for extra in ["", "x-real-ip: not-an-ip-198.51.100.7\r\n"] {
+        let mut io = tokio::net::UnixStream::connect(&sock).await.unwrap();
+        io.write_all(format!("GET / HTTP/1.1\r\nHost: localhost\r\n{extra}\r\n").as_bytes())
+            .await
+            .unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            io.read_exact(&mut byte).await.unwrap();
+            head.push(byte[0]);
+        }
+    }
+    // Give the second request's (suppressed) warning decision time to
+    // land in the buffer before counting.
+    let _ = wait_for(buf, start, |t| {
+        t.contains("real_ip_header missing or unparsable")
+    })
+    .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let text = String::from_utf8(buf.lock().unwrap()[start..].to_vec()).unwrap();
+    let warns: Vec<&str> = text
+        .lines()
+        .filter(|l| l.contains("real_ip_header missing or unparsable"))
+        .collect();
+    assert_eq!(warns.len(), 1, "warn once per listener: {text}");
+    assert!(
+        warns[0].contains("x-real-ip") && warns[0].contains("unix:"),
+        "warn names the header and listener: {}",
+        warns[0]
+    );
+    assert!(
+        !text.contains("198.51.100.7"),
+        "client-controlled value must never be logged: {text}"
     );
 
     relay.stop().await;

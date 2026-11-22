@@ -708,6 +708,7 @@ pub(crate) async fn run(
     limits: Arc<Limits>,
     address: Arc<AddressBuckets>,
 ) {
+    let started = Instant::now();
     let Some((mut conn, out_rx)) = Connection::new(handle, conn_id, peer, limits, address) else {
         return;
     };
@@ -730,5 +731,10 @@ pub(crate) async fn run(
 
     conn.drain_obligated(ws).await;
     conn.teardown().await;
-    tracing::debug!(target: "nosfry::conn", reason, "connection closed");
+    tracing::debug!(
+        target: "nosfry::conn",
+        reason,
+        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "connection closed"
+    );
 }

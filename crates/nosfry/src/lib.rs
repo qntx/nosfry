@@ -755,6 +755,7 @@ pub async fn bind(config: &Config) -> Result<Vec<Listener>, ServerError> {
             id: Arc::from(listen.address.to_string().as_str()),
             profile: Arc::from(listen.profile.as_str()),
             real_ip_header: listen.real_ip_header.clone(),
+            last_warn_secs: std::sync::atomic::AtomicU64::new(0),
         });
         match &listen.address {
             ListenAddress::Tcp(sock) => listeners.push(Listener(ListenerKind::Tcp {

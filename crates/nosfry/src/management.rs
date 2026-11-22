@@ -47,7 +47,11 @@ pub(crate) async fn handle(
 
 /// The NIP-86 answer for one POST; `handle` adds CORS.
 async fn answer(state: &AppState, origin: &Origin, headers: HeaderMap, body: Bytes) -> Response {
-    if ip_blocked(state, &peer::resolve(origin, &headers)) {
+    let (peer, fell_back) = peer::resolve(origin, &headers);
+    if fell_back {
+        peer::warn_fallback(&origin.listener);
+    }
+    if ip_blocked(state, &peer) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let live = state.live.borrow().clone();
