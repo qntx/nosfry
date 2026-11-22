@@ -23,6 +23,11 @@
 #            relay-wide. A case named `access_*` may only assert
 #            behavior that holds on a relay started with
 #            profile-access.toml.
+#   pass 4 — contrib/marmot/nosfry.toml, the shipped Marmot profile
+#            with service_url/listen/db rewritten for the run (no
+#            write-policy plugin): only `marmot_*` tests, one at a
+#            time — the per-address rate bucket is shared by every
+#            test on 127.0.0.1 and the burst case must stay honest.
 # `remote` runs pass 1 only.
 set -euo pipefail
 
@@ -32,6 +37,7 @@ root="$(cd "$here/../.." && pwd)"
 profile="$here/profile.toml"
 profile_alt="$here/profile-alt.toml"
 profile_access="$here/profile-access.toml"
+profile_marmot="$root/contrib/marmot/nosfry.toml"
 tmpdir="$(mktemp -d)"
 server_pid=""
 bridge_pid=""
@@ -94,9 +100,57 @@ wait_ready() {
     return 1
 }
 
+# Render the shipped Marmot profile into a runnable config for this
+# run. For native it rewrites `service_url`, the listener address and
+# the db path in place; for Workers it does the same `service_url`
+# rewrite, drops the `[db]` and `[[relay.listen]]` tables the Workers
+# schema does not have, and flattens
+# `[relay.profiles.default.rate_limits]` to `[relay.rate_limits]`.
+marmot_config() {
+    # $1 = edition, $2 = output path, $3 = listener address
+    # (`127.0.0.1:$port` or `unix:<path>`).
+    python3 - "$1" "$profile_marmot" "$2" "$NOSFRY_URL" "$3" \
+        "$tmpdir/db-marmot" <<'PY'
+import sys
+
+edition, src, dst, url, address, db = sys.argv[1:7]
+worker = edition == "worker"
+section, skip = "", False
+out = []
+for line in open(src):
+    s = line.strip()
+    if s.startswith("["):
+        # `[db] # restart-only`-style headers: stop at the bracket.
+        end = s.find("]]") if s.startswith("[[") else s.find("]")
+        section = s[: end + (2 if s.startswith("[[") else 1)]
+        skip = worker and section in ("[db]", "[[relay.listen]]")
+        if skip:
+            continue
+        if worker and section == "[relay.profiles.default.rate_limits]":
+            line = line.replace(
+                "[relay.profiles.default.rate_limits]", "[relay.rate_limits]"
+            )
+        out.append(line)
+        continue
+    if skip:
+        continue
+    key = s.split("=", 1)[0].strip()
+    if section == "[relay]" and key == "service_url":
+        line = f'service_url = "{url}"\n'
+    elif section == "[[relay.listen]]" and key == "address":
+        line = f'address = "{address}"\n'
+    elif section == "[db]" and key == "path":
+        line = f'path = "{db}"\n'
+    out.append(line)
+with open(dst, "w") as f:
+    f.write("".join(out))
+PY
+}
+
 # Start one relay for `pass` ("main" = profile + service_url +
 # native write policy; "alt" = profile-alt, no service_url;
-# "access" = profile-access + service_url) and wait for it to
+# "access" = profile-access + service_url; "marmot" = the shipped
+# contrib/marmot profile rewritten for the run) and wait for it to
 # answer HTTP. The build is shared: later worker `wrangler dev`
 # startups are warm, and the passes never build or run concurrently.
 start_server() {
@@ -104,18 +158,25 @@ start_server() {
     local server_log="$tmpdir/server-$pass.log"
     case "$edition" in
     native|native-unix)
-        local src="$profile"
-        [ "$pass" = "alt" ] && src="$profile_alt"
-        [ "$pass" = "access" ] && src="$profile_access"
-        # The shared profile keeps [relay.rate_limits] for the worker
-        # edition; native moved it under the `default` profile.
-        sed 's/^\[relay\.rate_limits\]$/[relay.profiles.default.rate_limits]/' \
-            "$src" >"$tmpdir/config-$pass.toml"
-        # `[[relay.listen]]` is its own table, so it can always be
-        # appended — no splice needed when the profile owns `[relay]`.
-        local address="127.0.0.1:$port"
-        [ "$edition" = "native-unix" ] && address="unix:$tmpdir/relay-$pass.sock"
-        cat >>"$tmpdir/config-$pass.toml" <<EOF
+        if [ "$pass" = "marmot" ]; then
+            # The shipped profile already carries [db] and
+            # [[relay.listen]]: rewrite their values, never append.
+            local address="127.0.0.1:$port"
+            [ "$edition" = "native-unix" ] && address="unix:$tmpdir/relay-marmot.sock"
+            marmot_config native "$tmpdir/config-marmot.toml" "$address"
+        else
+            local src="$profile"
+            [ "$pass" = "alt" ] && src="$profile_alt"
+            [ "$pass" = "access" ] && src="$profile_access"
+            # The shared profile keeps [relay.rate_limits] for the worker
+            # edition; native moved it under the `default` profile.
+            sed 's/^\[relay\.rate_limits\]$/[relay.profiles.default.rate_limits]/' \
+                "$src" >"$tmpdir/config-$pass.toml"
+            # `[[relay.listen]]` is its own table, so it can always be
+            # appended — no splice needed when the profile owns `[relay]`.
+            local address="127.0.0.1:$port"
+            [ "$edition" = "native-unix" ] && address="unix:$tmpdir/relay-$pass.sock"
+            cat >>"$tmpdir/config-$pass.toml" <<EOF
 
 [db]
 path = "$tmpdir/db-$pass"
@@ -123,6 +184,7 @@ path = "$tmpdir/db-$pass"
 [[relay.listen]]
 address = "$address"
 EOF
+        fi
         if [ "$pass" = "main" ] || [ "$pass" = "access" ]; then
             if grep -q '^\[relay\]' "$tmpdir/config-$pass.toml"; then
                 # The profile already owns a [relay] table: splice
@@ -162,10 +224,14 @@ EOF
         fi
         ;;
     worker)
-        local src="$profile"
-        [ "$pass" = "alt" ] && src="$profile_alt"
-        [ "$pass" = "access" ] && src="$profile_access"
-        cat "$src" >"$tmpdir/config-$pass.toml"
+        if [ "$pass" = "marmot" ]; then
+            marmot_config worker "$tmpdir/config-marmot.toml" ""
+        else
+            local src="$profile"
+            [ "$pass" = "alt" ] && src="$profile_alt"
+            [ "$pass" = "access" ] && src="$profile_access"
+            cat "$src" >"$tmpdir/config-$pass.toml"
+        fi
         if [ "$pass" = "main" ] || [ "$pass" = "access" ]; then
             cat >>"$tmpdir/config-$pass.toml" <<EOF
 
@@ -231,11 +297,11 @@ worker)
 esac
 
 if [ "$edition" = "remote" ]; then
-    cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 8 --skip alt_ --skip access_
+    cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 8 --skip alt_ --skip access_ --skip marmot_
 else
     # Pass 1: the shared profile plus service_url (AUTH on).
     start_server main
-    cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 8 --skip alt_ --skip access_
+    cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 8 --skip alt_ --skip access_ --skip marmot_
     stop_server
 
     # Pass 2: profile-alt.toml, AUTH disabled — `alt_*` cases only.
@@ -247,6 +313,13 @@ else
     # cases only, serialized: the NIP-86 allow list is relay-wide.
     start_server access
     cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 1 access_
+    stop_server
+
+    # Pass 4: the shipped contrib/marmot profile — `marmot_*` cases
+    # only, serialized: every test shares 127.0.0.1's per-address
+    # bucket and the burst case must not trip a sibling's tokens.
+    start_server marmot
+    cd "$root" && cargo test -p nosfry-conformance -- --ignored --test-threads 1 marmot_
     stop_server
 fi
 set +m

@@ -415,3 +415,47 @@ fn guide_toml_blocks_load() {
         "expected at least the three guide TOML blocks, found {count}"
     );
 }
+
+/// `contrib/marmot/nosfry.toml` is a tested artifact: it loads
+/// through the real config loader and carries the measured Marmot
+/// values (docs/research/blossom-marmot.mdx, runs B and D, probe
+/// P9), so the shipped file cannot silently drift.
+#[test]
+fn marmot_profile_loads_with_the_measured_values() {
+    let path = repo_root().join("contrib/marmot/nosfry.toml");
+    let config = Config::load(&path).unwrap();
+    let limits = config.limits().unwrap();
+
+    // AUTH on: run B swallowed every Welcome without it.
+    assert!(limits.auth.enabled(), "the profile must set service_url");
+    // The NIP-17 inbox contract: gift wraps stay read-gated to
+    // author and recipient.
+    assert!(limits.auth.access().rule(1059).restricts_reads());
+    // Kind 445 is never read-gated and is exempt from the pubkey
+    // allow list (single-use keys).
+    assert!(!limits.auth.access().rule(445).restricts());
+    assert!(config.relay.access.anonymous_kinds.contains(&445));
+
+    // The 2 MiB event profile: the frame cap is the measured
+    // smallest working value and NIP-11 advertises it truthfully.
+    assert_eq!(limits.event.max_event_size, 2_097_152);
+    assert_eq!(config.relay.max_websocket_payload_size, 2_097_162);
+    assert_eq!(
+        nosfry_core::limits::max_message_length(
+            config.relay.max_websocket_payload_size,
+            &limits.event
+        ),
+        2_097_162
+    );
+
+    // Run D's burst fits with headroom: 475 events in 2.9 s on one
+    // connection.
+    assert_eq!(limits.rate.events_per_second, 100);
+    assert_eq!(limits.rate.events_burst, 1000);
+    assert_eq!(limits.rate.reqs_per_second, 50);
+    assert_eq!(limits.rate.reqs_burst, 500);
+    assert_eq!(limits.rate.ip_events_per_second, 500);
+    assert_eq!(limits.rate.ip_events_burst, 5000);
+    assert_eq!(limits.rate.ip_reqs_per_second, 200);
+    assert_eq!(limits.rate.ip_reqs_burst, 2000);
+}

@@ -11,6 +11,8 @@
 | [tor.md](tor.md)                       | Serving the relay as an onion service with C tor, and the limits of that setup.                                                                                            |
 | [workers.md](workers.md)               | The Cloudflare Workers edition (preview): build, configure, run locally, deploy.                                                                                           |
 | [test-relay.md](test-relay.md)         | A pinned, seeded, resettable relay for client integration tests and CI.                                                                                                    |
+| [marmot.md](marmot.md)                 | Running a Marmot (MDK / White Noise) relay: the shipped profile, the Workers translation, privacy, members-only variants, verification.                                    |
 
 The files these guides refer to are in [`contrib/`](../contrib):
-`contrib/systemd/nosfry.service` and `contrib/nginx/nosfry.conf`.
+`contrib/systemd/nosfry.service`, `contrib/nginx/nosfry.conf` and
+`contrib/marmot/nosfry.toml`.
