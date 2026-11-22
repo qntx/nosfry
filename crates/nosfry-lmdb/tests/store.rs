@@ -515,19 +515,22 @@ fn format_mismatch_rejected() {
     // Hand-create an env whose meta.format is not 1.
     {
         use heed::types::Bytes;
-        use heed::{EnvFlags, EnvOpenOptions};
+        use heed::{CommitOrAbort, EnvFlags, EnvOpenOptions};
         let mut options = EnvOpenOptions::new();
         // SAFETY: flag must be set before opening the env.
         unsafe { options.flags(EnvFlags::NO_READ_AHEAD) };
         options.map_size(1 << 20).max_dbs(16);
         // SAFETY: test-scoped env; the dir is private to this test.
         let env = unsafe { options.open(dir.path()).unwrap() };
-        let mut wtxn = env.write_txn().unwrap();
-        let meta = env
-            .create_database::<Bytes, Bytes>(&mut wtxn, Some("meta"))
-            .unwrap();
-        meta.put(&mut wtxn, b"format", &9u32.to_be_bytes()).unwrap();
-        wtxn.commit().unwrap();
+        let wtxn = env.write_txn().unwrap();
+        env.create_databases_and_commit(wtxn, |dbo, wtxn| {
+            let meta = dbo
+                .create_database::<Bytes, Bytes>(wtxn, Some("meta"))
+                .unwrap();
+            meta.put(wtxn, b"format", &9u32.to_be_bytes()).unwrap();
+            Ok::<_, heed::Error>(CommitOrAbort::<_, ()>::Commit(meta))
+        })
+        .unwrap();
     }
     let err = Store::open(dir.path(), &StoreOptions::default()).unwrap_err();
     assert!(matches!(

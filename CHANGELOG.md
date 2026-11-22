@@ -307,6 +307,12 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Changed
 
+- `heed` 0.22.1 → 0.23.1, the LMDB binding for the native store. The
+  vendored C library (`lmdb-master-sys` 0.2.6) is unchanged, and the
+  on-disk format stays at version 4: replace the binary and restart,
+  no export/import needed. The bump is verified format-compatible in
+  both directions (a store written by 0.22 exports identically under
+  0.23 and vice versa).
 - `rusqlite` is held at 0.40.2 (libsqlite3-sys 0.38.2) across the whole
   workspace lockfile so Arti 0.48 resolves (#116). The default native
   binary and the Workers bundle link no SQLite, so neither changes;
