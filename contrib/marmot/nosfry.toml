@@ -1,0 +1,80 @@
+# nosfry relay configuration for Marmot (MDK / White Noise) traffic:
+# group messages kind 445, gift-wrap Welcomes kind 1059, KeyPackages
+# kind 30443. Evidence for every non-default value is in
+# docs/research/blossom-marmot.mdx (runs A–E′, probes P1–P9).
+
+[db] # restart-only
+path = "./nosfry-db"
+
+[events]
+# The spec asks group and inbox relays to accept events of at least
+# 2 MiB: a 64 KiB cap stops a Welcome (a 1059 wrap ~3x the MLS
+# Welcome it carries) at about 56 group members. Measured on both
+# editions (P9).
+max_event_size = 2097152
+
+[relay]
+# AUTH is required: kind 1059 is read-gated to author and recipient,
+# and with AUTH off every Welcome is stored but can never be served
+# (run B: 578 swallowed Welcomes). Set the deployed URL here.
+service_url = "wss://relay.example.com"
+# The smallest cap that carries the largest allowed EVENT frame
+# (P9, measured): NIP-11 then advertises a truthful
+# max_message_length of 2097162, which MDK reads as the event limit.
+max_websocket_payload_size = 2097162
+
+# Behind the TLS proxy (guides/deployment.md, contrib/nginx): the
+# proxy overwrites X-Forwarded-For, so the per-address buckets below
+# key on the real client, not on the proxy.
+[[relay.listen]]
+address        = "127.0.0.1:7777"
+profile        = "default"
+real_ip_header = "X-Forwarded-For"
+
+# White Noise scenario 3 bursts 475 group messages in 2.9 s
+# (~164/s) on ONE connection: the stock 20/s burst 100 answered 317
+# `rate-limited:`. With these values the White Noise interop suite
+# (MDK v0.18.0) passed 7 of 7 scenarios with no `rate-limited:` at
+# all. The 475-event burst fits events_burst with ~2x headroom.
+# MDK sweeps 1 REQ per 100 ms and Meowl peaks at 53 REQ/s on a
+# connection, so 50/s with a 500 burst covers both. The
+# per-address buckets allow ~5 such clients behind one NAT.
+[relay.profiles.default.rate_limits]
+events_per_second    = 100
+events_burst         = 1000
+reqs_per_second      = 50
+reqs_burst           = 500
+ip_events_per_second = 500
+ip_events_burst      = 5000
+ip_reqs_per_second   = 200
+ip_reqs_burst        = 2000
+
+# [relay.limits] max_filter_limit stays 500: the interop runs passed with it,
+# and it is the value NIP-11 publishes as `max_limit` — MDK proves
+# sweep completeness from it.
+
+[relay.access]
+# Kind 445 group messages are signed by single-use keys: exempt them
+# from the NIP-86 pubkey allow list so this profile stays correct if
+# an operator adds an allow list later (inert while the list is
+# empty). 445 is never read-gated — its `h` tag is already a
+# 256-bit capability and AUTH would link accounts to groups.
+anonymous_kinds = [445]
+
+# The shipped default, spelled out so it survives future default
+# changes: DMs and gift-wrap Welcomes are served only to their
+# author or a `p`-tagged recipient — the NIP-17 inbox contract MDK
+# relies on for Welcome delivery.
+[[relay.access.rules]]
+kinds = [4, 1059, 21059]
+read  = ["author", "recipient"]
+
+[relay.info]
+name        = "nosfry marmot"
+description = ""
+pubkey      = ""
+contact     = ""
+# Operators: publish a privacy policy — the relay necessarily sees
+# group routing ids (`h` tags) and client addresses even though it
+# cannot read any Marmot content.
+privacy_policy = ""

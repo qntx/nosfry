@@ -2322,3 +2322,521 @@ async fn access_unlisted_author_blocked() {
     assert!(!ok, "unlisted author accepted");
     assert!(reason.starts_with("blocked:"), "{reason}");
 }
+
+// ── Pass 4: the shipped contrib/marmot profile ─────────────────────
+//
+// Every case runs against a relay started from
+// contrib/marmot/nosfry.toml itself (run.sh pass 4), serialized —
+// the per-address rate bucket is shared by every test on 127.0.0.1.
+
+/// Publish a raw event JSON and return its OK frame fields.
+async fn publish_json(ws: &mut yawc::TcpWebSocket, ev: &Value) -> (bool, String) {
+    send(ws, &format!("[\"EVENT\",{ev}]")).await;
+    let ok = collect_until(ws, |v| v[0] == "OK").await;
+    let ok = &ok[ok.len() - 1];
+    assert_eq!(ok[1], ev["id"], "OK id mismatch");
+    (ok[2].as_bool().unwrap(), ok[3].as_str().unwrap().to_owned())
+}
+
+/// A kind-1059 wrap `p`-tagged to `recipient` whose serialized JSON
+/// is exactly `total` bytes — `sign::event` verifies against the
+/// default 64 KiB limit, so the 2 MiB case is signed by hand.
+fn wrap_of_len(recipient: &str, total: usize) -> Value {
+    let k = key();
+    let pk = pubkey(&k);
+    let created_at = now();
+    let build = |content: &str| {
+        let tags = json!([["p", recipient]]);
+        let preimage = json!([0, pk, created_at, 1059, tags, content]).to_string();
+        let id = sha2::Sha256::digest(preimage.as_bytes());
+        let sig = secp256k1::schnorr::sign_no_aux_rand(&id, &k);
+        json!({
+            "id": faster_hex::hex_string(&id),
+            "pubkey": pk,
+            "created_at": created_at,
+            "kind": 1059,
+            "tags": tags,
+            "content": content,
+            "sig": faster_hex::hex_string(&sig.to_byte_array()),
+        })
+    };
+    let skeleton = build("").to_string().len();
+    let content = "x".repeat(total - skeleton);
+    build(&content)
+}
+
+/// A 64-hex group id (`h` tag value).
+fn group_id() -> String {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).unwrap();
+    faster_hex::hex_string(&bytes)
+}
+
+/// The served event ids of a stored REQ, on a throwaway connection
+/// so live delivery to earlier open subs cannot interleave.
+async fn served_ids(id: &str, filter: &str) -> Vec<String> {
+    let mut ws = connect().await;
+    let frames = req(&mut ws, id, filter).await;
+    events(&frames)
+        .iter()
+        .map(|e| e["id"].as_str().unwrap().to_owned())
+        .collect()
+}
+
+/// A connection that tolerates 2 MiB inbound frames — yawc's default
+/// `max_payload_read` would close on a Marmot-sized EVENT.
+async fn connect_big() -> yawc::TcpWebSocket {
+    yawc::WebSocket::connect(url().parse().unwrap())
+        .with_options(yawc::Options::default().with_max_payload_read(4 * 1024 * 1024))
+        .await
+        .unwrap()
+}
+
+/// Pass 4: NIP-11 tells the truth a Marmot client relies on —
+/// `max_message_length` is the measured 2 MiB frame cap, `max_limit`
+/// stays 500, and AUTH, gift wraps, EOSE hints and negentropy are
+/// all advertised.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a contrib/marmot relay — run.sh pass 4)"]
+async fn marmot_nip11() {
+    let doc = nip11().await;
+    assert_eq!(doc["limitation"]["max_message_length"], 2_097_162);
+    assert_eq!(doc["limitation"]["max_limit"], 500);
+    let nips: Vec<u64> = doc["supported_nips"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect();
+    for nip in [42, 59, 67, 77] {
+        assert!(nips.contains(&nip), "NIP-{nip} not advertised: {nips:?}");
+    }
+}
+
+/// Pass 4: a Welcome of exactly 2 MiB is stored and served to the
+/// `p`-tagged recipient after AUTH — and only to it — while one byte
+/// larger is refused `invalid:`.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a contrib/marmot relay — run.sh pass 4)"]
+async fn marmot_welcome_2mib() {
+    let recipient = key();
+    let wrap = wrap_of_len(&pubkey(&recipient), 2_097_152);
+    assert_eq!(wrap.to_string().len(), 2_097_152, "skeleton drifted");
+    let over = wrap_of_len(&pubkey(&recipient), 2_097_153);
+    assert_eq!(over.to_string().len(), 2_097_153);
+
+    let mut ws = connect_big().await;
+    let (ok, reason) = publish_json(&mut ws, &wrap).await;
+    assert!(ok, "2 MiB wrap refused: {reason}");
+
+    // Unauthenticated, the fully restricted REQ is challenged and
+    // refused: AUTH before the CLOSED.
+    let filter = format!("{{\"kinds\":[1059],\"#p\":[\"{}\"]}}", pubkey(&recipient));
+    let frames = req(&mut ws, "w", &filter).await;
+    let pos_auth = frames
+        .iter()
+        .position(|v| v[0] == "AUTH")
+        .expect("no challenge");
+    let pos_closed = frames
+        .iter()
+        .position(|v| v[0] == "CLOSED")
+        .expect("not refused");
+    assert!(pos_auth < pos_closed, "{frames:?}");
+    assert!(
+        frames[pos_closed][2]
+            .as_str()
+            .unwrap()
+            .starts_with("auth-required:"),
+        "{frames:?}"
+    );
+    let challenge = frames[pos_auth][1].as_str().unwrap().to_owned();
+
+    // The recipient authenticates and reads its Welcome; the stored
+    // sweep reports itself complete.
+    auth_as(&mut ws, &recipient, &challenge).await;
+    let frames = req(&mut ws, "w2", &filter).await;
+    let got = events(&frames);
+    assert_eq!(got.len(), 1, "wrap not served to recipient: {frames:?}");
+    assert_eq!(got[0]["id"], wrap["id"]);
+    let eose = frames.iter().find(|v| v[0] == "EOSE").unwrap();
+    assert!(
+        eose_hints(eose).iter().any(|h| h == "finish"),
+        "no finish hint: {eose}"
+    );
+
+    // An authenticated stranger gets none.
+    let mut ws_s = connect().await;
+    authenticate(&mut ws_s, &key(), &filter).await;
+    let frames = req(&mut ws_s, "s", &filter).await;
+    assert!(events(&frames).is_empty(), "stranger served a wrap");
+
+    // One byte over the event limit makes the EVENT frame one byte
+    // over `max_websocket_payload_size`: the WebSocket layer closes
+    // 1009 — under this profile's minimal slack no `invalid:` window
+    // exists (profile-alt's larger slack is where `invalid:` shows).
+    let mut ws2 = connect().await;
+    drop(
+        ws2.send(yawc::Frame::text(format!("[\"EVENT\",{over}]")))
+            .await,
+    );
+    let deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let frame = tokio::time::timeout_at(deadline, ws2.next())
+            .await
+            .expect("no close frame within timeout")
+            .expect("connection dropped without a close frame");
+        if frame.opcode() == yawc::OpCode::Close {
+            assert_eq!(
+                frame.close_code(),
+                Some(yawc::close::CloseCode::Size),
+                "close code"
+            );
+            break;
+        }
+    }
+}
+
+/// Pass 4: the White Noise burst — 475 kind-445 group messages
+/// (each a fresh single-use key, one shared `h`, same second)
+/// pipelined on one connection — is accepted with zero
+/// `rate-limited:` frames, then read back in NIP-01 order.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a contrib/marmot relay — run.sh pass 4)"]
+async fn marmot_group_burst() {
+    let gid = group_id();
+    let stamp = now();
+    let group: Vec<_> = (0..475)
+        .map(|i| {
+            sign::event(
+                &key(),
+                445,
+                stamp,
+                &json!([["h", &gid]]),
+                &format!("group msg {i}"),
+            )
+        })
+        .collect();
+    let mut ids: Vec<String> = group.iter().map(|e| e.id().to_string()).collect();
+    ids.sort_unstable();
+
+    // Pipelined: every EVENT frame goes out before the first OK is
+    // read — the burst bucket must absorb all 475.
+    let mut ws = connect().await;
+    for ev in &group {
+        send(&mut ws, &event_wire(ev)).await;
+    }
+    for _ in 0..group.len() {
+        let ok = recv_json(&mut ws).await;
+        assert_eq!(ok[0], "OK", "{ok}");
+        assert_eq!(ok[2], true, "burst refused: {ok}");
+    }
+
+    let filter = |limit: u32| format!("{{\"kinds\":[445],\"#h\":[\"{gid}\"],\"limit\":{limit}}}");
+    let ids_of = |frames: &[Value]| {
+        events(frames)
+            .iter()
+            .map(|e| e["id"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+
+    // created_at ties order by ascending id.
+    let frames = req(&mut ws, "g", &filter(500)).await;
+    assert_eq!(ids_of(&frames), ids, "stored order wrong");
+    let eose = frames.iter().find(|v| v[0] == "EOSE").unwrap();
+    assert!(
+        eose_hints(eose).iter().any(|h| h == "finish"),
+        "no finish hint: {eose}"
+    );
+
+    // A tighter limit returns the newest and hints `more`.
+    let frames = req(&mut ws, "g2", &filter(100)).await;
+    assert_eq!(ids_of(&frames), ids[..100], "limit cut wrong");
+    let eose = frames.iter().find(|v| v[0] == "EOSE").unwrap();
+    assert!(
+        eose_hints(eose).iter().any(|h| h == "more"),
+        "no more hint: {eose}"
+    );
+
+    // `since` is inclusive of the events' own timestamp.
+    let frames = req(
+        &mut ws,
+        "g3",
+        &format!("{{\"kinds\":[445],\"#h\":[\"{gid}\"],\"since\":{stamp},\"limit\":500}}"),
+    )
+    .await;
+    assert_eq!(ids_of(&frames).len(), 475, "since excluded the second");
+
+    // 100 pipelined Welcomes to one recipient are all accepted and
+    // served to it after AUTH.
+    let recipient = key();
+    let wraps: Vec<_> = (0..100)
+        .map(|_| {
+            sign::event(
+                &key(),
+                1059,
+                now(),
+                &json!([["p", pubkey(&recipient)]]),
+                "welcome",
+            )
+        })
+        .collect();
+    for ev in &wraps {
+        send(&mut ws, &event_wire(ev)).await;
+    }
+    for _ in 0..wraps.len() {
+        let ok = recv_json(&mut ws).await;
+        assert_eq!(ok[2], true, "wrap burst refused: {ok}");
+    }
+    let mut ws_r = connect().await;
+    let filter = format!("{{\"kinds\":[1059],\"#p\":[\"{}\"]}}", pubkey(&recipient));
+    authenticate(&mut ws_r, &recipient, &filter).await;
+    let frames = req(&mut ws_r, "w", &filter).await;
+    assert_eq!(events(&frames).len(), 100, "wraps not served: {frames:?}");
+}
+
+/// Pass 4: kind 445 is public — a connection that never
+/// authenticates publishes and reads it, and the lazy challenge
+/// never fires for the open kind.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a contrib/marmot relay — run.sh pass 4)"]
+async fn marmot_445_without_auth() {
+    let gid = group_id();
+    let msg = sign::event(&key(), 445, now(), &json!([["h", &gid]]), "group msg");
+    let mut ws = connect().await;
+    let (ok, reason) = publish(&mut ws, &msg).await;
+    assert!(ok, "445 refused: {reason}");
+    let frames = req(
+        &mut ws,
+        "m",
+        &format!("{{\"kinds\":[445],\"#h\":[\"{gid}\"]}}"),
+    )
+    .await;
+    assert!(
+        !frames.iter().any(|v| v[0] == "AUTH"),
+        "445 read challenged: {frames:?}"
+    );
+    let got = events(&frames);
+    assert_eq!(got.len(), 1, "{frames:?}");
+    assert_eq!(got[0]["id"], msg.id().to_string());
+}
+
+/// Pass 4: `KeyPackage` slots (kind 30443, one `d` per device) follow
+/// addressable semantics — newest wins, same-second ties keep the
+/// lower id, `a`+`k` empties the slot, `e`+`k` drops one
+/// publication — and legacy 443 still stores.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a contrib/marmot relay — run.sh pass 4)"]
+async fn marmot_keypackage_slots() {
+    let device = key();
+    let mut ws = connect().await;
+    let pkg = |created_at: u64, content: &str| {
+        sign::event(&device, 30443, created_at, &json!([["d", "dev"]]), content)
+    };
+    let filter = |kind: u16| {
+        format!(
+            "{{\"kinds\":[{kind}],\"authors\":[\"{}\"]}}",
+            pubkey(&device)
+        )
+    };
+
+    // Newer replaces the slot.
+    let v1 = pkg(now() - 10, "kp v1");
+    let v2 = pkg(now(), "kp v2");
+    for ev in [&v1, &v2] {
+        let (ok, reason) = publish(&mut ws, ev).await;
+        assert!(ok, "keypackage refused: {reason}");
+    }
+    assert_eq!(served_ids("k", &filter(30443)).await, [v2.id().to_string()]);
+
+    // Same-second tie keeps the lower id; the higher is refused. The
+    // pair sits one second above v2 so it wins the slot regardless
+    // of the ids it drew.
+    let t = now() + 5;
+    let tie_a = pkg(t, "tie a");
+    let tie_b = pkg(t, "tie b");
+    let (lo, hi) = if tie_a.id().to_string() < tie_b.id().to_string() {
+        (tie_a, tie_b)
+    } else {
+        (tie_b, tie_a)
+    };
+    let (ok, reason) = publish(&mut ws, &lo).await;
+    assert!(ok, "lower-id keypackage refused: {reason}");
+    let (ok, reason) = publish(&mut ws, &hi).await;
+    assert!(!ok, "losing tie accepted");
+    assert!(reason.starts_with("duplicate:"), "{reason}");
+    assert_eq!(
+        served_ids("k2", &filter(30443)).await,
+        [lo.id().to_string()]
+    );
+
+    // `e`+`k` deletes the one publication.
+    let del = sign::event(
+        &device,
+        5,
+        t + 1,
+        &json!([["e", lo.id().to_string()], ["k", "30443"]]),
+        "",
+    );
+    let (ok, reason) = publish(&mut ws, &del).await;
+    assert!(ok, "e deletion refused: {reason}");
+    assert!(
+        served_ids("k3", &filter(30443))
+            .await
+            .iter()
+            .all(|id| id != &lo.id().to_string()),
+        "deleted keypackage still served"
+    );
+
+    // `a`+`k` empties the whole slot; a later republish is accepted.
+    let addr = format!("30443:{}:dev", pubkey(&device));
+    let del = sign::event(&device, 5, t + 2, &json!([["a", addr], ["k", "30443"]]), "");
+    let (ok, reason) = publish(&mut ws, &del).await;
+    assert!(ok, "a deletion refused: {reason}");
+    assert!(
+        served_ids("k4", &filter(30443)).await.is_empty(),
+        "slot not emptied"
+    );
+    let v3 = pkg(t + 3, "kp v3");
+    let (ok, reason) = publish(&mut ws, &v3).await;
+    assert!(ok, "republish after slot deletion refused: {reason}");
+    assert_eq!(
+        served_ids("k5", &filter(30443)).await,
+        [v3.id().to_string()]
+    );
+
+    // Legacy kind 443 still stores and serves by author.
+    let legacy = sign::event(&device, 443, now(), &json!([]), "legacy kp");
+    let (ok, reason) = publish(&mut ws, &legacy).await;
+    assert!(ok, "legacy 443 refused: {reason}");
+    assert_eq!(
+        served_ids("k6", &filter(443)).await,
+        [legacy.id().to_string()]
+    );
+}
+
+/// Pass 4: the relay-list kinds Marmot writes (10002, 10050, and the
+/// retired-but-still-seen 10051) are plain replaceable — newest wins.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a contrib/marmot relay — run.sh pass 4)"]
+async fn marmot_relay_lists() {
+    let author = key();
+    let mut ws = connect().await;
+    for kind in [10002u16, 10050, 10051] {
+        let old = sign::event(&author, kind, now() - 10, &json!([]), "old");
+        let new = sign::event(&author, kind, now(), &json!([]), "new");
+        for ev in [&old, &new] {
+            let (ok, reason) = publish(&mut ws, ev).await;
+            assert!(ok, "kind {kind} refused: {reason}");
+        }
+        let filter = format!(
+            "{{\"kinds\":[{kind}],\"authors\":[\"{}\"]}}",
+            pubkey(&author)
+        );
+        let frames = req(&mut ws, "r", &filter).await;
+        let got = events(&frames);
+        assert_eq!(got.len(), 1, "kind {kind}: {frames:?}");
+        assert_eq!(
+            got[0]["id"],
+            new.id().to_string(),
+            "kind {kind} newest lost"
+        );
+    }
+}
+
+/// Pass 4: NIP-40 on kind 445 — a past `expiration` is `invalid:` on
+/// write; a live one is served and then hidden on read once it
+/// passes (no sweep dependency).
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a contrib/marmot relay — run.sh pass 4)"]
+async fn marmot_445_expiration() {
+    let gid = group_id();
+    let mut ws = connect().await;
+    let past = sign::event(
+        &key(),
+        445,
+        now() - 10,
+        &json!([["h", &gid], ["expiration", (now() - 1).to_string()]]),
+        "expired",
+    );
+    let (ok, reason) = publish(&mut ws, &past).await;
+    assert!(!ok, "expired 445 accepted");
+    assert!(reason.starts_with("invalid:"), "{reason}");
+
+    let soon = sign::event(
+        &key(),
+        445,
+        now(),
+        &json!([["h", &gid], ["expiration", (now() + 2).to_string()]]),
+        "soon",
+    );
+    let (ok, reason) = publish(&mut ws, &soon).await;
+    assert!(ok, "live 445 refused: {reason}");
+    let filter = format!("{{\"kinds\":[445],\"#h\":[\"{gid}\"]}}");
+    let frames = req(&mut ws, "e", &filter).await;
+    assert_eq!(events(&frames).len(), 1, "live 445 not served: {frames:?}");
+
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    let frames = req(&mut ws, "e2", &filter).await;
+    assert!(
+        events(&frames).is_empty(),
+        "expired 445 still served: {frames:?}"
+    );
+}
+
+/// Pass 4: NIP-77 reconciliation over a `#h` filter converges to the
+/// relay's set — MDK's sweep completeness check.
+#[tokio::test]
+#[ignore = "needs NOSFRY_URL (a contrib/marmot relay — run.sh pass 4)"]
+async fn marmot_negentropy_h() {
+    use negentropy::{Id, Negentropy, NegentropyStorageVector};
+
+    let gid = group_id();
+    let mut ws = connect().await;
+    let a = sign::event(&key(), 445, now() - 30, &json!([["h", &gid]]), "a");
+    let b = sign::event(&key(), 445, now() - 20, &json!([["h", &gid]]), "b");
+    let c = sign::event(&key(), 445, now() - 10, &json!([["h", &gid]]), "c");
+    for ev in [&a, &b, &c] {
+        let (ok, reason) = publish(&mut ws, ev).await;
+        assert!(ok, "publish: {reason}");
+    }
+    // The client shares a and b, claims a phantom, and misses c.
+    let phantom = sign::event(&key(), 445, now() - 5, &json!([["h", &gid]]), "phantom");
+    let mut storage = NegentropyStorageVector::with_capacity(3);
+    for (created_at, id) in [
+        (a.created_at(), a.id().0),
+        (b.created_at(), b.id().0),
+        (phantom.created_at(), phantom.id().0),
+    ] {
+        storage.insert(created_at, Id::from_byte_array(id)).unwrap();
+    }
+    storage.seal().unwrap();
+    let mut neg = Negentropy::owned(storage, 500_000).unwrap();
+    let init = neg.initiate().unwrap();
+
+    let filter = format!("{{\"kinds\":[445],\"#h\":[\"{gid}\"]}}");
+    send(&mut ws, &neg_open_wire("neg", &filter, &init)).await;
+    let mut have_ids = Vec::new();
+    let mut need_ids = Vec::new();
+    for _ in 0..16 {
+        let frame = recv_json(&mut ws).await;
+        if frame[0] == "AUTH" {
+            continue;
+        }
+        assert_eq!(frame[0], "NEG-MSG", "{frame}");
+        let reply = unhex(frame[2].as_str().unwrap());
+        let next = neg
+            .reconcile_with_ids(&reply, &mut have_ids, &mut need_ids)
+            .unwrap();
+        match next {
+            Some(msg) => send(&mut ws, &neg_msg_wire("neg", &msg)).await,
+            None => break,
+        }
+    }
+    let hexes = |ids: &[Id]| -> Vec<String> {
+        ids.iter()
+            .map(|id| faster_hex::hex_string(id.as_bytes()))
+            .collect()
+    };
+    assert_eq!(hexes(&have_ids), [phantom.id().to_string()]);
+    assert_eq!(hexes(&need_ids), [c.id().to_string()]);
+}

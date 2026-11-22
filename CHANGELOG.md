@@ -269,6 +269,13 @@ The format is based on [Keep a Changelog]; this project follows
   counts queries and control messages shed because the readers were
   saturated, and the `nosfry_reader_jobs` gauge shows the queries
   admitted to the readers and not yet finished.
+- `contrib/marmot/nosfry.toml`, a ready-to-run native profile for a
+  Marmot group/inbox relay (2 MiB events and frames, rate limits
+  sized to the measured White Noise bursts, `anonymous_kinds =
+  [445]`), with `guides/marmot.md` covering deployment on both
+  editions, the privacy posture and a members-only variant; the
+  conformance suite gained a fourth pass that runs its `marmot_*`
+  cases against the shipped profile on both editions.
 
 ### Changed
 
