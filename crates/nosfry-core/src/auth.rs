@@ -15,7 +15,7 @@ use crate::filter::Filter;
 use crate::kind::Kind;
 use crate::moderation::Moderation;
 use crate::packed::PackedRef;
-use crate::url::RelayUrl;
+use crate::url::RelayNames;
 
 /// The NIP-42 authentication event kind.
 pub const AUTH_KIND: Kind = Kind(22242);
@@ -46,14 +46,15 @@ impl Default for AuthConfig {
     }
 }
 
-/// Authentication configuration: the relay's own service URL and the
+/// Authentication configuration: the relay's own names and the
 /// read-side restrictions.
 ///
 /// `Default` disables AUTH entirely and restricts nothing.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuthRules {
-    /// The relay's own URL when AUTH is enabled.
-    relay: Option<RelayUrl>,
+    /// The relay's own names when AUTH is enabled — the canonical
+    /// `service_url` plus its aliases.
+    names: RelayNames,
     /// Sorted, deduplicated kinds hidden from unauthorized readers.
     restricted_kinds: Box<[u16]>,
     /// Restricted events are served only to authenticated pubkeys
@@ -62,30 +63,30 @@ pub struct AuthRules {
 }
 
 impl AuthRules {
-    /// New rules. `None` disables AUTH (protected events are rejected
-    /// outright and restricted kinds are never served).
+    /// New rules. Empty `names` disables AUTH (protected events are
+    /// rejected outright and restricted kinds are never served).
     #[must_use]
-    pub fn new(relay: Option<RelayUrl>, restricted_kinds: &[u16], involved_only: bool) -> Self {
+    pub fn new(names: RelayNames, restricted_kinds: &[u16], involved_only: bool) -> Self {
         let mut restricted_kinds = restricted_kinds.to_vec();
         restricted_kinds.sort_unstable();
         restricted_kinds.dedup();
         Self {
-            relay,
+            names,
             restricted_kinds: restricted_kinds.into(),
             involved_only,
         }
     }
 
-    /// The configured service URL (`None` = AUTH disabled).
+    /// The configured names (empty = AUTH disabled).
     #[must_use]
-    pub const fn relay(&self) -> Option<&RelayUrl> {
-        self.relay.as_ref()
+    pub const fn names(&self) -> &RelayNames {
+        &self.names
     }
 
     /// Whether AUTH is enabled (a service URL is configured).
     #[must_use]
     pub const fn enabled(&self) -> bool {
-        self.relay.is_some()
+        !self.names.is_empty()
     }
 
     /// Whether `kind` is restricted to authorized readers.
@@ -101,9 +102,9 @@ impl AuthRules {
         self.enabled() && self.is_restricted(1059)
     }
 
-    /// Whether a `relay` tag value names the configured service URL.
+    /// Whether a `relay` tag value names one of the configured names.
     pub(crate) fn matches_relay(&self, url: &str) -> bool {
-        self.relay.as_ref().is_some_and(|relay| relay.matches(url))
+        self.names.matches(url)
     }
 
     /// Whether any filter can match a restricted kind — restricted
@@ -210,12 +211,7 @@ mod tests {
     use super::*;
 
     fn auth_rules(url: &str, kinds: &[u16], involved_only: bool) -> AuthRules {
-        let url = if url.is_empty() {
-            None
-        } else {
-            Some(RelayUrl::parse(url).unwrap())
-        };
-        AuthRules::new(url, kinds, involved_only)
+        AuthRules::new(RelayNames::parse(url, &[]).unwrap(), kinds, involved_only)
     }
 
     fn gate(rules: &AuthRules, authed: &[[u8; 32]]) -> ReadGate {
@@ -249,6 +245,18 @@ mod tests {
         let disabled = auth_rules("", &[4], true);
         assert!(!disabled.enabled());
         assert!(!disabled.matches_relay("wss://x"));
+    }
+
+    /// Every configured name satisfies the `relay`-tag check; an
+    /// unrelated name does not.
+    #[test]
+    fn aliases_match_relay() {
+        let names =
+            RelayNames::parse("wss://relay.example.com", &["ws://abc.onion".to_owned()]).unwrap();
+        let rules = AuthRules::new(names, &[], false);
+        assert!(rules.matches_relay("wss://relay.example.com"));
+        assert!(rules.matches_relay("ws://ABC.onion"));
+        assert!(!rules.matches_relay("wss://unrelated.example.com"));
     }
 
     #[test]

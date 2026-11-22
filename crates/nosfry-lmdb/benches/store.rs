@@ -20,6 +20,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use nosfry_core::event::Event;
 use nosfry_core::filter::Filter;
 use nosfry_core::sign as common;
+use nosfry_core::url::RelayNames;
 use nosfry_lmdb::{Progress, Scan, Store, StoreOptions};
 use serde_json::json;
 
@@ -97,7 +98,7 @@ fn author_setup() -> (tempfile::TempDir, Store, Arc<[Filter]>) {
         })
         .collect();
     for chunk in events.chunks(10_000) {
-        store.write(chunk, None).unwrap();
+        store.write(chunk, &RelayNames::default()).unwrap();
     }
     let authors_json = format!(
         "{{\"authors\":[{}],\"limit\":500}}",
@@ -128,7 +129,7 @@ fn bench_store(c: &mut Criterion) {
                 let base = counter.fetch_add(1_000, Ordering::Relaxed);
                 let batch = events(&key, 10_000_000 + base, 1_000);
                 let started = std::time::Instant::now();
-                store.write(&batch, None).unwrap();
+                store.write(&batch, &RelayNames::default()).unwrap();
                 elapsed += started.elapsed();
             }
             elapsed
@@ -138,7 +139,7 @@ fn bench_store(c: &mut Criterion) {
     // Scan kinds:[1] limit 500 over 100k stored events.
     let (_dir2, store2) = open();
     for chunk in events(&key, 0, 100_000).chunks(10_000) {
-        store2.write(chunk, None).unwrap();
+        store2.write(chunk, &RelayNames::default()).unwrap();
     }
     let filters: Arc<[Filter]> =
         Arc::from([Filter::parse("{\"kinds\":[1],\"limit\":500}").unwrap()]);

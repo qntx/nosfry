@@ -8,7 +8,7 @@ use libfuzzer_sys::fuzz_target;
 use nosfry_core::event::PublicKey;
 use nosfry_core::event::EventLimits;
 use nosfry_core::management::authorize;
-use nosfry_core::url::RelayUrl;
+use nosfry_core::url::RelayNames;
 
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -39,7 +39,7 @@ struct Input {
 }
 
 fuzz_target!(|input: Input| {
-    let url = RelayUrl::parse("wss://fuzz.example").unwrap();
+    let names = RelayNames::parse("wss://fuzz.example", &[]).unwrap();
     let admin = PublicKey(input.ev_pubkey);
     // Path A: arbitrary header text.
     let _ = authorize(
@@ -47,7 +47,7 @@ fuzz_target!(|input: Input| {
         &input.body,
         input.now,
         &EventLimits::default(),
-        Some(&url),
+        &names,
         std::slice::from_ref(&admin),
     );
     // Path B: structurally valid `Nostr <base64>` header.
@@ -64,7 +64,7 @@ fuzz_target!(|input: Input| {
         &input.body,
         input.now,
         &EventLimits::default(),
-        Some(&url),
+        &names,
         std::slice::from_ref(&admin),
     );
 });

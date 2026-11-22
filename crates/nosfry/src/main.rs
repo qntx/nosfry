@@ -231,17 +231,16 @@ fn raise_nofile_limit(target: u64) {
 
 async fn relay(config: Config, path: PathBuf) -> Result<(), Box<dyn std::error::Error>> {
     raise_nofile_limit(config.relay.nofiles);
-    let addr = (config.relay.bind, config.relay.port);
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .map_err(|err| format!("bind {addr:?}: {err}"))?;
-    tracing::info!(?addr, "listening");
+    let listeners = nosfry::bind(&config).await?;
+    for listener in &listeners {
+        tracing::info!(address = %listener, "listening");
+    }
     let (reload_tx, reload_rx) = tokio::sync::watch::channel(config.clone());
     #[cfg(unix)]
     tokio::spawn(reload_on_sighup(path, reload_tx));
     #[cfg(not(unix))]
     drop(reload_tx);
-    nosfry::serve(config, listener, shutdown_signal(), reload_rx).await?;
+    nosfry::serve(config, listeners, shutdown_signal(), reload_rx).await?;
     Ok(())
 }
 
@@ -271,7 +270,7 @@ fn import(
     nosfry::admin::import(
         &store,
         &config.events,
-        limits.auth.relay(),
+        limits.auth.names(),
         config.relay.max_websocket_payload_size,
         stdin.lock(),
         show_rejected,

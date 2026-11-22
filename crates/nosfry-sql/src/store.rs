@@ -11,7 +11,7 @@ use nosfry_core::hll::Hll;
 use nosfry_core::moderation::{ModOp, Moderation};
 use nosfry_core::packed::PackedRef;
 use nosfry_core::store::WriteOutcome;
-use nosfry_core::url::RelayUrl;
+use nosfry_core::url::RelayNames;
 
 use crate::exec::{Executor, Param, Value};
 use crate::{Count, Hit, Records, Scan, StoreError};
@@ -181,10 +181,10 @@ impl<E: Executor> SqlStore<E> {
     }
 
     /// Apply `events` in arrival order inside a single transaction,
-    /// one [`WriteOutcome`] per input. `service_url` is the relay's
-    /// own URL for NIP-62: a stored (or duplicate) request to vanish
-    /// naming it or `ALL_RELAYS` raises the author's vanish point and
-    /// queues the sweep [`SqlStore::vanish_step`] drains.
+    /// one [`WriteOutcome`] per input. `names` is the relay's own
+    /// names for NIP-62: a stored (or duplicate) request to vanish
+    /// naming one of them or `ALL_RELAYS` raises the author's vanish
+    /// point and queues the sweep [`SqlStore::vanish_step`] drains.
     ///
     /// # Errors
     ///
@@ -192,19 +192,14 @@ impl<E: Executor> SqlStore<E> {
     /// [`StoreError::OutOfRange`] on a `created_at` above the
     /// JavaScript-safe integer range, [`StoreError::Corrupt`] on a
     /// broken index invariant.
-    pub fn write(
-        &self,
-        events: &[Arc<Event>],
-        service_url: Option<&RelayUrl>,
-    ) -> Result<Written, StoreError> {
+    pub fn write(&self, events: &[Arc<Event>], names: &RelayNames) -> Result<Written, StoreError> {
         self.exec.transaction(|| {
             let mut written = Written {
                 outcomes: Vec::with_capacity(events.len()),
                 vanish_pending: false,
             };
             for event in events {
-                written.vanish_pending |=
-                    self.apply_event(event, service_url, &mut written.outcomes)?;
+                written.vanish_pending |= self.apply_event(event, names, &mut written.outcomes)?;
             }
             Ok(written)
         })
@@ -490,7 +485,7 @@ impl<E: Executor> SqlStore<E> {
     fn apply_event(
         &self,
         event: &Arc<Event>,
-        service_url: Option<&RelayUrl>,
+        names: &RelayNames,
         outcomes: &mut Vec<WriteOutcome>,
     ) -> Result<bool, StoreError> {
         let outcome = self.apply(event)?;
@@ -498,7 +493,7 @@ impl<E: Executor> SqlStore<E> {
         // A kind 62 has no address, so `Superseded` here means the
         // newest-only bookkeeping rule — honoring the request is
         // independent of keeping it (NIP-62 MUST).
-        if event.requests_vanish(service_url)
+        if event.requests_vanish(names)
             && matches!(
                 outcome,
                 WriteOutcome::Stored { .. } | WriteOutcome::Duplicate | WriteOutcome::Superseded

@@ -33,7 +33,7 @@ fn limits() -> Arc<Limits> {
             ip_reqs_burst: 0,
         },
         auth: Arc::new(AuthRules::new(
-            Some(nosfry_core::url::RelayUrl::parse("wss://fuzz.example").unwrap()),
+            nosfry_core::url::RelayNames::parse("wss://fuzz.example", &[]).unwrap(),
             &[4, 1059],
             true,
         )),

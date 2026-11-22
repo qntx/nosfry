@@ -6,14 +6,13 @@
 //! snapshot. The protocol itself — content type, limits, NIP-98 gate,
 //! request dispatch — lives in [`nosfry_core::management`].
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::Json;
 use axum::body::Bytes;
-use axum::extract::{ConnectInfo, State};
+use axum::extract::{Extension, State};
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 pub(crate) use nosfry_core::management::BODY_LIMIT;
@@ -24,6 +23,7 @@ use tokio::sync::oneshot;
 
 use crate::channels::WriterMsg;
 use crate::http::{AppState, ip_blocked};
+use crate::peer::{self, Origin};
 
 /// Warn-once flag for a management endpoint without `service_url`
 /// (every request then fails the `u`-tag check).
@@ -35,19 +35,23 @@ static NO_SERVICE_URL_WARNED: AtomicBool = AtomicBool::new(false);
 /// pre-NIP-86 behavior (405).
 pub(crate) async fn handle(
     State(state): State<AppState>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    Extension(origin): Extension<Origin>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
     // Every NIP-86 answer carries CORS: a browser admin tool's
     // preflight must see POST + Authorization, and it must be able
     // to read the 401/200 replies.
-    crate::http::with_cors(answer(&state, peer, headers, body).await)
+    crate::http::with_cors(answer(&state, &origin, headers, body).await)
 }
 
 /// The NIP-86 answer for one POST; `handle` adds CORS.
-async fn answer(state: &AppState, peer: SocketAddr, headers: HeaderMap, body: Bytes) -> Response {
-    if ip_blocked(state, &headers, peer.ip()) {
+async fn answer(state: &AppState, origin: &Origin, headers: HeaderMap, body: Bytes) -> Response {
+    let (peer, fell_back) = peer::resolve(origin, &headers);
+    if fell_back {
+        peer::warn_fallback(&origin.listener);
+    }
+    if ip_blocked(state, &peer) {
         return StatusCode::FORBIDDEN.into_response();
     }
     let live = state.live.borrow().clone();
@@ -68,13 +72,13 @@ async fn answer(state: &AppState, peer: SocketAddr, headers: HeaderMap, body: By
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let service_url = live.limits.auth.relay();
+    let names = live.limits.auth.names();
     let auth = nosfry_core::management::authorize(
         authorization,
         &body,
         now,
         &live.config.events,
-        service_url,
+        names,
         &live.admins,
     );
     if matches!(auth, Err(AuthError::NoServiceUrl))

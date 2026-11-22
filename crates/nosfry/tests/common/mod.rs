@@ -13,10 +13,11 @@
 )]
 
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use nosfry::config::Config;
+use nosfry::config::{Config, Listen, ListenAddress, Profile};
 use nosfry_core::event::{Event, EventLimits, UnverifiedEvent};
 use secp256k1::{Keypair, SecretKey, schnorr};
 use serde_json::{Value, json};
@@ -81,12 +82,13 @@ pub fn close_wire(sub_id: &str) -> String {
     format!("[\"CLOSE\",\"{sub_id}\"]")
 }
 
-/// Shared test config: rate limits and the per-IP connection cap are
-/// disabled so traffic-heavy tests are not throttled; tests that need
-/// them set the fields back explicitly.
+/// Shared test config: rate limits and the per-peer connection cap
+/// are disabled so traffic-heavy tests are not throttled; tests that
+/// need them set the fields back on [`default_profile`].
 pub fn config() -> Config {
     let mut config = Config::default();
-    config.relay.rate_limits = nosfry_core::limits::RateLimits {
+    let profile = default_profile(&mut config);
+    profile.rate_limits = nosfry_core::limits::RateLimits {
         events_per_second: 0,
         events_burst: 0,
         reqs_per_second: 0,
@@ -96,14 +98,44 @@ pub fn config() -> Config {
         ip_reqs_per_second: 0,
         ip_reqs_burst: 0,
     };
-    config.relay.max_connections_per_ip = 0;
+    profile.max_connections_per_peer = 0;
     config
+}
+
+/// The `default` profile entry for test mutation.
+pub fn default_profile(config: &mut Config) -> &mut Profile {
+    config
+        .relay
+        .profiles
+        .entry("default".to_owned())
+        .or_default()
+}
+
+/// A `[[relay.listen]]` entry on an ephemeral TCP port.
+pub fn tcp_listen() -> Listen {
+    Listen {
+        address: ListenAddress::Tcp("127.0.0.1:0".parse().unwrap()),
+        profile: "default".to_owned(),
+        real_ip_header: String::new(),
+    }
+}
+
+/// A `[[relay.listen]]` entry on a unix socket path.
+pub fn unix_listen(path: &Path) -> Listen {
+    Listen {
+        address: ListenAddress::Unix(path.to_path_buf()),
+        profile: "default".to_owned(),
+        real_ip_header: String::new(),
+    }
 }
 
 /// Running test relay.
 pub struct Relay {
-    /// Bound address.
+    /// Bound TCP address (`127.0.0.1:0` when the config has no TCP
+    /// listener — a unix-only relay).
     pub addr: SocketAddr,
+    /// The first unix listener's socket path, if any.
+    pub unix_path: Option<PathBuf>,
     /// Push a config reload (the SIGHUP path's channel end).
     reload_tx: watch::Sender<Config>,
     stop: oneshot::Sender<()>,
@@ -119,22 +151,36 @@ impl Relay {
     }
 
     /// Start with a caller-adjusted config; the `db.path` inside it is
-    /// overridden by the tempdir unless `db_path` is set.
+    /// overridden by the tempdir unless `db_path` is set. The shipped
+    /// `127.0.0.1:7777` listener is replaced by an ephemeral port;
+    /// tests that set `relay.listen` explicitly keep their own.
     pub async fn start_with(mut config: Config) -> Self {
         let dir = tempfile::tempdir().unwrap();
         if config.db.path.as_os_str() == "./nosfry-db" {
             config.db.path = dir.path().to_path_buf();
         }
+        if config.relay.listen == Config::default().relay.listen {
+            config.relay.listen = vec![tcp_listen()];
+        }
+        let unix_path = config
+            .relay
+            .listen
+            .iter()
+            .find_map(|listen| match &listen.address {
+                ListenAddress::Unix(path) => Some(path.clone()),
+                ListenAddress::Tcp(_) => None,
+            });
         let (tx, rx) = oneshot::channel();
         let (reload_tx, reload_rx) = watch::channel(config.clone());
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let addr = listener.local_addr().unwrap();
+        let listeners = nosfry::bind(&config).await.unwrap();
+        let addr = listeners
+            .iter()
+            .find_map(nosfry::Listener::local_addr)
+            .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 0)));
         let handle = tokio::spawn(async move {
             nosfry::serve(
                 config,
-                listener,
+                listeners,
                 async {
                     rx.await.ok();
                 },
@@ -143,15 +189,20 @@ impl Relay {
             .await
             .unwrap();
         });
-        // Wait until the listener accepts.
+        // Wait until a listener answers.
         for _ in 0..100 {
-            if tokio::net::TcpStream::connect(addr).await.is_ok() {
+            let ready = match (&unix_path, addr.port()) {
+                (Some(path), 0) => tokio::net::UnixStream::connect(path).await.is_ok(),
+                _ => tokio::net::TcpStream::connect(addr).await.is_ok(),
+            };
+            if ready {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         Self {
             addr,
+            unix_path,
             reload_tx,
             stop: tx,
             handle,
@@ -173,6 +224,19 @@ impl Relay {
             .unwrap()
     }
 
+    /// A websocket client connection over the first unix listener.
+    pub async fn connect_unix(&self) -> yawc::WebSocket<tokio::net::UnixStream> {
+        let path = self.unix_path.as_ref().expect("relay has no unix listener");
+        let io = tokio::net::UnixStream::connect(path).await.unwrap();
+        yawc::WebSocket::handshake(
+            "ws://localhost/".parse().unwrap(),
+            io,
+            yawc::Options::default(),
+        )
+        .await
+        .unwrap()
+    }
+
     /// Graceful stop: drop the senders, drain, join.
     pub async fn stop(self) {
         self.stop.send(()).ok();
@@ -181,7 +245,10 @@ impl Relay {
 }
 
 /// Receive one text frame within `timeout`; panics on close/timeout.
-pub async fn recv_text(ws: &mut yawc::TcpWebSocket, timeout: Duration) -> String {
+pub async fn recv_text<S>(ws: &mut yawc::WebSocket<S>, timeout: Duration) -> String
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     use futures_util::StreamExt;
     loop {
         let frame = tokio::time::timeout(timeout, ws.next())
@@ -195,7 +262,10 @@ pub async fn recv_text(ws: &mut yawc::TcpWebSocket, timeout: Duration) -> String
 }
 
 /// Send one text frame.
-pub async fn send_text(ws: &mut yawc::TcpWebSocket, text: &str) {
+pub async fn send_text<S>(ws: &mut yawc::WebSocket<S>, text: &str)
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     use futures_util::SinkExt;
     ws.send(yawc::Frame::text(text.to_owned())).await.unwrap();
 }

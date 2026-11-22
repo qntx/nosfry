@@ -9,7 +9,7 @@ use nosfry_core::auth::ReadGate;
 use nosfry_core::deletion::{self, DeletionTarget};
 use nosfry_core::event::{Event, EventId, PublicKey, cmp_newest_first, supersedes};
 use nosfry_core::filter::Filter;
-use nosfry_core::url::RelayUrl;
+use nosfry_core::url::RelayNames;
 
 /// The store's state model: stored events plus the deletion blocks a
 /// kind 5 leaves behind.
@@ -81,8 +81,8 @@ fn vanish_blocked(m: &Model, ev: &Event) -> bool {
 /// Raise `ev`'s author vanish point to `ev.created_at` when the
 /// request honors this relay, then apply the sweep — also reached
 /// for a superseded kind 62 whose storage is skipped.
-fn raise_vanish(m: &mut Model, ev: &Event, service_url: Option<&RelayUrl>) {
-    if !ev.requests_vanish(service_url) {
+fn raise_vanish(m: &mut Model, ev: &Event, names: &RelayNames) {
+    if !ev.requests_vanish(names) {
         return;
     }
     let point = m.vanish.entry(ev.pubkey()).or_insert(0);
@@ -119,7 +119,7 @@ fn apply_vanish(m: &mut Model, author: &PublicKey, t: u64) {
 }
 
 /// Model `Store::write` in arrival order, NIP-09 and NIP-62
-/// included; `service_url` decides which kind-62 `relay` tags this
+/// included; `names` decides which kind-62 `relay` tags this
 /// relay honors.
 ///
 /// # Panics
@@ -127,7 +127,7 @@ fn apply_vanish(m: &mut Model, author: &PublicKey, t: u64) {
 /// Panics when the address index references a missing seq — a model
 /// bug, never reachable from valid inputs.
 #[must_use]
-pub fn model_store(events: &[Arc<Event>], service_url: Option<&RelayUrl>) -> Model {
+pub fn model_store(events: &[Arc<Event>], names: &RelayNames) -> Model {
     let mut m = Model::default();
     let mut next_seq = 1u64;
     for ev in events {
@@ -153,7 +153,7 @@ pub fn model_store(events: &[Arc<Event>], service_url: Option<&RelayUrl>) -> Mod
             }) {
                 // Superseded but still honored — bookkeeping storage
                 // is independent of the vanish request itself.
-                raise_vanish(&mut m, ev, service_url);
+                raise_vanish(&mut m, ev, names);
                 continue;
             }
             for seq in stored62 {
@@ -200,7 +200,7 @@ pub fn model_store(events: &[Arc<Event>], service_url: Option<&RelayUrl>) -> Mod
         }
         // NIP-62: raise the vanish point and apply the sweep now —
         // same-batch events stored earlier are covered too.
-        raise_vanish(&mut m, ev, service_url);
+        raise_vanish(&mut m, ev, names);
     }
     m
 }

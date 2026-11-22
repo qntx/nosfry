@@ -30,6 +30,7 @@ mod http;
 mod limiter;
 mod management;
 mod metrics;
+mod peer;
 mod policy;
 mod reader;
 mod shard;
@@ -42,7 +43,6 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use axum::body::Body;
-use axum::extract::ConnectInfo;
 use clap as _;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -53,13 +53,17 @@ use nosfry_core::moderation::Moderation;
 use nosfry_lmdb::Store;
 #[cfg(not(unix))]
 use rlimit as _;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
+#[cfg(unix)]
+use tokio::net::UnixListener;
 use tokio::sync::{mpsc, watch};
 use tower::ServiceExt as _;
 use tracing_subscriber as _;
 
 use crate::channels::{ReaderInbox, ReaderMsg, ShardMsg, WriterMsg};
-use crate::config::Config;
+use crate::config::{Config, ListenAddress};
+use crate::peer::{ListenerInfo, Origin};
 
 /// How many publish requests the writer queues before backpressuring
 /// connections; the byte budget in [`WRITER_QUEUE_BYTES`] binds first
@@ -108,9 +112,9 @@ pub enum ServerError {
     /// TOML parse failure.
     #[error("config: {0}")]
     Config(#[from] toml::de::Error),
-    /// Invalid `[relay] service_url`.
+    /// Invalid `[relay] service_url` or `service_url_aliases` entry.
     #[error("config: relay.service_url: {0}")]
-    ServiceUrl(#[from] nosfry_core::url::RelayUrlError),
+    ServiceUrl(#[from] nosfry_core::url::RelayNamesError),
     /// Invalid `[relay.management] admins` entry.
     #[error("config: relay.management.admins: {0}: not a 64-hex pubkey")]
     Admins(String),
@@ -143,6 +147,11 @@ pub(crate) struct Live {
     /// Session limits assembled by [`Config::limits`]; new connections
     /// only — existing sessions keep the limits they started with.
     pub(crate) limits: Arc<nosfry_core::limits::Limits>,
+    /// Each `[relay.profiles.<name>]`'s session limits — `limits`
+    /// with the profile's `rate_limits` swapped in. A connection
+    /// takes its listener profile's entry at upgrade time.
+    pub(crate) profile_limits:
+        Arc<std::collections::HashMap<String, Arc<nosfry_core::limits::Limits>>>,
     /// Pre-serialized NIP-11 document, rebuilt on each reload.
     pub(crate) nip11: axum::body::Bytes,
     /// Pre-rendered landing page, rebuilt with `nip11`.
@@ -405,11 +414,8 @@ fn apply_reload(
     limiter: &limiter::ConnectionLimiter,
     max_connections: usize,
 ) -> Live {
-    limiter.update_caps(
-        max_connections,
-        merged.relay.max_connections_per_ip,
-        limits.rate,
-    );
+    limiter.update_caps(max_connections, &merged.relay.profiles());
+    let profile_limits = merged.profile_limits(&limits);
     let policy = if merged.relay.write_policy == live.config.relay.write_policy {
         live.policy.clone()
     } else {
@@ -422,6 +428,7 @@ fn apply_reload(
         landing: live.landing.clone(),
         config: Arc::new(merged),
         limits: Arc::new(limits),
+        profile_limits: Arc::new(profile_limits),
         policy,
         admins,
     }
@@ -516,12 +523,14 @@ impl Server {
         // The live-config channel exists before the writer spawn so
         // the vanish path re-reads `service_url` on every batch.
         let limits = config.limits()?;
+        let profile_limits = config.profile_limits(&limits);
         let admins = config.admins()?;
         let (live_tx, live_rx) = watch::channel(Arc::new(Live {
             config: Arc::clone(&config),
             nip11: http::nip11(&config, &limits, &moderation).into(),
             landing: http::landing(&config, &limits, &moderation).into(),
             limits: Arc::new(limits),
+            profile_limits: Arc::new(profile_limits),
             policy: start_policy(&config.relay.write_policy),
             admins,
         }));
@@ -586,8 +595,7 @@ impl Server {
                 live_tx: live_tx.clone(),
                 limiter: Arc::new(limiter::ConnectionLimiter::new(
                     max_connections,
-                    config.relay.max_connections_per_ip,
-                    config.relay.rate_limits,
+                    &config.relay.profiles(),
                 )),
             },
             live_tx,
@@ -655,59 +663,258 @@ fn tune<S: std::os::fd::AsFd>(tcp: &S, keepalive: bool) {
     }
 }
 
-/// Accept HTTP/1 connections until `shutdown` resolves, serving each
-/// with a header-read deadline `axum::serve` cannot set. In-flight
-/// connections get `graceful_shutdown` once `http_stop` fires.
-async fn accept_loop(
-    listener: &TcpListener,
-    router: &axum::Router,
-    live: &watch::Receiver<Arc<Live>>,
-    shutdown: impl Future<Output = ()>,
-    http_stop_rx: &watch::Receiver<()>,
-    http_tracker: &tokio_util::task::TaskTracker,
-) {
-    let mut shutdown = std::pin::pin!(shutdown);
-    loop {
-        let (tcp, peer) = tokio::select! {
-            res = listener.accept() => match res {
-                Ok(accepted) => accepted,
-                Err(err) => {
-                    if !is_connection_error(&err) {
-                        tracing::error!(%err, "accept error");
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    }
-                    continue;
-                }
-            },
-            () = &mut shutdown => break,
-        };
-        // Read the flag per accept so a reload reaches new sockets.
-        let keepalive = live.borrow().config.relay.tcp_keepalive;
-        spawn_connection(tcp, peer, router, keepalive, http_stop_rx, http_tracker);
+/// One bound `[[relay.listen]]` entry: the socket plus the fixed
+/// listener info every connection it accepts carries.
+#[derive(Debug)]
+pub struct Listener(ListenerKind);
+
+#[derive(Debug)]
+enum ListenerKind {
+    /// A TCP listener; its connections are `Peer::Ip` peers.
+    Tcp {
+        /// The bound socket.
+        listener: TcpListener,
+        /// This listener's fixed metadata.
+        info: Arc<ListenerInfo>,
+    },
+    /// A unix-domain-socket listener (unix only); without a
+    /// `real_ip_header` its connections are `Peer::Listener` peers
+    /// sharing the socket's identity. The socket file is removed
+    /// when the listener is dropped (server shutdown).
+    #[cfg(unix)]
+    Unix {
+        /// The bound socket.
+        listener: UnixListener,
+        /// This listener's fixed metadata.
+        info: Arc<ListenerInfo>,
+        /// Unlinks the socket file on drop.
+        guard: UnixSocketGuard,
+    },
+}
+
+/// Unlinks a bound unix socket's path on drop (server shutdown).
+/// Kept off `Listener` itself so the enum stays destructurable.
+#[cfg(unix)]
+#[derive(Debug)]
+pub struct UnixSocketGuard(std::path::PathBuf);
+
+#[cfg(unix)]
+impl Drop for UnixSocketGuard {
+    fn drop(&mut self) {
+        if let Err(err) = std::fs::remove_file(&self.0)
+            && err.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(%err, path = %self.0.display(), "could not remove unix socket");
+        }
     }
 }
 
-/// Serve one accepted socket with the header-read deadline, tracked by
-/// `http_tracker` and gracefully shut down when `http_stop` fires.
-fn spawn_connection(
-    tcp: tokio::net::TcpStream,
-    peer: std::net::SocketAddr,
+impl Listener {
+    /// The bound TCP address — `Some` only for TCP listeners. Tests
+    /// bind `127.0.0.1:0` and read the real port here.
+    #[must_use]
+    pub fn local_addr(&self) -> Option<std::net::SocketAddr> {
+        match &self.0 {
+            ListenerKind::Tcp { listener, .. } => listener.local_addr().ok(),
+            #[cfg(unix)]
+            ListenerKind::Unix { .. } => None,
+        }
+    }
+}
+
+/// The address `listening` logs and tests report: the bound TCP
+/// address or the `unix:` path.
+impl std::fmt::Display for Listener {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.0 {
+            ListenerKind::Tcp { listener, info } => match listener.local_addr() {
+                Ok(addr) => addr.fmt(f),
+                Err(_) => info.id.fmt(f),
+            },
+            #[cfg(unix)]
+            ListenerKind::Unix { info, .. } => info.id.fmt(f),
+        }
+    }
+}
+
+/// Bind every `[[relay.listen]]` address.
+///
+/// A unix path that already exists is probed: a refused connect means
+/// a stale socket file, which is removed and re-bound; a successful
+/// connect means a live server owns it and the bind fails `address in
+/// use`.
+///
+/// # Errors
+///
+/// [`ServerError::Io`] on bind failure or when a unix socket path is
+/// already in use.
+pub async fn bind(config: &Config) -> Result<Vec<Listener>, ServerError> {
+    let mut listeners = Vec::with_capacity(config.relay.listen.len());
+    for listen in &config.relay.listen {
+        let info = Arc::new(ListenerInfo {
+            id: Arc::from(listen.address.to_string().as_str()),
+            profile: Arc::from(listen.profile.as_str()),
+            real_ip_header: listen.real_ip_header.clone(),
+            last_warn_secs: std::sync::atomic::AtomicU64::new(0),
+        });
+        match &listen.address {
+            ListenAddress::Tcp(sock) => listeners.push(Listener(ListenerKind::Tcp {
+                listener: TcpListener::bind(sock).await?,
+                info,
+            })),
+            #[cfg(unix)]
+            ListenAddress::Unix(path) => {
+                let (listener, guard) = bind_unix(path).await?;
+                listeners.push(Listener(ListenerKind::Unix {
+                    listener,
+                    info,
+                    guard,
+                }));
+            }
+            #[cfg(not(unix))]
+            ListenAddress::Unix(path) => {
+                return Err(ServerError::RelayValue(format!(
+                    "unix listeners are unsupported on this platform: {}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(listeners)
+}
+
+/// Bind one unix socket path, returning the listener and the guard
+/// that unlinks it on shutdown. A path that already exists must be a
+/// socket — anything else is an error, never removed (Linux answers a
+/// connect to a regular file `ECONNREFUSED`, so the probe alone would
+/// take it for stale). An existing socket is probed by connecting: a
+/// refused connect means a stale socket file, which is removed and
+/// re-bound; a successful connect means a live server owns it and the
+/// bind fails `address in use`; anything else is an error.
+#[cfg(unix)]
+async fn bind_unix(path: &std::path::Path) -> Result<(UnixListener, UnixSocketGuard), ServerError> {
+    use std::os::unix::fs::FileTypeExt as _;
+    if let Ok(meta) = std::fs::symlink_metadata(path) {
+        if !meta.file_type().is_socket() {
+            return Err(ServerError::Io(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("{} exists and is not a unix socket", path.display()),
+            )));
+        }
+        match tokio::net::UnixStream::connect(path).await {
+            Ok(_) => {
+                return Err(ServerError::Io(std::io::Error::new(
+                    std::io::ErrorKind::AddrInUse,
+                    format!("unix socket {} already in use", path.display()),
+                )));
+            }
+            // A stale socket file from a dead server: remove and
+            // re-bind.
+            Err(err) if err.kind() == std::io::ErrorKind::ConnectionRefused => {
+                std::fs::remove_file(path)?;
+            }
+            Err(err) => return Err(ServerError::Io(err)),
+        }
+    }
+    let listener = UnixListener::bind(path)?;
+    Ok((listener, UnixSocketGuard(path.to_path_buf())))
+}
+
+/// Accept HTTP/1 connections on one TCP listener until `http_stop`
+/// fires, serving each through [`serve_stream`]. `tcp_keepalive` is
+/// read per accept so a reload reaches new sockets.
+async fn accept_tcp(
+    listener: TcpListener,
+    info: Arc<ListenerInfo>,
+    router: axum::Router,
+    live: watch::Receiver<Arc<Live>>,
+    mut http_stop_rx: watch::Receiver<()>,
+    http_tracker: tokio_util::task::TaskTracker,
+) {
+    loop {
+        let accepted = tokio::select! {
+            res = listener.accept() => res,
+            _ = http_stop_rx.changed() => break,
+        };
+        let (tcp, peer) = match accepted {
+            Ok(accepted) => accepted,
+            Err(err) => {
+                if !is_connection_error(&err) {
+                    tracing::error!(%err, "accept error");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                continue;
+            }
+        };
+        let keepalive = live.borrow().config.relay.tcp_keepalive;
+        tune(&tcp, keepalive);
+        let origin = Origin {
+            listener: Arc::clone(&info),
+            transport: Some(peer),
+        };
+        serve_stream(tcp, origin, &router, &http_stop_rx, &http_tracker);
+    }
+}
+
+/// Accept HTTP/1 connections on one unix listener until `http_stop`
+/// fires. A unix connection has no client address: its `Origin`
+/// transport is `None` and its peer resolves to the listener
+/// identity unless the listener's `real_ip_header` supplies one.
+#[cfg(unix)]
+async fn accept_unix(
+    listener: UnixListener,
+    info: Arc<ListenerInfo>,
+    _guard: UnixSocketGuard,
+    router: axum::Router,
+    mut http_stop_rx: watch::Receiver<()>,
+    http_tracker: tokio_util::task::TaskTracker,
+) {
+    loop {
+        let accepted = tokio::select! {
+            res = listener.accept() => res,
+            _ = http_stop_rx.changed() => break,
+        };
+        let (io, _addr) = match accepted {
+            Ok(accepted) => accepted,
+            Err(err) => {
+                if !is_connection_error(&err) {
+                    tracing::error!(%err, "accept error");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+                continue;
+            }
+        };
+        let origin = Origin {
+            listener: Arc::clone(&info),
+            transport: None,
+        };
+        serve_stream(io, origin, &router, &http_stop_rx, &http_tracker);
+    }
+}
+
+/// Serve one accepted byte stream — any transport's `AsyncRead +
+/// AsyncWrite` — with the header-read deadline `axum::serve` cannot
+/// set, the `Origin` extension every handler resolves its peer from,
+/// WebSocket upgrades, and a graceful shutdown once `http_stop`
+/// fires. Transport-specific tuning happens in the accept loop
+/// before this runs.
+fn serve_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    io: S,
+    origin: Origin,
     router: &axum::Router,
-    keepalive: bool,
     http_stop_rx: &watch::Receiver<()>,
     http_tracker: &tokio_util::task::TaskTracker,
 ) {
-    tune(&tcp, keepalive);
     let service = TowerToHyperService::new(router.clone().into_service().map_request(
         move |mut req: hyper::Request<Incoming>| {
-            req.extensions_mut().insert(ConnectInfo(peer));
+            req.extensions_mut().insert(origin.clone());
             req.map(Body::new)
         },
     ));
     let conn = http1::Builder::new()
         .timer(TokioTimer::new())
         .header_read_timeout(HEADER_READ_TIMEOUT)
-        .serve_connection(TokioIo::new(tcp), service)
+        .serve_connection(TokioIo::new(io), service)
         .with_upgrades();
     let mut conn = Box::pin(conn);
     let mut conn_stop = http_stop_rx.clone();
@@ -753,7 +960,7 @@ async fn wait_for(tracker: &tokio_util::task::TaskTracker, what: &str) {
 /// [`ServerError::Shutdown`] when the worker-join task fails.
 pub async fn serve(
     config: Config,
-    listener: TcpListener,
+    listeners: Vec<Listener>,
     shutdown: impl Future<Output = ()> + Send + 'static,
     reload: watch::Receiver<Config>,
 ) -> Result<(), ServerError> {
@@ -771,33 +978,54 @@ pub async fn serve(
     let stop = server.stop_tx.clone();
     let tracker = server.state.conn.tracker.clone();
     // HTTP/1 only, with a header-read deadline `axum::serve` cannot set.
-    // `http_stop` asks every in-flight connection to shut down
-    // gracefully; `http_tracker` awaits them.
+    // `http_stop` ends every accept loop and asks every in-flight
+    // connection to shut down gracefully; `http_tracker` awaits them.
     let (http_stop, http_stop_rx) = watch::channel(());
     let http_tracker = tokio_util::task::TaskTracker::new();
     let router = server.router();
-    accept_loop(
-        &listener,
-        &router,
-        &server.state.live,
-        async move {
-            shutdown.await;
-            stop.send_replace(true);
-        },
-        &http_stop_rx,
-        &http_tracker,
-    )
-    .await;
+    // One accept loop per listener, sharing the trackers and shutdown.
+    for listener in listeners {
+        match listener.0 {
+            ListenerKind::Tcp { listener, info } => {
+                http_tracker.spawn(accept_tcp(
+                    listener,
+                    info,
+                    router.clone(),
+                    server.state.live.clone(),
+                    http_stop_rx.clone(),
+                    http_tracker.clone(),
+                ));
+            }
+            #[cfg(unix)]
+            ListenerKind::Unix {
+                listener,
+                info,
+                guard,
+            } => {
+                http_tracker.spawn(accept_unix(
+                    listener,
+                    info,
+                    guard,
+                    router.clone(),
+                    http_stop_rx.clone(),
+                    http_tracker.clone(),
+                ));
+            }
+        }
+    }
+    shutdown.await;
+    stop.send_replace(true);
     // The router holds an AppState (writer/shard senders): drop it so
     // `server.stop()`'s channel teardown can complete.
     drop(router);
-    // Gracefully close in-flight HTTP connections (idle keep-alive and
-    // mid-read conns end promptly), bounded by the shutdown deadline.
+    // Break the accept loops and gracefully close in-flight HTTP
+    // connections (idle keep-alive and mid-read conns end promptly),
+    // bounded by the shutdown deadline.
     drop(http_stop_rx);
     http_stop.send_replace(());
     wait_for(&http_tracker, "open HTTP connections").await;
-    // Stop accepting new connection tasks, then give live ones a
-    // deadline to close (the watch signal already went out).
+    // Give live connections a deadline to close (the watch signal
+    // already went out).
     wait_for(&tracker, "open connections").await;
     // Joining worker threads blocks; keep it off the runtime.
     tokio::task::spawn_blocking(move || server.stop())

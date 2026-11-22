@@ -7,9 +7,10 @@
 //! to a service binding.
 //!
 //! - Request: `{"type":"new","event":<raw>,"receivedAt":<unix>,`
-//!   `"sourceType":"IP4"|"IP6","sourceInfo":"<ip>"[,`
+//!   `"sourceType":"IP4"|"IP6"|"Unix","sourceInfo":"<ip or path>"[,`
 //!   `"authed":"<hex pubkey>"]}` — IPv4-mapped IPv6 reports `IP4`
-//!   with the v4 address; `authed` appears only after the connection
+//!   with the v4 address; a unix-socket listener reports `Unix` with
+//!   its socket path; `authed` appears only after the connection
 //!   authenticated (NIP-42).
 //! - Response: `{"id":"<event id>","action":"accept"|"reject"|`
 //!   `"shadowReject","msg":"..."}` (`msg` optional). Non-JSON lines
@@ -62,6 +63,28 @@ fn source_parts(ip: IpAddr) -> (&'static str, String) {
             .to_ipv4_mapped()
             .map_or_else(|| ("IP6", ip.to_string()), |v4| ("IP4", v4.to_string())),
     }
+}
+
+/// The request line for a source with no client address — a
+/// unix-socket listener.
+///
+/// Reports `"sourceType":"Unix"` and the socket path, JSON-escaped —
+/// filesystem paths may carry characters a raw interpolation would
+/// break.
+pub fn request_line_unix(
+    event_json: &str,
+    received_at: u64,
+    source_info: &str,
+    authed: Option<PublicKey>,
+) -> String {
+    let info = serde_json::to_string(source_info).unwrap_or_else(|_| "\"\"".to_owned());
+    let authed = authed.map_or_else(String::new, |pk| {
+        format!(",\"authed\":\"{}\"", faster_hex::hex_string(&pk.0))
+    });
+    format!(
+        "{{\"type\":\"new\",\"event\":{event_json},\"receivedAt\":{received_at},\
+         \"sourceType\":\"Unix\",\"sourceInfo\":{info}{authed}}}"
+    )
 }
 
 /// Parse one response line; [`ResponseError::Noise`] marks input the
@@ -190,6 +213,23 @@ mod tests {
             source_parts("2001:db8::1".parse().unwrap()),
             ("IP6", "2001:db8::1".to_owned())
         );
+    }
+
+    /// A unix-socket listener reports `sourceType` `Unix` with the
+    /// socket path, escaped as a JSON string.
+    #[test]
+    fn request_line_unix_shape() {
+        let line = request_line_unix(EVENT_JSON, 1_700_000_000, "/run/nosfry/tor.sock", None);
+        let request: Req<'_> = serde_json::from_str(&line).unwrap();
+        assert_eq!(request.kind, "new");
+        assert_eq!(request.received_at, 1_700_000_000);
+        assert_eq!(request.source_type, "Unix");
+        assert_eq!(request.source_info, "/run/nosfry/tor.sock");
+        assert_eq!(request.event.get(), EVENT_JSON);
+        // A path with JSON metacharacters still parses.
+        let escaped = request_line_unix(EVENT_JSON, 0, "/tmp/a\"b\nsock", None);
+        let parsed: Req<'_> = serde_json::from_str(&escaped).unwrap();
+        assert_eq!(parsed.source_info, "/tmp/a\"b\nsock");
     }
 
     #[test]

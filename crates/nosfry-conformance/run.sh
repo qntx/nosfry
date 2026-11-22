@@ -2,6 +2,9 @@
 # Run the black-box conformance suite against one edition.
 #
 #   run.sh native   build nosfry and run it with profile.toml
+#   run.sh native-unix
+#                   same, but the relay listens on a unix socket and
+#                   unix_bridge.py forwards 127.0.0.1:$port to it
 #   run.sh worker   build nosfry-worker and run it under wrangler dev
 #   run.sh remote   run the suite against an already-running relay;
 #                   NOSFRY_URL must be set (e.g. ws:// or wss://host)
@@ -24,6 +27,7 @@ profile="$here/profile.toml"
 profile_alt="$here/profile-alt.toml"
 tmpdir="$(mktemp -d)"
 server_pid=""
+bridge_pid=""
 generated_config=""
 
 cleanup() {
@@ -34,6 +38,10 @@ cleanup() {
         kill -- "-$server_pid" 2>/dev/null || kill "$server_pid" 2>/dev/null || true
         wait "$server_pid" 2>/dev/null || true
     fi
+    if [ -n "$bridge_pid" ]; then
+        kill -- "-$bridge_pid" 2>/dev/null || kill "$bridge_pid" 2>/dev/null || true
+        wait "$bridge_pid" 2>/dev/null || true
+    fi
     if [ -n "$generated_config" ]; then
         rm -f "$generated_config"
     fi
@@ -42,6 +50,11 @@ cleanup() {
 trap cleanup EXIT
 
 stop_server() {
+    if [ -n "$bridge_pid" ]; then
+        kill -- "-$bridge_pid" 2>/dev/null || kill "$bridge_pid" 2>/dev/null || true
+        wait "$bridge_pid" 2>/dev/null || true
+        bridge_pid=""
+    fi
     if [ -n "$server_pid" ]; then
         kill -- "-$server_pid" 2>/dev/null || kill "$server_pid" 2>/dev/null || true
         wait "$server_pid" 2>/dev/null || true
@@ -83,37 +96,47 @@ start_server() {
     local pass="$1"
     local server_log="$tmpdir/server-$pass.log"
     case "$edition" in
-    native)
+    native|native-unix)
         local src="$profile"
         [ "$pass" = "alt" ] && src="$profile_alt"
-        cat "$src" >"$tmpdir/config-$pass.toml"
+        # The shared profile keeps [relay.rate_limits] for the worker
+        # edition; native moved it under the `default` profile.
+        sed 's/^\[relay\.rate_limits\]$/[relay.profiles.default.rate_limits]/' \
+            "$src" >"$tmpdir/config-$pass.toml"
+        # `[[relay.listen]]` is its own table, so it can always be
+        # appended — no splice needed when the profile owns `[relay]`.
+        local address="127.0.0.1:$port"
+        [ "$edition" = "native-unix" ] && address="unix:$tmpdir/relay-$pass.sock"
         cat >>"$tmpdir/config-$pass.toml" <<EOF
+
 [db]
 path = "$tmpdir/db-$pass"
+
+[[relay.listen]]
+address = "$address"
 EOF
-        if grep -q '^\[relay\]' "$tmpdir/config-$pass.toml"; then
-            # The profile already owns a [relay] table (profile-alt's
-            # size keys): splice the bind keys into it — TOML tables
-            # may not be declared twice.
-            awk -v port="$port" '
-                { print }
-                /^\[relay\]$/ {
-                    print "bind = \"127.0.0.1\"";
-                    print "port = " port
-                }
-            ' "$tmpdir/config-$pass.toml" >"$tmpdir/config-$pass.toml.tmp"
-            mv "$tmpdir/config-$pass.toml.tmp" "$tmpdir/config-$pass.toml"
-        else
-            cat >>"$tmpdir/config-$pass.toml" <<EOF
+        if [ "$pass" = "main" ]; then
+            if grep -q '^\[relay\]' "$tmpdir/config-$pass.toml"; then
+                # The profile already owns a [relay] table: splice
+                # service_url into it — TOML tables may not be
+                # declared twice.
+                awk -v url="$NOSFRY_URL" '
+                    { print }
+                    /^\[relay\]$/ {
+                        print "service_url = \"" url "\""
+                        print "service_url_aliases = [\"wss://alias.nosfry.test\"]"
+                    }
+                ' "$tmpdir/config-$pass.toml" >"$tmpdir/config-$pass.toml.tmp"
+                mv "$tmpdir/config-$pass.toml.tmp" "$tmpdir/config-$pass.toml"
+            else
+                cat >>"$tmpdir/config-$pass.toml" <<EOF
 
 [relay]
-bind = "127.0.0.1"
-port = $port
-EOF
-        fi
-        if [ "$pass" = "main" ]; then
-            cat >>"$tmpdir/config-$pass.toml" <<EOF
 service_url = "$NOSFRY_URL"
+service_url_aliases = ["wss://alias.nosfry.test"]
+EOF
+            fi
+            cat >>"$tmpdir/config-$pass.toml" <<EOF
 
 [relay.write_policy]
 plugin = "python3 $here/policy/policy.py"
@@ -122,6 +145,11 @@ EOF
         "$root/target/release/nosfry" relay --config "$tmpdir/config-$pass.toml" \
             >"$server_log" 2>&1 &
         server_pid=$!
+        if [ "$edition" = "native-unix" ]; then
+            python3 "$here/unix_bridge.py" 127.0.0.1 "$port" \
+                "$tmpdir/relay-$pass.sock" >"$tmpdir/bridge-$pass.log" 2>&1 &
+            bridge_pid=$!
+        fi
         ;;
     worker)
         local src="$profile"
@@ -132,6 +160,7 @@ EOF
 
 [relay]
 service_url = "$NOSFRY_URL"
+service_url_aliases = ["wss://alias.nosfry.test"]
 EOF
         fi
         # Give the relay a POLICY service binding without carrying the
@@ -179,13 +208,13 @@ set -m
 case "$edition" in
 remote)
     ;;
-native)
+native|native-unix)
     cargo build --release --manifest-path "$root/Cargo.toml" -p nosfry
     ;;
 worker)
     ;;
 *)
-    echo "usage: run.sh <native|worker|remote>" >&2
+    echo "usage: run.sh <native|native-unix|worker|remote>" >&2
     exit 2
     ;;
 esac

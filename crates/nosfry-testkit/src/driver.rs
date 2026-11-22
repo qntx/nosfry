@@ -10,7 +10,7 @@ use nosfry_core::hll::Hll;
 use nosfry_core::moderation::{InfoField, ModOp, Moderation};
 use nosfry_core::sign::{event, keys, pubkey_hex};
 use nosfry_core::store::WriteOutcome;
-use nosfry_core::url::RelayUrl;
+use nosfry_core::url::RelayNames;
 use proptest::prelude::*;
 use serde_json::json;
 
@@ -163,7 +163,7 @@ pub struct Aftermath {
 /// to involved keys and the authed set is the first pool signer, the
 /// same rules the LMDB COUNT check uses.
 fn restricted_gate() -> ReadGate {
-    let rules = AuthRules::new(Some(RelayUrl::parse(SERVICE_URL).unwrap()), &[3], true);
+    let rules = AuthRules::new(RelayNames::parse(SERVICE_URL, &[]).unwrap(), &[3], true);
     let authed: Arc<[PublicKey]> = Arc::from(vec![PublicKey(
         keys()[0].x_only_public_key().0.to_byte_array(),
     )]);
@@ -209,9 +209,9 @@ pub fn check(store: &mut impl StoreDriver, case: &Case) -> Result<Aftermath, Tes
     // persisted resume cursor is exercised; the model applied the
     // deletions eagerly while storing.
     store.drain_vanish();
-    let service_url =
-        RelayUrl::parse(SERVICE_URL).map_err(|e| TestCaseError::reject(e.to_string()))?;
-    let mut stored = model_store(&case.events, Some(&service_url));
+    let names =
+        RelayNames::parse(SERVICE_URL, &[]).map_err(|e| TestCaseError::reject(e.to_string()))?;
+    let mut stored = model_store(&case.events, &names);
 
     let filters: Arc<[Filter]> = Arc::from(
         case.filter_specs

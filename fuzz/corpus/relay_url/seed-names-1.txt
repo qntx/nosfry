@@ -1,0 +1,3 @@
+wss://relay.example.com
+wss://alias.example.com
+ws://abcdefghijklmnop.onion

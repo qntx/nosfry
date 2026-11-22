@@ -109,8 +109,9 @@ Trust boundaries:
 5. **Relay ↔ storage.** LMDB files on local disk, or Durable Object SQLite.
    The database is trusted at rest, but crash consistency and the scan/live
    boundary are in scope.
-6. **Reverse proxy ↔ relay.** The proxy terminates TLS. `relay.real_ip_header`
-   transfers trust for the client address to the proxy.
+6. **Reverse proxy ↔ relay.** The proxy terminates TLS. A listener's
+   `real_ip_header` transfers trust for the client address to the proxy; a
+   unix-socket listener without one is a single peer.
 7. **Operator ↔ configuration and CLI.** `nosfry.toml`, SIGHUP reloads,
    `import --no-verify`, `delete`, and `compact` are trusted, but must fail
    closed on invalid input.
@@ -368,8 +369,9 @@ identifiers are authoritative.
     - Per-address buckets (100/s, burst 500), shared by every connection of
       one address.
     - COUNT and negentropy messages spend REQ tokens.
-  - **Connections.** `max_connections`, and `max_connections_per_ip` (128;
-    IPv6 counted per /64).
+  - **Connections.** `max_connections`, and each listener profile's
+    `max_connections_per_peer` (128; IPv6 counted per /64, a unix listener
+    as one peer).
   - **Pending outbound.**
     - Per connection `max_pending_outbound_bytes` (32 MiB, then close).
     - Process-wide `max_pending_outbound_bytes_total` (1 GiB, scans pause).
@@ -403,7 +405,7 @@ identifiers are authoritative.
 - **P15 — Client address accounting.**
   - The client address is the socket peer unless `real_ip_header` is set.
     When set, the header's last comma-separated value is used; a missing or
-    unparsable value falls back to the peer (`http::client_ip`).
+    unparsable value falls back to the transport peer (`peer::resolve`).
   - The same address drives the per-IP cap, the per-address buckets, the
     NIP-86 IP block list, and the policy's `sourceInfo`.
   - For caps and buckets both editions group IPv6 by /64 and fold

@@ -4,5 +4,5 @@
 [db]
 path = "/data/nosfry-db"
 
-[relay]
-bind = "0.0.0.0"
+[[relay.listen]]
+address = "0.0.0.0:7777"

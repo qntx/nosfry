@@ -14,7 +14,7 @@ use crate::deletion::DeletionTarget;
 use crate::hex;
 use crate::kind::{Kind, KindClass};
 use crate::packed::{PackedEvent, PackedRef};
-use crate::url::RelayUrl;
+use crate::url::RelayNames;
 
 /// A 32-byte event id. `Display` is lowercase hex.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -505,12 +505,12 @@ impl Event {
 
     /// Whether this is a NIP-62 request to vanish that this relay must
     /// honor: a kind 62 whose `relay` tags hold `ALL_RELAYS` or a value
-    /// matching `url`.
+    /// matching any of `names`.
     #[must_use]
-    pub fn requests_vanish(&self, url: Option<&RelayUrl>) -> bool {
+    pub fn requests_vanish(&self, names: &RelayNames) -> bool {
         self.vanish_relays
             .iter()
-            .any(|value| value.as_ref() == "ALL_RELAYS" || url.is_some_and(|u| u.matches(value)))
+            .any(|value| value.as_ref() == "ALL_RELAYS" || names.matches(value))
     }
 }
 
@@ -838,8 +838,13 @@ mod tests {
 
     #[test]
     fn requests_vanish_matches_relay_tags() {
-        use crate::url::RelayUrl;
-        let url = RelayUrl::parse("wss://relay.example.com/path").expect("url");
+        use crate::url::RelayNames;
+        let names = RelayNames::parse(
+            "wss://relay.example.com/path",
+            &["ws://abc.onion".to_owned()],
+        )
+        .expect("names");
+        let none = RelayNames::default();
         let vanish = |tags: Vec<Vec<String>>| {
             UnverifiedEvent::parse(&sign_json(62, 1000, &tags, "bye"), &EventLimits::default())
                 .expect("parse")
@@ -849,17 +854,21 @@ mod tests {
         // `ALL_RELAYS` applies even without a configured URL; a
         // matching URL compares under strfry normalization (scheme,
         // path, case dropped).
-        assert!(vanish(vec![vec!["relay".into(), "ALL_RELAYS".into()]]).requests_vanish(None));
+        assert!(vanish(vec![vec!["relay".into(), "ALL_RELAYS".into()]]).requests_vanish(&none));
         let named = vanish(vec![
             vec!["relay".into(), "wss://other.example.com".into()],
             vec!["relay".into(), "ws://Relay.Example.COM/elsewhere".into()],
         ]);
-        assert!(named.requests_vanish(Some(&url)));
-        assert!(!named.requests_vanish(None));
+        assert!(named.requests_vanish(&names));
+        assert!(!named.requests_vanish(&none));
+        // An alias name honors the request as well.
+        let aliased = vanish(vec![vec!["relay".into(), "ws://ABC.ONION".into()]]);
+        assert!(aliased.requests_vanish(&names));
+        assert!(!aliased.requests_vanish(&none));
         let foreign = vanish(vec![vec!["relay".into(), "wss://other.example.com".into()]]);
-        assert!(!foreign.requests_vanish(Some(&url)));
+        assert!(!foreign.requests_vanish(&names));
         // Not kind 62, or no `relay` tags: never a request.
-        assert!(!vanish(vec![]).requests_vanish(Some(&url)));
+        assert!(!vanish(vec![]).requests_vanish(&names));
         let note = UnverifiedEvent::parse(
             &sign_json(1, 1000, &[vec!["relay".into(), "ALL_RELAYS".into()]], "x"),
             &EventLimits::default(),
@@ -867,7 +876,7 @@ mod tests {
         .expect("parse")
         .verify(&EventLimits::default())
         .expect("verify");
-        assert!(!note.requests_vanish(Some(&url)));
+        assert!(!note.requests_vanish(&names));
         assert!(note.vanish_relays.is_empty());
     }
 }

@@ -28,13 +28,15 @@ NOSFRY="$PWD/nosfry-$VERSION-$TARGET/nosfry"
 path = "./test-relay-db"
 
 [relay]
-port = 7777
 # Turns on NIP-42 AUTH, so tests can read direct messages and gift wraps.
 service_url = "ws://127.0.0.1:7777"
 
-# Tests publish in bursts; the per-connection and per-address buckets
+[[relay.listen]]
+address = "127.0.0.1:7777"
+
+# Tests publish in bursts; the per-connection and per-peer buckets
 # would answer "rate-limited:" and make them flaky.
-[relay.rate_limits]
+[relay.profiles.default.rate_limits]
 events_per_second = 0
 reqs_per_second = 0
 ip_events_per_second = 0

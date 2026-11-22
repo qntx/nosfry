@@ -210,11 +210,11 @@ fn write_batch(
 ) -> bool {
     let events: Vec<Arc<nosfry_core::event::Event>> =
         reqs.iter().map(|r| Arc::clone(&r.event)).collect();
-    // The service URL re-reads the live config so a reload applies to
+    // The relay names re-read the live config so a reload applies to
     // the next batch (like the write-policy plugin).
-    let service_url = live.borrow().limits.auth.relay().cloned();
+    let names = live.borrow().limits.auth.names().clone();
     let started = Instant::now();
-    let written = match store.write(&events, service_url.as_ref()) {
+    let written = match store.write(&events, &names) {
         Ok(written) => written,
         Err(err) => {
             write_failed(reqs, metrics, &err);

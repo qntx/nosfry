@@ -50,11 +50,12 @@ Flags (verbatim from `--help`):
 ## Configuration (`nosfry.toml`)
 
 Every key is documented in `nosfry.example.toml`; sections are
-`[db]`, `[events]`, `[relay]`, `[relay.limits]`,
-`[relay.filter_validation]`, `[relay.rate_limits]`, `[relay.write_policy]`,
+`[db]`, `[events]`, `[relay]`, `[[relay.listen]]`, `[relay.limits]`,
+`[relay.filter_validation]`, `[relay.profiles.<name>]` (with
+`.rate_limits`), `[relay.write_policy]`,
 `[relay.auth]`, `[relay.management]`, `[relay.threads]`,
-`[relay.compression]`, `[relay.info]`. `[db]` and `[relay.threads]` are
-restart-only.
+`[relay.compression]`, `[relay.info]`. `[db]`, `[[relay.listen]]` and
+`[relay.threads]` are restart-only.
 
 Essentials:
 
@@ -63,10 +64,11 @@ Essentials:
 path = "./nosfry-db"
 
 [relay]
-bind = "127.0.0.1"
-port = 7777
 service_url = "wss://relay.example.com"   # canonical URL; empty disables AUTH
 metrics = true                            # GET /metrics, unauthenticated (restart-only)
+
+[[relay.listen]]
+address = "127.0.0.1:7777"                # or "unix:/run/nosfry/relay.sock"
 
 [relay.management]
 admins = ["<64-char hex pubkey>"]         # NIP-86 management API, NIP-98 auth
@@ -74,8 +76,9 @@ admins = ["<64-char hex pubkey>"]         # NIP-86 management API, NIP-98 auth
 
 Notable knobs: `[events]` caps `max_event_size`, event age windows and tag
 limits; `[relay.filter_validation]` (`enabled`, `allowed_kinds`,
-`require_author_or_tag`) constrains REQ shapes; `[relay.rate_limits]` sets
-per-connection and per-address (`ip_*`) event/REQ token buckets; `[relay.write_policy].plugin` loads an
+`require_author_or_tag`) constrains REQ shapes; a listener's
+`[relay.profiles.<name>]` sets `max_connections_per_peer` and, under
+`.rate_limits`, per-connection and per-peer (`ip_*`) event/REQ token buckets; `[relay.write_policy].plugin` loads an
 external write-policy plugin with `timeout_seconds`;
 `[relay.auth].restricted_read_kinds` / `restrict_read_to_involved` gate
 reads on NIP-42 auth; `[relay.compression]` (`enabled`, `sliding_window`)

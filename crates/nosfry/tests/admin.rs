@@ -30,6 +30,7 @@ use nosfry_core::event::{Event, EventLimits};
 use nosfry_core::filter::Filter;
 use nosfry_core::moderation::{InfoField, ModOp};
 use nosfry_core::store::WriteOutcome;
+use nosfry_core::url::RelayNames;
 use nosfry_lmdb::{Progress, Scan, Store, StoreOptions};
 use serde_json::json;
 
@@ -96,7 +97,7 @@ fn import_mixed_corpus_stats() {
     let stats = import(
         &store,
         &EventLimits::default(),
-        None,
+        &RelayNames::default(),
         MAX_LINE,
         Cursor::new(corpus),
         true,
@@ -148,14 +149,14 @@ fn export_import_export_is_byte_identical() {
             event(&k, kind, 1_000 + i, &json!([]), &format!("e{i}"))
         })
         .collect();
-    a.write(&events, None).unwrap();
+    a.write(&events, &RelayNames::default()).unwrap();
     let dump = export_bytes(&a);
 
     let (_dir_b, b) = store();
     let stats = import(
         &b,
         &EventLimits::default(),
-        None,
+        &RelayNames::default(),
         MAX_LINE,
         Cursor::new(&dump),
         false,
@@ -174,13 +175,13 @@ fn reimport_reports_all_duplicates() {
     let events: Vec<_> = (0..10u64)
         .map(|i| event(&k, 1, 1_000 + i, &json!([]), &format!("e{i}")))
         .collect();
-    a.write(&events, None).unwrap();
+    a.write(&events, &RelayNames::default()).unwrap();
     let dump = export_bytes(&a);
 
     let stats = import(
         &a,
         &EventLimits::default(),
-        None,
+        &RelayNames::default(),
         MAX_LINE,
         Cursor::new(&dump),
         false,
@@ -202,8 +203,8 @@ fn scan_filters_limits_and_counts() {
     let reposts: Vec<_> = (0..50u64)
         .map(|i| event(&k, 7, 10_000 + i, &json!([]), &format!("r{i}")))
         .collect();
-    store.write(&notes, None).unwrap();
-    store.write(&reposts, None).unwrap();
+    store.write(&notes, &RelayNames::default()).unwrap();
+    store.write(&reposts, &RelayNames::default()).unwrap();
 
     let mut limited_out = Vec::new();
     let limited = scan(
@@ -267,7 +268,10 @@ fn scan_propagates_write_error_on_final_step() {
     let (_dir, store) = store();
     let k = key(6);
     store
-        .write(&[event(&k, 1, 100, &json!([]), "x")], None)
+        .write(
+            &[event(&k, 1, 100, &json!([]), "x")],
+            &RelayNames::default(),
+        )
         .unwrap();
     // The whole result fits in one step, so the write error lands in
     // the same `step` that returns `Progress::Done`.
@@ -290,8 +294,8 @@ fn delete_removes_matches_and_dry_run_counts() {
         .map(|i| event(&k, 1, 100 + i, &json!([]), &format!("n{i}")))
         .collect();
     let repost = event(&k, 7, 200, &json!([]), "r");
-    store.write(&notes, None).unwrap();
-    store.write(&[repost], None).unwrap();
+    store.write(&notes, &RelayNames::default()).unwrap();
+    store.write(&[repost], &RelayNames::default()).unwrap();
 
     // Dry run counts without touching the store.
     let filter = || Filter::parse("{\"kinds\":[1]}").unwrap();
@@ -327,7 +331,7 @@ fn delete_covers_expired_events() {
         &json!([["expiration", (now - 100).to_string()]]),
         "stale",
     );
-    store.write(&[expired], None).unwrap();
+    store.write(&[expired], &RelayNames::default()).unwrap();
     // The admin delete scans with now = 0, so expired events match.
     assert_eq!(
         delete(&store, Filter::parse("{\"kinds\":[1]}").unwrap(), false).unwrap(),
@@ -347,7 +351,7 @@ fn import_counts_blocked_events() {
     let stats = import(
         &store,
         &EventLimits::default(),
-        None,
+        &RelayNames::default(),
         MAX_LINE,
         Cursor::new(corpus),
         false,
@@ -557,7 +561,7 @@ fn import_no_verify_accepts_bad_sig_rejects_bad_id() {
     let stats = import(
         &st,
         &EventLimits::default(),
-        None,
+        &RelayNames::default(),
         MAX_LINE,
         Cursor::new(corpus),
         false,
@@ -573,7 +577,7 @@ fn import_no_verify_accepts_bad_sig_rejects_bad_id() {
     let verified = import(
         &store2,
         &EventLimits::default(),
-        None,
+        &RelayNames::default(),
         MAX_LINE,
         Cursor::new(bad_sig_line()),
         false,
@@ -635,7 +639,7 @@ fn cli_delete_age_and_selection() {
                     event(&k, 1, now - 30_000, &json!([]), "older-1"),
                     event(&k, 1, now, &json!([]), "new-1"),
                 ],
-                None,
+                &RelayNames::default(),
             )
             .unwrap();
     }
@@ -787,7 +791,7 @@ fn import_overlong_line_is_rejected_and_skipped() {
     let stats = import(
         &store,
         &EventLimits::default(),
-        None,
+        &RelayNames::default(),
         64 * 1024,
         Cursor::new(corpus),
         false,
@@ -861,7 +865,7 @@ fn managed_store() -> Fixture {
                 std::sync::Arc::clone(&vanished_ev),
                 std::sync::Arc::clone(&deleted_wrap),
             ],
-            None,
+            &RelayNames::default(),
         )
         .unwrap();
     // NIP-09 carriers: Q deletes its note, the wrap's recipient
@@ -880,11 +884,13 @@ fn managed_store() -> Fixture {
         &json!([["e", format!("{}", deleted_wrap.id())], ["k", "1059"]]),
         "",
     );
-    store.write(&[del_q, del_wrap], None).unwrap();
+    store
+        .write(&[del_q, del_wrap], &RelayNames::default())
+        .unwrap();
     // A vanish point whose kind-62 carrier is then deleted — the
     // point must still export.
     let vanish = event(&v, 62, 200, &json!([["relay", "ALL_RELAYS"]]), "");
-    let written = store.write(&[vanish], None).unwrap();
+    let written = store.write(&[vanish], &RelayNames::default()).unwrap();
     let seq = match written.outcomes[0] {
         WriteOutcome::Stored { seq } => seq,
         ref other => panic!("vanish request stored: {other:?}"),
@@ -958,7 +964,7 @@ fn export_import_carries_management_state() {
     let stats = import(
         &b,
         &EventLimits::default(),
-        None,
+        &RelayNames::default(),
         MAX_LINE,
         Cursor::new(&dump),
         false,
@@ -1013,7 +1019,9 @@ fn export_import_carries_management_state() {
     // Rebuilt deletion blocks refuse the rewrites, the imported
     // vanish point refuses the old event, and the banned id stays
     // refused by moderation.
-    let outcomes = |events: &[std::sync::Arc<Event>]| b.write(events, None).unwrap().outcomes;
+    let outcomes = |events: &[std::sync::Arc<Event>]| {
+        b.write(events, &RelayNames::default()).unwrap().outcomes
+    };
     assert_eq!(
         outcomes(std::slice::from_ref(&f.deleted_ev)).as_slice(),
         [WriteOutcome::Deleted]
@@ -1074,7 +1082,7 @@ fn import_refuses_bad_state_lines() {
         let err = import(
             &b,
             &EventLimits::default(),
-            None,
+            &RelayNames::default(),
             MAX_LINE,
             Cursor::new(corpus),
             false,

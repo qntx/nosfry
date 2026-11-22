@@ -25,6 +25,7 @@ use nosfry_core::event::Event;
 use nosfry_core::filter::Filter;
 use nosfry_core::sign::{event, key, pubkey_hex};
 use nosfry_core::store::WriteOutcome;
+use nosfry_core::url::RelayNames;
 use nosfry_lmdb::{FORMAT_VERSION, Progress, Scan, Store, StoreError, StoreOptions};
 use serde_json::json;
 
@@ -94,7 +95,7 @@ fn write_and_scan_all() {
     let e1 = event(&k, 1, 100, &json!([]), "a");
     let e2 = event(&k, 1, 200, &json!([]), "b");
     let out = store
-        .write(&[Arc::clone(&e1), Arc::clone(&e2)], None)
+        .write(&[Arc::clone(&e1), Arc::clone(&e2)], &RelayNames::default())
         .unwrap();
     assert_eq!(
         out.outcomes,
@@ -115,7 +116,10 @@ fn duplicate_and_ephemeral() {
     let e = event(&k, 1, 100, &json!([]), "a");
     let eph = event(&k, 20_001, 100, &json!([]), "gone");
     let out = store
-        .write(&[Arc::clone(&e), Arc::clone(&e), eph], None)
+        .write(
+            &[Arc::clone(&e), Arc::clone(&e), eph],
+            &RelayNames::default(),
+        )
         .unwrap();
     assert_eq!(
         out.outcomes,
@@ -136,7 +140,10 @@ fn replaceable_supersedes() {
     let new = event(&k, 0, 200, &json!([]), "new");
     let stale = event(&k, 0, 50, &json!([]), "stale");
     let out = store
-        .write(&[Arc::clone(&old), Arc::clone(&new), stale], None)
+        .write(
+            &[Arc::clone(&old), Arc::clone(&new), stale],
+            &RelayNames::default(),
+        )
         .unwrap();
     assert_eq!(
         out.outcomes,
@@ -163,7 +170,9 @@ fn replaceable_two_versions_one_batch() {
     // Older first: v2 must evict v1 inside the single write txn.
     let v1 = event(&k, 3, 100, &json!([]), "v1");
     let v2 = event(&k, 3, 300, &json!([]), "v2");
-    let out = store.write(&[v1, Arc::clone(&v2)], None).unwrap();
+    let out = store
+        .write(&[v1, Arc::clone(&v2)], &RelayNames::default())
+        .unwrap();
     assert_eq!(
         out.outcomes,
         vec![
@@ -188,7 +197,9 @@ fn replaceable_tie_lower_id_wins() {
     let a = event(&k, 0, 100, &json!([]), "tie-a");
     let b = event(&k, 0, 100, &json!([]), "tie-b");
     let (winner, loser) = if a.id() < b.id() { (a, b) } else { (b, a) };
-    let out = store.write(&[loser, Arc::clone(&winner)], None).unwrap();
+    let out = store
+        .write(&[loser, Arc::clone(&winner)], &RelayNames::default())
+        .unwrap();
     assert_eq!(
         out.outcomes,
         vec![
@@ -212,7 +223,10 @@ fn addressable_replaces_by_d_tag() {
     let v2 = event(&k, 30_001, 200, &json!([["d", "article"]]), "v2");
     let other = event(&k, 30_001, 250, &json!([["d", "other"]]), "other");
     let out = store
-        .write(&[v1, Arc::clone(&v2), Arc::clone(&other)], None)
+        .write(
+            &[v1, Arc::clone(&v2), Arc::clone(&other)],
+            &RelayNames::default(),
+        )
         .unwrap();
     assert_eq!(
         out.outcomes,
@@ -237,7 +251,9 @@ fn addressable_long_d_replaces() {
     let long_d = "d".repeat(300);
     let v1 = event(&k, 30_002, 100, &json!([["d", long_d]]), "v1");
     let v2 = event(&k, 30_002, 200, &json!([["d", long_d]]), "v2");
-    let out = store.write(&[v1, Arc::clone(&v2)], None).unwrap();
+    let out = store
+        .write(&[v1, Arc::clone(&v2)], &RelayNames::default())
+        .unwrap();
     assert_eq!(
         out.outcomes,
         vec![
@@ -255,7 +271,7 @@ fn different_authors_do_not_replace() {
     let a = event(&key(1), 0, 100, &json!([]), "a");
     let b = event(&key(2), 0, 50, &json!([]), "b");
     let out = store
-        .write(&[Arc::clone(&a), Arc::clone(&b)], None)
+        .write(&[Arc::clone(&a), Arc::clone(&b)], &RelayNames::default())
         .unwrap();
     assert_eq!(
         out.outcomes,
@@ -272,10 +288,12 @@ fn scan_snapshot_bound() {
     let (_dir, store) = store();
     let k = key(1);
     let e1 = event(&k, 1, 100, &json!([]), "one");
-    store.write(&[Arc::clone(&e1)], None).unwrap();
+    store
+        .write(&[Arc::clone(&e1)], &RelayNames::default())
+        .unwrap();
     let snap = store.snapshot().unwrap();
     let e2 = event(&k, 1, 200, &json!([]), "two");
-    store.write(&[e2], None).unwrap();
+    store.write(&[e2], &RelayNames::default()).unwrap();
     assert_eq!(store.snapshot().unwrap(), 2);
     let got = collect(&store, Arc::from([Filter::parse("{}").unwrap()]), snap);
     assert_eq!(got, vec![e1.json().to_owned()]);
@@ -289,7 +307,7 @@ fn scan_writes_between_steps_invisible() {
     let events: Vec<Arc<Event>> = (0..100)
         .map(|i| event(&k, 1, 1_000 + i, &json!([]), "x"))
         .collect();
-    store.write(&events, None).unwrap();
+    store.write(&events, &RelayNames::default()).unwrap();
     let snap = store.snapshot().unwrap();
     let mut scan = Scan::new(
         Arc::from([Filter::parse("{}").unwrap()]),
@@ -308,7 +326,7 @@ fn scan_writes_between_steps_invisible() {
     let later: Vec<Arc<Event>> = (0..10)
         .map(|i| event(&k, 1, 9_000 + i, &json!([]), "late"))
         .collect();
-    store.write(&later, None).unwrap();
+    store.write(&later, &RelayNames::default()).unwrap();
     loop {
         let p = scan
             .step(&store, Duration::ZERO, &mut |_seq, j| {
@@ -334,7 +352,7 @@ fn scan_limit_and_ties() {
         events.push(event(&k, 1, 100, &json!([]), &format!("tie{i}")));
     }
     events.push(event(&k, 1, 50, &json!([]), "old"));
-    store.write(&events, None).unwrap();
+    store.write(&events, &RelayNames::default()).unwrap();
     let got = collect(
         &store,
         Arc::from([Filter::parse("{\"limit\":3}").unwrap()]),
@@ -352,7 +370,7 @@ fn scan_addressable_kinds_without_d_unbounded() {
         .iter()
         .map(|d| event(&k, 30_023, 100, &json!([["d", d]]), d))
         .collect();
-    store.write(&events, None).unwrap();
+    store.write(&events, &RelayNames::default()).unwrap();
     // No `#d` condition: an author+addressable-kind filter has no
     // intrinsic bound, so all live `d` addresses are returned.
     let got = collect(
@@ -383,7 +401,7 @@ fn scan_records_match_payload_scan() {
     let events: Vec<Arc<Event>> = (0..10u64)
         .map(|i| event(&k, 1, 100 + i, &json!([["t", "x"]]), &format!("e{i}")))
         .collect();
-    store.write(&events, None).unwrap();
+    store.write(&events, &RelayNames::default()).unwrap();
     // Two overlapping filters exercise cross-filter dedup in both modes.
     let filters: Arc<[Filter]> = Arc::from([
         Filter::parse("{\"#t\":[\"x\"]}").unwrap(),
@@ -410,7 +428,9 @@ fn scan_cross_filter_dedup() {
     let (_dir, store) = store();
     let k = key(1);
     let e = event(&k, 1, 100, &json!([]), "a");
-    store.write(&[Arc::clone(&e)], None).unwrap();
+    store
+        .write(&[Arc::clone(&e)], &RelayNames::default())
+        .unwrap();
     let id = e.id();
     let hex = format!("{id}");
     let filters: Arc<[Filter]> = Arc::from([
@@ -426,7 +446,10 @@ fn scan_impossible_filter() {
     let (_dir, store) = store();
     let k = key(1);
     store
-        .write(&[event(&k, 1, 100, &json!([]), "a")], None)
+        .write(
+            &[event(&k, 1, 100, &json!([]), "a")],
+            &RelayNames::default(),
+        )
         .unwrap();
     let got = collect(
         &store,
@@ -443,7 +466,10 @@ fn scan_tag_and_author_indexes() {
     let tagged = event(&k, 1, 100, &json!([["t", "nostr"]]), "tagged");
     let plain = event(&k, 1, 200, &json!([]), "plain");
     store
-        .write(&[Arc::clone(&tagged), Arc::clone(&plain)], None)
+        .write(
+            &[Arc::clone(&tagged), Arc::clone(&plain)],
+            &RelayNames::default(),
+        )
         .unwrap();
     let got = collect(
         &store,
@@ -468,12 +494,16 @@ fn persistence_reopen() {
     let e1 = event(&k, 1, 100, &json!([]), "one");
     {
         let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
-        store.write(&[Arc::clone(&e1)], None).unwrap();
+        store
+            .write(&[Arc::clone(&e1)], &RelayNames::default())
+            .unwrap();
         assert_eq!(store.snapshot().unwrap(), 1);
     }
     let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
     let e2 = event(&k, 1, 200, &json!([]), "two");
-    let out = store.write(&[Arc::clone(&e2)], None).unwrap();
+    let out = store
+        .write(&[Arc::clone(&e2)], &RelayNames::default())
+        .unwrap();
     assert_eq!(out.outcomes, vec![WriteOutcome::Stored { seq: 2 }]);
     let got = collect(&store, Arc::from([Filter::parse("{}").unwrap()]), 2);
     assert_eq!(got, vec![e2.json().to_owned(), e1.json().to_owned()]);
@@ -516,7 +546,7 @@ fn id_lookup_by_ids_filter() {
     let a = event(&k, 1, 100, &json!([]), "a");
     let b = event(&k, 1, 200, &json!([]), "b");
     store
-        .write(&[Arc::clone(&a), Arc::clone(&b)], None)
+        .write(&[Arc::clone(&a), Arc::clone(&b)], &RelayNames::default())
         .unwrap();
     let hex = format!("{}", a.id());
     let got = collect(
@@ -534,7 +564,7 @@ fn scan_emits_first_group_before_step_ends() {
     let events: Vec<_> = (0..1_000u64)
         .map(|i| event(&k, 1, 1_000 + i, &json!([]), &format!("e{i}")))
         .collect();
-    store.write(&events, None).unwrap();
+    store.write(&events, &RelayNames::default()).unwrap();
     let snapshot = store.snapshot().unwrap();
     let filters: Arc<[Filter]> =
         Arc::from([Filter::parse("{\"kinds\":[1],\"limit\":500}").unwrap()]);
@@ -577,7 +607,10 @@ fn export_orders_by_created_at_then_seq() {
     let e2 = event(&k, 1, 100, &json!([]), "b");
     let e3 = event(&k, 1, 200, &json!([]), "c");
     store
-        .write(&[Arc::clone(&e1), Arc::clone(&e2), Arc::clone(&e3)], None)
+        .write(
+            &[Arc::clone(&e1), Arc::clone(&e2), Arc::clone(&e3)],
+            &RelayNames::default(),
+        )
         .unwrap();
 
     let asc = export_lines(&store, 0, u64::MAX, false);
@@ -599,7 +632,10 @@ fn export_bounds_are_inclusive() {
     let e2 = event(&k, 1, 200, &json!([]), "b");
     let e3 = event(&k, 1, 300, &json!([]), "c");
     store
-        .write(&[Arc::clone(&e1), Arc::clone(&e2), Arc::clone(&e3)], None)
+        .write(
+            &[Arc::clone(&e1), Arc::clone(&e2), Arc::clone(&e3)],
+            &RelayNames::default(),
+        )
         .unwrap();
 
     let count = RefCell::new(0u64);
@@ -625,7 +661,10 @@ fn export_propagates_emit_errors() {
     let (_dir, store) = store();
     let k = key(1);
     store
-        .write(&[event(&k, 1, 100, &json!([]), "a")], None)
+        .write(
+            &[event(&k, 1, 100, &json!([]), "a")],
+            &RelayNames::default(),
+        )
         .unwrap();
     let err = store
         .export(0, u64::MAX, false, &mut |_| {
@@ -642,7 +681,7 @@ fn compact_to_round_trip() {
     let events: Vec<_> = (0..10u64)
         .map(|i| event(&k, 1, 100 + i, &json!([]), &format!("e{i}")))
         .collect();
-    store.write(&events, None).unwrap();
+    store.write(&events, &RelayNames::default()).unwrap();
 
     let staging = tempfile::tempdir().unwrap();
     let dest = staging.path().join("compact.mdb");
@@ -710,16 +749,23 @@ fn deletion_by_e_removes_target_and_blocks_republish() {
     let note = event(&k, 1, 100, &json!([]), "gone");
     let kind5 = event(&k, 5, 200, &json!([["e", format!("{}", note.id())]]), "");
     assert_eq!(
-        store.write(&[Arc::clone(&note)], None).unwrap().outcomes,
+        store
+            .write(&[Arc::clone(&note)], &RelayNames::default())
+            .unwrap()
+            .outcomes,
         vec![WriteOutcome::Stored { seq: 1 }]
     );
-    let written = store.write(&[Arc::clone(&kind5)], None).unwrap();
+    let written = store
+        .write(&[Arc::clone(&kind5)], &RelayNames::default())
+        .unwrap();
     assert_eq!(written.outcomes, vec![WriteOutcome::Stored { seq: 2 }]);
     assert_eq!(written.deleted, vec![1]);
     let got = collect(&store, Arc::from([Filter::parse("{}").unwrap()]), 2);
     assert_eq!(got, vec![kind5.json().to_owned()]);
     // The id stays blocked for this author: republishing is Deleted.
-    let again = store.write(&[Arc::clone(&note)], None).unwrap();
+    let again = store
+        .write(&[Arc::clone(&note)], &RelayNames::default())
+        .unwrap();
     assert_eq!(again.outcomes, vec![WriteOutcome::Deleted]);
     assert_eq!(again.deleted, Vec::<u64>::new());
 }
@@ -737,7 +783,10 @@ fn deletion_kind5_targeting_kind5_has_no_effect() {
         "second",
     );
     let written = store
-        .write(&[Arc::clone(&first), Arc::clone(&second)], None)
+        .write(
+            &[Arc::clone(&first), Arc::clone(&second)],
+            &RelayNames::default(),
+        )
         .unwrap();
     assert_eq!(written.deleted, Vec::<u64>::new());
     let got = collect(
@@ -760,7 +809,10 @@ fn deletion_foreign_author_e_has_no_effect() {
         "",
     );
     let written = store
-        .write(&[Arc::clone(&note), Arc::clone(&kind5)], None)
+        .write(
+            &[Arc::clone(&note), Arc::clone(&kind5)],
+            &RelayNames::default(),
+        )
         .unwrap();
     assert_eq!(written.deleted, Vec::<u64>::new());
     let got = collect(&store, Arc::from([Filter::parse("{}").unwrap()]), 2);
@@ -775,7 +827,7 @@ fn deletion_by_a_removes_equal_and_older_versions() {
     let v1 = event(&k, 30_023, 100, &json!([["d", "art"]]), "v1");
     let del = event(&k, 5, 200, &json!([["a", format!("30023:{pk}:art")]]), "");
     let written = store
-        .write(&[Arc::clone(&v1), Arc::clone(&del)], None)
+        .write(&[Arc::clone(&v1), Arc::clone(&del)], &RelayNames::default())
         .unwrap();
     assert_eq!(written.outcomes.len(), 2);
     assert_eq!(written.deleted, vec![1]);
@@ -791,7 +843,7 @@ fn deletion_by_a_removes_equal_and_older_versions() {
                 Arc::clone(&v_equal),
                 Arc::clone(&v_newer),
             ],
-            None,
+            &RelayNames::default(),
         )
         .unwrap();
     assert_eq!(
@@ -819,16 +871,25 @@ fn deletion_by_a_replaceable_uses_empty_d() {
     let profile = event(&k, 0, 100, &json!([]), "profile");
     let del = event(&k, 5, 200, &json!([["a", format!("0:{pk}:")]]), "");
     let written = store
-        .write(&[Arc::clone(&profile), Arc::clone(&del)], None)
+        .write(
+            &[Arc::clone(&profile), Arc::clone(&del)],
+            &RelayNames::default(),
+        )
         .unwrap();
     assert_eq!(written.deleted, vec![1]);
     assert_eq!(
-        store.write(&[Arc::clone(&profile)], None).unwrap().outcomes,
+        store
+            .write(&[Arc::clone(&profile)], &RelayNames::default())
+            .unwrap()
+            .outcomes,
         vec![WriteOutcome::Deleted]
     );
     let newer = event(&k, 0, 300, &json!([]), "new");
     assert_eq!(
-        store.write(&[Arc::clone(&newer)], None).unwrap().outcomes,
+        store
+            .write(&[Arc::clone(&newer)], &RelayNames::default())
+            .unwrap()
+            .outcomes,
         vec![WriteOutcome::Stored { seq: 3 }]
     );
 }
@@ -848,7 +909,7 @@ fn deletion_foreign_a_has_no_effect() {
         "",
     );
     let written = store
-        .write(&[Arc::clone(&v1), Arc::clone(&del)], None)
+        .write(&[Arc::clone(&v1), Arc::clone(&del)], &RelayNames::default())
         .unwrap();
     assert_eq!(written.deleted, Vec::<u64>::new());
     let got = collect(
@@ -866,9 +927,13 @@ fn assert_long_d_deletion(store: &Store, del: Arc<Event>) {
     let k = key(1);
     let long_d = "d".repeat(300);
     let v1 = event(&k, 30_002, 100, &json!([["d", long_d]]), "v1");
-    let written = store.write(&[Arc::clone(&v1), del], None).unwrap();
+    let written = store
+        .write(&[Arc::clone(&v1), del], &RelayNames::default())
+        .unwrap();
     assert_eq!(written.deleted, vec![1], "target must be deleted");
-    let blocked = store.write(&[Arc::clone(&v1)], None).unwrap();
+    let blocked = store
+        .write(&[Arc::clone(&v1)], &RelayNames::default())
+        .unwrap();
     assert_eq!(
         blocked.outcomes,
         vec![WriteOutcome::Deleted],
@@ -876,7 +941,9 @@ fn assert_long_d_deletion(store: &Store, del: Arc<Event>) {
     );
     // A newer version is accepted.
     let v2 = event(&k, 30_002, 250, &json!([["d", long_d]]), "v2");
-    let newest = store.write(&[Arc::clone(&v2)], None).unwrap();
+    let newest = store
+        .write(&[Arc::clone(&v2)], &RelayNames::default())
+        .unwrap();
     assert_eq!(
         newest.outcomes,
         vec![WriteOutcome::Stored { seq: 3 }],
@@ -916,17 +983,26 @@ fn deletion_block_lifts_when_kind5_is_deleted() {
     let note = event(&k, 1, 100, &json!([]), "gone");
     let kind5 = event(&k, 5, 200, &json!([["e", format!("{}", note.id())]]), "");
     let written = store
-        .write(&[Arc::clone(&note), Arc::clone(&kind5)], None)
+        .write(
+            &[Arc::clone(&note), Arc::clone(&kind5)],
+            &RelayNames::default(),
+        )
         .unwrap();
     assert_eq!(written.deleted, vec![1]);
     assert_eq!(
-        store.write(&[Arc::clone(&note)], None).unwrap().outcomes,
+        store
+            .write(&[Arc::clone(&note)], &RelayNames::default())
+            .unwrap()
+            .outcomes,
         vec![WriteOutcome::Deleted]
     );
     // Deleting the kind 5 itself removes its index rows: republish works.
     assert_eq!(store.delete(&[2]).unwrap(), 1);
     assert_eq!(
-        store.write(&[Arc::clone(&note)], None).unwrap().outcomes,
+        store
+            .write(&[Arc::clone(&note)], &RelayNames::default())
+            .unwrap()
+            .outcomes,
         vec![WriteOutcome::Stored { seq: 3 }]
     );
 }
@@ -939,7 +1015,10 @@ fn deleted_reported_within_one_batch() {
     let note = event(&k, 1, 100, &json!([]), "gone");
     let del = event(&k, 5, 200, &json!([["e", format!("{}", note.id())]]), "");
     let written = store
-        .write(&[Arc::clone(&note), Arc::clone(&del)], None)
+        .write(
+            &[Arc::clone(&note), Arc::clone(&del)],
+            &RelayNames::default(),
+        )
         .unwrap();
     assert_eq!(
         written.outcomes,
@@ -952,7 +1031,9 @@ fn deleted_reported_within_one_batch() {
     // A replaceable pair in one batch: the loser lands in `deleted`.
     let v1 = event(&k, 0, 100, &json!([]), "v1");
     let v2 = event(&k, 0, 200, &json!([]), "v2");
-    let pair = store.write(&[v1, Arc::clone(&v2)], None).unwrap();
+    let pair = store
+        .write(&[v1, Arc::clone(&v2)], &RelayNames::default())
+        .unwrap();
     assert_eq!(pair.deleted, vec![3]);
     let got = collect(
         &store,
@@ -970,7 +1051,10 @@ fn expire_removes_due_events_and_respects_limit() {
     let e2 = event(&k, 1, 100, &json!([["expiration", "250"]]), "b");
     let e3 = event(&k, 1, 100, &json!([]), "c");
     store
-        .write(&[Arc::clone(&e1), Arc::clone(&e2), Arc::clone(&e3)], None)
+        .write(
+            &[Arc::clone(&e1), Arc::clone(&e2), Arc::clone(&e3)],
+            &RelayNames::default(),
+        )
         .unwrap();
     // Nothing due yet; limit respected; future events left alone.
     assert_eq!(store.expire(100, 10).unwrap(), 0);
@@ -992,7 +1076,10 @@ fn scan_hides_expired_and_they_do_not_consume_limits() {
     let expired = event(&k, 1, 200, &json!([["expiration", "300"]]), "old");
     let live = event(&k, 1, 100, &json!([]), "live");
     let snap = store
-        .write(&[Arc::clone(&expired), Arc::clone(&live)], None)
+        .write(
+            &[Arc::clone(&expired), Arc::clone(&live)],
+            &RelayNames::default(),
+        )
         .map(|_| store.snapshot().unwrap())
         .unwrap();
     // now = 0 disables the cutoff: both visible, newest first.
@@ -1021,10 +1108,17 @@ fn scan_gate_hides_restricted_and_they_do_not_consume_limits() {
     let dm = event(&k, 4, 200, &json!([["p", pk_hex(&key(2))]]), "dm");
     let note = event(&k, 1, 100, &json!([]), "note");
     let snap = store
-        .write(&[Arc::clone(&dm), Arc::clone(&note)], None)
+        .write(
+            &[Arc::clone(&dm), Arc::clone(&note)],
+            &RelayNames::default(),
+        )
         .map(|_| store.snapshot().unwrap())
         .unwrap();
-    let rules = Arc::new(nosfry_core::auth::AuthRules::new(None, &[4], true));
+    let rules = Arc::new(nosfry_core::auth::AuthRules::new(
+        RelayNames::default(),
+        &[4],
+        true,
+    ));
     let collect_gated = |authed: &[nosfry_core::event::PublicKey], limit: &str| {
         let gate = nosfry_core::auth::ReadGate::new(Arc::clone(&rules), Arc::from(authed));
         let filters = Arc::from([Filter::parse(limit).unwrap()]);
@@ -1059,8 +1153,8 @@ fn scan_gate_hides_restricted_and_they_do_not_consume_limits() {
 }
 
 /// The `wss://relay.example.com` service URL for vanish tests.
-fn relay_url() -> nosfry_core::url::RelayUrl {
-    nosfry_core::url::RelayUrl::parse("wss://relay.example.com").unwrap()
+fn relay_names() -> RelayNames {
+    RelayNames::parse("wss://relay.example.com", &[]).unwrap()
 }
 
 /// `Filter` matching every event by `author`.
@@ -1086,7 +1180,7 @@ fn served_ids(store: &Store, keypair: &secp256k1::Keypair) -> Vec<String> {
 #[test]
 fn vanish_deletes_authors_events_and_tagged_wraps() {
     let (_dir, store) = store();
-    let url = relay_url();
+    let names = relay_names();
     let (author, other) = (key(1), key(2));
     // The author's own history across kinds, incl. a deletion request,
     // a replaceable, and an addressable event — all at or before the
@@ -1132,11 +1226,11 @@ fn vanish_deletes_authors_events_and_tagged_wraps() {
                 wrap_to_other,
                 Arc::clone(&other_note),
             ],
-            Some(&url),
+            &names,
         )
         .unwrap();
     assert!(!written.vanish_pending);
-    let vanish_written = store.write(&[Arc::clone(&vanish)], Some(&url)).unwrap();
+    let vanish_written = store.write(&[Arc::clone(&vanish)], &names).unwrap();
     assert!(matches!(
         vanish_written.outcomes.as_slice(),
         [WriteOutcome::Stored { .. }]
@@ -1162,51 +1256,39 @@ fn vanish_deletes_authors_events_and_tagged_wraps() {
 #[test]
 fn vanish_blocks_republish_and_new_writes() {
     let (_dir, store) = store();
-    let url = relay_url();
+    let names = relay_names();
     let (author, other) = (key(1), key(2));
     let old = event(&author, 1, 100, &json!([]), "old");
-    store.write(&[Arc::clone(&old)], Some(&url)).unwrap();
+    store.write(&[Arc::clone(&old)], &names).unwrap();
     let vanish = event(&author, 62, 200, &json!([["relay", "ALL_RELAYS"]]), "");
-    store.write(&[vanish], None).unwrap();
+    store.write(&[vanish], &RelayNames::default()).unwrap();
     assert!(store.vanish_step(10_000).unwrap().deleted > 0);
     // Republishing the deleted event, or writing anything at or before
     // T, is refused; a kind-1059 wrap to the vanished author too.
     assert_eq!(
-        store.write(&[old], Some(&url)).unwrap().outcomes.as_slice(),
+        store.write(&[old], &names).unwrap().outcomes.as_slice(),
         [WriteOutcome::Vanished]
     );
     let at_t = event(&author, 1, 200, &json!([]), "at T");
     assert_eq!(
-        store
-            .write(&[at_t], Some(&url))
-            .unwrap()
-            .outcomes
-            .as_slice(),
+        store.write(&[at_t], &names).unwrap().outcomes.as_slice(),
         [WriteOutcome::Vanished]
     );
     let wrap = event(&other, 1059, 190, &json!([["p", pk_hex(&author)]]), "w");
     assert_eq!(
-        store
-            .write(&[wrap], Some(&url))
-            .unwrap()
-            .outcomes
-            .as_slice(),
+        store.write(&[wrap], &names).unwrap().outcomes.as_slice(),
         [WriteOutcome::Vanished]
     );
     // After T stores fine, as does a wrap past T or to someone else.
     let fresh = event(&author, 1, 300, &json!([]), "new");
     assert!(matches!(
-        store
-            .write(&[fresh], Some(&url))
-            .unwrap()
-            .outcomes
-            .as_slice(),
+        store.write(&[fresh], &names).unwrap().outcomes.as_slice(),
         [WriteOutcome::Stored { .. }]
     ));
     let wrap_late = event(&other, 1059, 300, &json!([["p", pk_hex(&author)]]), "w2");
     assert!(matches!(
         store
-            .write(&[wrap_late], Some(&url))
+            .write(&[wrap_late], &names)
             .unwrap()
             .outcomes
             .as_slice(),
@@ -1217,7 +1299,7 @@ fn vanish_blocks_republish_and_new_writes() {
 #[test]
 fn vanish_request_for_another_relay_is_inert() {
     let (_dir, store) = store();
-    let url = relay_url();
+    let names = relay_names();
     let author = key(1);
     let note = event(&author, 1, 100, &json!([]), "kept");
     let vanish = event(
@@ -1227,7 +1309,7 @@ fn vanish_request_for_another_relay_is_inert() {
         &json!([["relay", "wss://other.example.com"]]),
         "",
     );
-    let written = store.write(&[note, vanish], Some(&url)).unwrap();
+    let written = store.write(&[note, vanish], &names).unwrap();
     assert!(!written.vanish_pending);
     assert!(!store.vanish_pending().unwrap());
     assert_eq!(store.vanish_step(10_000).unwrap().deleted, 0);
@@ -1240,9 +1322,9 @@ fn all_relays_vanish_applies_without_a_service_url() {
     let (_dir, store) = store();
     let author = key(1);
     let note = event(&author, 1, 100, &json!([]), "gone");
-    store.write(&[note], None).unwrap();
+    store.write(&[note], &RelayNames::default()).unwrap();
     let vanish = event(&author, 62, 200, &json!([["relay", "ALL_RELAYS"]]), "");
-    let written = store.write(&[vanish], None).unwrap();
+    let written = store.write(&[vanish], &RelayNames::default()).unwrap();
     assert!(written.vanish_pending);
     assert_eq!(store.vanish_step(10_000).unwrap().deleted, 1);
     assert_eq!(served_ids(&store, &author).len(), 1);
@@ -1260,7 +1342,9 @@ fn kind5_cannot_delete_a_request_to_vanish() {
         &json!([["e", vanish.id().to_string()]]),
         "",
     );
-    let written = store.write(&[Arc::clone(&vanish), kind5], None).unwrap();
+    let written = store
+        .write(&[Arc::clone(&vanish), kind5], &RelayNames::default())
+        .unwrap();
     assert!(written.vanish_pending);
     // The kind 62 survives the deletion request, and a *different*
     // kind-62 event by the same author is never republish-blocked.
@@ -1268,7 +1352,11 @@ fn kind5_cannot_delete_a_request_to_vanish() {
     assert_eq!(served_ids(&store, &author).len(), 2);
     let again = event(&author, 62, 300, &json!([["relay", "ALL_RELAYS"]]), "");
     assert!(matches!(
-        store.write(&[again], None).unwrap().outcomes.as_slice(),
+        store
+            .write(&[again], &RelayNames::default())
+            .unwrap()
+            .outcomes
+            .as_slice(),
         [WriteOutcome::Stored { .. }]
     ));
 }
@@ -1280,9 +1368,11 @@ fn vanish_step_chunks_and_survives_reopen() {
     let events: Vec<_> = (0..7u64)
         .map(|i| event(&author, 1, 100 + i, &json!([]), &format!("e{i}")))
         .collect();
-    store.write(&events, None).unwrap();
+    store.write(&events, &RelayNames::default()).unwrap();
     let vanish = event(&author, 62, 500, &json!([["relay", "ALL_RELAYS"]]), "");
-    store.write(&[Arc::clone(&vanish)], None).unwrap();
+    store
+        .write(&[Arc::clone(&vanish)], &RelayNames::default())
+        .unwrap();
     // A tiny limit drains the backlog across several steps; `more`
     // reports work is still queued.
     let mut total = 0;
@@ -1301,9 +1391,9 @@ fn vanish_step_chunks_and_survives_reopen() {
     let more: Vec<_> = (0..3u64)
         .map(|i| event(&author, 1, 600 + i, &json!([]), &format!("f{i}")))
         .collect();
-    store.write(&more, None).unwrap();
+    store.write(&more, &RelayNames::default()).unwrap();
     let vanish2 = event(&author, 62, 700, &json!([["relay", "ALL_RELAYS"]]), "");
-    store.write(&[vanish2], None).unwrap();
+    store.write(&[vanish2], &RelayNames::default()).unwrap();
     assert!(store.vanish_pending().unwrap());
     drop(store);
     let reopened = Store::open(dir.path(), &StoreOptions::default()).unwrap();
@@ -1347,9 +1437,11 @@ fn vanish_step_examines_mentions_once() {
     let mut batch = notes;
     batch.extend(mentions);
     batch.extend(wraps);
-    store.write(&batch, None).unwrap();
+    store.write(&batch, &RelayNames::default()).unwrap();
     let vanish = event(&author, 62, 500, &json!([["relay", "ALL_RELAYS"]]), "");
-    store.write(&[Arc::clone(&vanish)], None).unwrap();
+    store
+        .write(&[Arc::clone(&vanish)], &RelayNames::default())
+        .unwrap();
     // 4 author-range rows (3 notes + the kind 62) + 32 tag-range rows
     // = 36 index entries; at most 3 examined per step.
     let mut calls = 0;
@@ -1389,9 +1481,11 @@ fn vanish_raised_t_covers_rows_past_the_resume() {
         .collect();
     let mut batch = notes;
     batch.extend(wraps);
-    store.write(&batch, None).unwrap();
+    store.write(&batch, &RelayNames::default()).unwrap();
     let vanish = event(&author, 62, 200, &json!([["relay", "ALL_RELAYS"]]), "");
-    store.write(&[Arc::clone(&vanish)], None).unwrap();
+    store
+        .write(&[Arc::clone(&vanish)], &RelayNames::default())
+        .unwrap();
     // One bounded step drains the author range (2 notes + the kind 62)
     // and starts the wraps phase.
     let step = store.vanish_step(4).unwrap();
@@ -1399,9 +1493,11 @@ fn vanish_raised_t_covers_rows_past_the_resume() {
     // A newer event past T lands normally, then a second request
     // raises T — restarting the walk so the author range is revisited.
     let later = event(&author, 1, 250, &json!([]), "past T1");
-    store.write(&[later], None).unwrap();
+    store.write(&[later], &RelayNames::default()).unwrap();
     let vanish2 = event(&author, 62, 500, &json!([["relay", "ALL_RELAYS"]]), "");
-    store.write(&[Arc::clone(&vanish2)], None).unwrap();
+    store
+        .write(&[Arc::clone(&vanish2)], &RelayNames::default())
+        .unwrap();
     while store.vanish_step(10_000).unwrap().more {}
     // The event between T1 and T2 vanished with everything else
     // covered; the newer request superseded the older one on store.
@@ -1426,9 +1522,11 @@ fn vanish_resume_survives_reopen() {
         .collect();
     let mut batch = vec![note];
     batch.extend(mentions);
-    store.write(&batch, None).unwrap();
+    store.write(&batch, &RelayNames::default()).unwrap();
     let vanish = event(&author, 62, 500, &json!([["relay", "ALL_RELAYS"]]), "");
-    store.write(&[Arc::clone(&vanish)], None).unwrap();
+    store
+        .write(&[Arc::clone(&vanish)], &RelayNames::default())
+        .unwrap();
     // Examine the author range (note + kind 62) and ~48 mentions
     // across five 10-row steps, then drop and reopen mid-walk.
     let mut calls = 0;
@@ -1561,7 +1659,10 @@ fn banevent_deletes_the_stored_event_and_survives_reopen() {
     let note = event(&author, 1, 100, &json!([]), "hi");
     let keep = event(&author, 1, 110, &json!([]), "keep");
     store
-        .write(&[Arc::clone(&note), Arc::clone(&keep)], None)
+        .write(
+            &[Arc::clone(&note), Arc::clone(&keep)],
+            &RelayNames::default(),
+        )
         .unwrap();
 
     let mut m = store
@@ -1666,23 +1767,23 @@ fn blocked_reason_enforces_bans_and_allow_lists() {
 #[test]
 fn vanish_request_keeps_only_the_newest() {
     let (_dir, store) = store();
-    let url = relay_url();
+    let names = relay_names();
     let author = key(1);
     let tag = json!([["relay", "wss://relay.example.com"]]);
     let v1 = event(&author, 62, 100, &tag, "v1");
     let v2 = event(&author, 62, 200, &tag, "v2");
     let v3 = event(&author, 62, 150, &tag, "v3");
-    let w1 = store.write(&[Arc::clone(&v1)], Some(&url)).unwrap();
+    let w1 = store.write(&[Arc::clone(&v1)], &names).unwrap();
     assert_eq!(w1.outcomes, vec![WriteOutcome::Stored { seq: 1 }]);
-    let w2 = store.write(&[Arc::clone(&v2)], Some(&url)).unwrap();
+    let w2 = store.write(&[Arc::clone(&v2)], &names).unwrap();
     assert_eq!(w2.outcomes, vec![WriteOutcome::Stored { seq: 2 }]);
-    let sup = store.write(&[v3], Some(&url)).unwrap();
+    let sup = store.write(&[v3], &names).unwrap();
     assert_eq!(sup.outcomes, vec![WriteOutcome::Superseded]);
     assert_eq!(served_ids(&store, &author), vec![v2.id().to_string()]);
     // The vanish point is still the stored request's T=200: an author
     // event at 150 is blocked.
     let covered = event(&author, 1, 150, &json!([]), "x");
-    let van = store.write(&[covered], Some(&url)).unwrap();
+    let van = store.write(&[covered], &names).unwrap();
     assert_eq!(van.outcomes, vec![WriteOutcome::Vanished]);
     // Equal created_at: the lower id wins.
     let (v4, v5) = (
@@ -1694,9 +1795,9 @@ fn vanish_request_keeps_only_the_newest() {
     } else {
         (v5, v4)
     };
-    let w3 = store.write(&[Arc::clone(&first)], Some(&url)).unwrap();
+    let w3 = store.write(&[Arc::clone(&first)], &names).unwrap();
     assert!(matches!(w3.outcomes[0], WriteOutcome::Stored { .. }));
-    let tie = store.write(&[second], Some(&url)).unwrap();
+    let tie = store.write(&[second], &names).unwrap();
     assert_eq!(tie.outcomes, vec![WriteOutcome::Superseded]);
     assert_eq!(served_ids(&store, &author), vec![first.id().to_string()]);
 }
@@ -1707,10 +1808,10 @@ fn vanish_request_keeps_only_the_newest() {
 #[test]
 fn vanish_honored_when_superseded_by_foreign_request() {
     let (_dir, store) = store();
-    let url = relay_url();
+    let names = relay_names();
     let author = key(1);
     let note = event(&author, 1, 50, &json!([]), "note");
-    store.write(&[note], None).unwrap();
+    store.write(&[note], &RelayNames::default()).unwrap();
     // Newer request naming another relay: stored, not honored.
     let foreign = event(
         &author,
@@ -1720,7 +1821,7 @@ fn vanish_honored_when_superseded_by_foreign_request() {
         "",
     );
     let foreign_id = foreign.id().to_string();
-    let kept = store.write(&[foreign], Some(&url)).unwrap();
+    let kept = store.write(&[foreign], &names).unwrap();
     assert!(matches!(kept.outcomes[0], WriteOutcome::Stored { .. }));
     assert!(!store.vanish_pending().unwrap());
     // Older request naming this relay: superseded at storage yet
@@ -1732,7 +1833,7 @@ fn vanish_honored_when_superseded_by_foreign_request() {
         &json!([["relay", "wss://relay.example.com"]]),
         "",
     );
-    let sup = store.write(&[honored], Some(&url)).unwrap();
+    let sup = store.write(&[honored], &names).unwrap();
     assert_eq!(sup.outcomes, vec![WriteOutcome::Superseded]);
     assert!(sup.vanish_pending);
     while store.vanish_step(10_000).unwrap().more {}
@@ -1740,7 +1841,7 @@ fn vanish_honored_when_superseded_by_foreign_request() {
     // swept and new writes at or before T=100 are refused.
     assert_eq!(served_ids(&store, &author), vec![foreign_id]);
     let blocked = event(&author, 1, 80, &json!([]), "blocked");
-    let van = store.write(&[blocked], Some(&url)).unwrap();
+    let van = store.write(&[blocked], &names).unwrap();
     assert_eq!(van.outcomes, vec![WriteOutcome::Vanished]);
 }
 
@@ -1754,7 +1855,7 @@ fn created_at_tie_group_is_bounded() {
     let events: Vec<Arc<Event>> = (0..2_000u64)
         .map(|i| event(&k, 1, 100, &json!([]), &format!("{i:04}")))
         .collect();
-    store.write(&events, None).unwrap();
+    store.write(&events, &RelayNames::default()).unwrap();
     let mut ids: Vec<String> = events.iter().map(|e| e.id().to_string()).collect();
     ids.sort_unstable();
     let want = ids[..5].to_vec();
@@ -1802,7 +1903,10 @@ fn count_many_tag_values_dedups() {
     let one = event(&k, 1, 110, &json!([["t", "v042"]]), "one hit");
     let miss = event(&k, 1, 120, &json!([["t", "nomatch"]]), "miss");
     store
-        .write(&[Arc::clone(&two), Arc::clone(&one), miss], None)
+        .write(
+            &[Arc::clone(&two), Arc::clone(&one), miss],
+            &RelayNames::default(),
+        )
         .unwrap();
     let mut scan = nosfry_lmdb::CountScan::new(
         filters,
@@ -1853,7 +1957,7 @@ fn gift_wrap_recipient_deletes() {
     let out = store
         .write(
             &[Arc::clone(&wrap), Arc::clone(&wrap2), Arc::clone(&dm)],
-            None,
+            &RelayNames::default(),
         )
         .unwrap();
     assert!(
@@ -1876,7 +1980,7 @@ fn gift_wrap_recipient_deletes() {
         ]),
         "",
     );
-    store.write(&[foreign], None).unwrap();
+    store.write(&[foreign], &RelayNames::default()).unwrap();
     assert_eq!(served_id(&store, &wrap.id().to_string()), 1);
     assert_eq!(served_id(&store, &wrap2.id().to_string()), 1);
 
@@ -1896,7 +2000,7 @@ fn gift_wrap_recipient_deletes() {
         ]),
         "",
     );
-    let del_out = store.write(&[del], None).unwrap();
+    let del_out = store.write(&[del], &RelayNames::default()).unwrap();
     assert!(matches!(del_out.outcomes[0], WriteOutcome::Stored { .. }));
     assert_eq!(
         served_id(&store, &wrap.id().to_string()),
@@ -1915,10 +2019,12 @@ fn gift_wrap_recipient_deletes() {
     );
 
     // The block holds for re-publication until the carrier expires.
-    let block_out = store.write(&[Arc::clone(&wrap)], None).unwrap();
+    let block_out = store
+        .write(&[Arc::clone(&wrap)], &RelayNames::default())
+        .unwrap();
     assert_eq!(block_out.outcomes[0], WriteOutcome::Deleted);
     store.expire(300, usize::MAX).unwrap();
-    let lift_out = store.write(&[wrap], None).unwrap();
+    let lift_out = store.write(&[wrap], &RelayNames::default()).unwrap();
     assert!(
         matches!(lift_out.outcomes[0], WriteOutcome::Stored { .. }),
         "{:?}",
@@ -1936,7 +2042,10 @@ fn deletion_immune_kinds_and_ephemeral() {
     let vanish = event(&k, 62, 100, &json!([]), "vanish");
     let eph = event(&k, 21059, 100, &json!([["p", "00".repeat(32)]]), "eph");
     store
-        .write(&[Arc::clone(&carrier), Arc::clone(&vanish)], None)
+        .write(
+            &[Arc::clone(&carrier), Arc::clone(&vanish)],
+            &RelayNames::default(),
+        )
         .unwrap();
     // A same-author kind 5 targeting the carrier, the request to
     // vanish, and the (never stored) ephemeral id deletes nothing.
@@ -1951,11 +2060,11 @@ fn deletion_immune_kinds_and_ephemeral() {
         ]),
         "",
     );
-    store.write(&[del], None).unwrap();
+    store.write(&[del], &RelayNames::default()).unwrap();
     assert_eq!(served_id(&store, &carrier.id().to_string()), 1);
     assert_eq!(served_id(&store, &vanish.id().to_string()), 1);
     // The block row exists for the ephemeral id, yet the ephemeral
     // publish is `Ephemeral`, not `Deleted`.
-    let out = store.write(&[eph], None).unwrap();
+    let out = store.write(&[eph], &RelayNames::default()).unwrap();
     assert_eq!(out.outcomes[0], WriteOutcome::Ephemeral);
 }

@@ -45,22 +45,20 @@ max_num_tags = 2000
 max_tag_val_size = 1024
 
 [relay]
-# Listen address and port (restart-only).
-bind = "127.0.0.1"
-port = 7777
 # The relay's canonical ws:// / wss:// URL. Clients echo it in the
 # AUTH event's "relay" tag and name it in a NIP-62 request to vanish.
 # Empty disables AUTH: restricted kinds are refused on write and never
 # served, and protected events are rejected (vanish requests to
 # ALL_RELAYS are still honored).
 service_url = ""
+# Other ws:// / wss:// URLs the relay answers to — an onion address
+# torrc forwards, an iroh name, an old domain. An AUTH "relay" tag,
+# NIP-62 "relay" tag or NIP-98 "u" tag may name any of them; each
+# entry requires a canonical service_url and parses like it.
+# service_url_aliases = ["ws://exampleabc.onion"]
 # Raise the soft open-file limit at startup up to this value, capped by
 # the hard limit; 0 leaves it unchanged (restart-only).
 nofiles = 1000000
-# Header carrying the real client IP (empty = socket address). The
-# last comma-separated value is trusted — set this only behind a proxy
-# that sets or appends the header.
-real_ip_header = ""
 # Maximum inbound WebSocket payload in bytes; inclusive — a frame of
 # exactly this size is accepted, one byte more closes with 1009.
 # Must be at least max_event_size + 10 (see [events]).
@@ -94,15 +92,32 @@ max_subscription_bytes_total = 1073741824
 # flight). An explicit value may not exceed that ceiling; 0 is
 # refused — there is no "unlimited".
 # max_connections = 832
-# Maximum simultaneous WebSocket connections per client IP (0 =
-# unlimited). IPv4 counts per address; IPv6 per /64 prefix.
-max_connections_per_ip = 128
 # Serve GET /metrics (Prometheus text exposition format) on the relay
 # port. Unauthenticated — keep it behind a reverse proxy or firewall
 # (restart-only).
 metrics = false
 # Per-slice stored-scan budget in microseconds (restart-only).
 query_timeslice_budget_microseconds = 10000
+
+# Listeners (restart-only — the bound set never changes on reload).
+# `address` is `<ip>:<port>` / `[v6]:<port>` for TCP or
+# `unix:<absolute path>` for a Unix-domain socket (e.g. a tor
+# `HiddenServicePort unix:` target; socket permissions come from the
+# directory and umask — create the directory beforehand). `profile`
+# names a `[relay.profiles.<name>]` table that sets this listener's
+# per-peer connection cap and rate buckets; `real_ip_header` names a
+# header carrying the real client IP for this listener (empty = off).
+# The last comma-separated value is trusted — set it only behind a
+# proxy that sets or appends the header. Without a valid header a TCP
+# listener's peer is the client IP and a unix listener's peer is the
+# listener itself: per-peer caps and buckets then apply listener-wide.
+[[relay.listen]]
+address        = "127.0.0.1:7777"
+profile        = "default"
+real_ip_header = ""
+# [[relay.listen]]
+# address = "unix:/run/nosfry/nosfry.sock"
+# profile = "unix"
 
 [relay.limits]
 # Maximum filters per REQ.
@@ -140,16 +155,24 @@ allowed_kinds = []
 # one `#p`/`#e` value.
 require_author_or_tag = false
 
-[relay.rate_limits]
+# Limit profiles (reloadable): `[[relay.listen]]` entries name one
+# each. `max_connections_per_peer` caps simultaneous WebSocket
+# connections per peer (0 = unlimited); a peer is the client IP for
+# TCP listeners — IPv4 per address, IPv6 per /64 prefix — or the whole
+# listener for address-less transports like unix sockets.
+[relay.profiles.default]
+max_connections_per_peer = 128
+
 # Per-connection token buckets; over-limit EVENTs get `OK false
 # rate-limited:`, over-limit REQs get `CLOSED rate-limited:`. A
 # *_per_second of 0 disables that bucket.
+[relay.profiles.default.rate_limits]
 events_per_second = 20
 events_burst      = 100
 reqs_per_second   = 20
 reqs_burst        = 100
-# Shared per-client-address buckets (IPv4 per address, IPv6 per /64):
-# every connection of one address draws from the same bucket.
+# Shared per-peer buckets: every connection of one peer draws from the
+# same bucket.
 ip_events_per_second = 100
 ip_events_burst      = 500
 ip_reqs_per_second   = 100

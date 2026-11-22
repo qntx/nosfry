@@ -3,7 +3,6 @@
 //! scan control to the reader).
 
 use std::collections::VecDeque;
-use std::net::IpAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -13,7 +12,7 @@ use futures_util::stream::StreamExt;
 use nosfry_core::auth::{AUTH_KIND, ReadGate};
 use nosfry_core::event::PublicKey;
 use nosfry_core::filter::Filter;
-use nosfry_core::limits::AddressBuckets;
+use nosfry_core::limits::{AddressBuckets, Limits};
 use nosfry_core::message::{RelayVerb, SubId, closed_frame, event_frame, notice_frame, ok_frame};
 use nosfry_core::moderation::Moderation;
 use nosfry_core::policy::Decision;
@@ -27,6 +26,7 @@ use crate::channels::{
     WriterMsg, route,
 };
 use crate::metrics::{EventOutcome, Metrics};
+use crate::peer::Peer;
 
 /// Per-connection state handed down from the server.
 #[derive(Debug, Clone)]
@@ -91,8 +91,8 @@ enum WriteError {
 struct Connection<'a> {
     /// Connection id; the shard routing key.
     conn: ConnId,
-    /// The client's IP address (for the write-policy plugin).
-    peer: IpAddr,
+    /// The client's identity (write-policy source, per-peer limits).
+    peer: Peer,
     /// Server-wide state.
     handle: &'a Handle,
     /// This connection's monitor shard (register/remove plus the scan
@@ -118,12 +118,14 @@ struct Connection<'a> {
 impl<'a> Connection<'a> {
     /// `None` when the per-connection NIP-42 challenge cannot be
     /// generated — the connection ends without a close frame.
-    /// `address` carries the rate-limit buckets shared with every
-    /// other connection of this client address.
+    /// `limits` is the listener profile's session limits; `address`
+    /// carries the rate-limit buckets shared with every other
+    /// connection of this peer.
     fn new(
         handle: &'a Handle,
         conn: ConnId,
-        peer: IpAddr,
+        peer: Peer,
+        limits: Arc<Limits>,
         address: Arc<AddressBuckets>,
     ) -> Option<(Self, OutboundRx)> {
         // Limits and the outbound budget are fixed at connect time;
@@ -143,22 +145,19 @@ impl<'a> Connection<'a> {
             live.config.relay.max_pending_outbound_bytes,
             Arc::clone(&handle.outbound_total),
         );
+        let conn_jobs = Arc::new(crate::channels::JobBudget::new(
+            (2 * limits.req.max_subs_per_connection).max(1),
+        ));
         Some((
             Self {
                 conn,
                 peer,
                 handle,
                 shard: route(&handle.shards, conn).clone(),
-                session: Session::new(
-                    Arc::clone(&live.limits),
-                    faster_hex::hex_string(&challenge),
-                    address,
-                ),
+                session: Session::new(limits, faster_hex::hex_string(&challenge), address),
                 out,
                 ping_interval: Duration::from_secs(live.config.relay.auto_ping_seconds),
-                conn_jobs: Arc::new(crate::channels::JobBudget::new(
-                    (2 * live.limits.req.max_subs_per_connection).max(1),
-                )),
+                conn_jobs,
                 batch: VecDeque::new(),
             },
             out_rx,
@@ -302,7 +301,7 @@ impl<'a> Connection<'a> {
     /// relay are exempt — a banned author may still vanish.
     fn moderation_allows(&self, event: &nosfry_core::event::Event) -> bool {
         if event.kind() == AUTH_KIND
-            || event.requests_vanish(self.handle.live.borrow().limits.auth.relay())
+            || event.requests_vanish(self.handle.live.borrow().limits.auth.names())
         {
             return true;
         }
@@ -334,13 +333,13 @@ impl<'a> Connection<'a> {
         let live = self.handle.live.borrow().clone();
         // NIP-62: a request to vanish naming this relay must not be
         // filtered by the write policy (restricted relays MUST comply).
-        if event.requests_vanish(live.limits.auth.relay()) {
+        if event.requests_vanish(live.limits.auth.names()) {
             return true;
         }
         let Some(policy) = &live.policy else {
             return true;
         };
-        let (ok, message) = match policy.check(event, self.peer, authed).await {
+        let (ok, message) = match policy.check(event, &self.peer, authed).await {
             Decision::Accept => return true,
             Decision::Reject(m) if m.is_empty() => {
                 (false, "blocked: rejected by write policy".to_owned())
@@ -699,16 +698,18 @@ impl<'a> Connection<'a> {
 }
 
 /// Run one WebSocket connection until close, error, or shutdown.
-/// `address` shares the client address's rate-limit buckets into the
-/// session.
+/// `limits` is the listener profile's session limits; `address`
+/// shares the peer's rate-limit buckets into the session.
 pub(crate) async fn run(
     ws: &mut HttpWebSocket,
     handle: &Handle,
     conn_id: ConnId,
-    peer: IpAddr,
+    peer: Peer,
+    limits: Arc<Limits>,
     address: Arc<AddressBuckets>,
 ) {
-    let Some((mut conn, out_rx)) = Connection::new(handle, conn_id, peer, address) else {
+    let started = Instant::now();
+    let Some((mut conn, out_rx)) = Connection::new(handle, conn_id, peer, limits, address) else {
         return;
     };
     let mut ping = tokio::time::interval(conn.ping_interval);
@@ -730,5 +731,10 @@ pub(crate) async fn run(
 
     conn.drain_obligated(ws).await;
     conn.teardown().await;
-    tracing::debug!(target: "nosfry::conn", reason, "connection closed");
+    tracing::debug!(
+        target: "nosfry::conn",
+        reason,
+        duration_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+        "connection closed"
+    );
 }
