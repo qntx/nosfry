@@ -30,13 +30,11 @@ reject_events_newer_than_seconds = 3155760000
 reject_events_older_than_seconds = 3155760000
 
 [relay]
-bind = "127.0.0.1"
-port = $port
 $metrics_line
 max_websocket_payload_size = 131072
-# Benchmarks measure the engine, not the limiter: 50,000 subscribers
-# connect from one IP and ingest floods a single connection.
-max_connections_per_ip = 0
+
+[[relay.listen]]
+address = "127.0.0.1:$port"
 
 # Serve restricted read kinds (DMs) like strfry does, so relayBench's
 # cross-check compares the same result sets.
@@ -46,7 +44,12 @@ restricted_read_kinds = []
 [relay.limits]
 max_sync_events = 2000000
 
-[relay.rate_limits]
+# Benchmarks measure the engine, not the limiter: 50,000 subscribers
+# connect from one IP and ingest floods a single connection.
+[relay.profiles.default]
+max_connections_per_peer = 0
+
+[relay.profiles.default.rate_limits]
 events_per_second = 0
 events_burst = 0
 reqs_per_second = 0

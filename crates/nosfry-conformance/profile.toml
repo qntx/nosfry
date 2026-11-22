@@ -1,6 +1,6 @@
 # Shared relay profile for the black-box conformance suite. Only keys
 # both editions accept may appear here; `run.sh` injects
-# `[relay] service_url` (and, for native, the bind/db keys it needs).
+# `[relay] service_url` (and, for native, the listener/db keys it needs).
 
 [events]
 # The strict defaults: a future-dated event is rejected.
