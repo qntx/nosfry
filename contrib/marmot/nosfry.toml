@@ -1,7 +1,7 @@
 # nosfry relay configuration for Marmot (MDK / White Noise) traffic:
 # group messages kind 445, gift-wrap Welcomes kind 1059, KeyPackages
-# kind 30443. Evidence for every non-default value is in
-# docs/research/blossom-marmot.mdx (runs A–E′, probes P1–P9).
+# kind 30443. Each non-default value names the measurement behind
+# it: White Noise interop runs and protocol probes against nosfry.
 
 [db] # restart-only
 path = "./nosfry-db"
@@ -10,16 +10,16 @@ path = "./nosfry-db"
 # The spec asks group and inbox relays to accept events of at least
 # 2 MiB: a 64 KiB cap stops a Welcome (a 1059 wrap ~3x the MLS
 # Welcome it carries) at about 56 group members. Measured on both
-# editions (P9).
+# editions.
 max_event_size = 2097152
 
 [relay]
 # AUTH is required: kind 1059 is read-gated to author and recipient,
-# and with AUTH off every Welcome is stored but can never be served
-# (run B: 578 swallowed Welcomes). Set the deployed URL here.
+# so with AUTH off no Welcome could ever be served and the relay
+# refuses them all with `restricted:`. Set the deployed URL here.
 service_url = "wss://relay.example.com"
 # The smallest cap that carries the largest allowed EVENT frame
-# (P9, measured): NIP-11 then advertises a truthful
+# (measured): NIP-11 then advertises a truthful
 # max_message_length of 2097162, which MDK reads as the event limit.
 max_websocket_payload_size = 2097162
 
