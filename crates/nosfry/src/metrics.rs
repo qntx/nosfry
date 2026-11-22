@@ -129,6 +129,36 @@ impl EventOutcome {
     }
 }
 
+/// One `nosfry_reader_busy_total{msg}` class: work a shard dropped
+/// because the reader admission limits were hit.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ReaderBusy {
+    /// A REQ/COUNT/NEG-OPEN `Start` shed at the reader job cap or a
+    /// full inbox.
+    Scan,
+    /// A `Start` shed at its connection's pending-query budget.
+    ConnScan,
+    /// A `NEG-MSG` shed on a full inbox.
+    NegMsg,
+    /// A `Cancel`/`CancelConn`/`NegClose` dropped on a full inbox.
+    Control,
+}
+
+impl ReaderBusy {
+    /// Every class in render order.
+    const ALL: [Self; 4] = [Self::Scan, Self::ConnScan, Self::NegMsg, Self::Control];
+
+    /// The `msg` label value.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Scan => "scan",
+            Self::ConnScan => "conn_scan",
+            Self::NegMsg => "neg_msg",
+            Self::Control => "control",
+        }
+    }
+}
+
 /// Process-wide counters, shared as `Arc<Metrics>`.
 #[derive(Debug)]
 pub(crate) struct Metrics {
@@ -157,6 +187,8 @@ pub(crate) struct Metrics {
     rejected: AtomicU64,
     /// `nosfry_store_errors_total{op}`.
     store_errors: [AtomicU64; StoreOp::ALL.len()],
+    /// `nosfry_reader_busy_total{msg}`.
+    reader_busy: [AtomicU64; ReaderBusy::ALL.len()],
 }
 
 impl Metrics {
@@ -179,6 +211,7 @@ impl Metrics {
             outcomes: [const { AtomicU64::new(0) }; EventOutcome::ALL.len()],
             rejected: AtomicU64::new(0),
             store_errors: [const { AtomicU64::new(0) }; StoreOp::ALL.len()],
+            reader_busy: [const { AtomicU64::new(0) }; ReaderBusy::ALL.len()],
         }
     }
 
@@ -309,12 +342,21 @@ impl Metrics {
         }
     }
 
+    /// One message a shard dropped because the reader admission
+    /// limits were hit (job cap or full inbox).
+    pub(crate) fn reader_busy(&self, msg: ReaderBusy) {
+        if let Some(counter) = self.reader_busy.get(msg as usize) {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// Render the Prometheus text exposition format (0.0.4);
     /// `connections` is the live gauge read from the connection
     /// limiter, `outbound_pending` the process-wide pending
     /// outbound bytes, `sync_memory` the reserved sync-storage
-    /// bytes, and `subscription_bytes` the charged live-subscription
-    /// bytes. Counter series at zero are omitted; the gauges are
+    /// bytes, `subscription_bytes` the charged live-subscription
+    /// bytes, and `reader_jobs` the sum of every reader's admitted
+    /// scan jobs. Counter series at zero are omitted; the gauges are
     /// always emitted.
     pub(crate) fn render(
         &self,
@@ -322,6 +364,7 @@ impl Metrics {
         outbound_pending: usize,
         sync_memory: usize,
         subscription_bytes: usize,
+        reader_jobs: usize,
     ) -> String {
         let mut out = String::with_capacity(2 * 1024);
         family(
@@ -396,34 +439,77 @@ impl Metrics {
         }
         family(
             &mut out,
-            "nosfry_connections",
-            "Current WebSocket connections.",
-            "gauge",
+            "nosfry_reader_busy_total",
+            "Messages a shard dropped because the reader admission limits were hit.",
+            "counter",
         );
-        writeln!(out, "nosfry_connections {connections}").ok();
-        family(
+        for (msg, counter) in ReaderBusy::ALL.iter().zip(&self.reader_busy) {
+            let value = counter.load(Ordering::Relaxed);
+            if value > 0 {
+                writeln!(
+                    out,
+                    "nosfry_reader_busy_total{{msg=\"{}\"}} {value}",
+                    msg.as_str()
+                )
+                .ok();
+            }
+        }
+        render_gauges(
             &mut out,
-            "nosfry_outbound_pending_bytes",
-            "Pending outbound bytes across all connections.",
-            "gauge",
+            connections,
+            outbound_pending,
+            sync_memory,
+            subscription_bytes,
+            reader_jobs,
         );
-        writeln!(out, "nosfry_outbound_pending_bytes {outbound_pending}").ok();
-        family(
-            &mut out,
-            "nosfry_sync_memory_bytes",
-            "Bytes reserved for sealed negentropy sync storages.",
-            "gauge",
-        );
-        writeln!(out, "nosfry_sync_memory_bytes {sync_memory}").ok();
-        family(
-            &mut out,
-            "nosfry_subscription_bytes",
-            "Estimated live-subscription bytes charged to the budget.",
-            "gauge",
-        );
-        writeln!(out, "nosfry_subscription_bytes {subscription_bytes}").ok();
         out
     }
+}
+
+/// The always-emitted gauges at the tail of [`Metrics::render`].
+fn render_gauges(
+    out: &mut String,
+    connections: usize,
+    outbound_pending: usize,
+    sync_memory: usize,
+    subscription_bytes: usize,
+    reader_jobs: usize,
+) {
+    family(
+        out,
+        "nosfry_connections",
+        "Current WebSocket connections.",
+        "gauge",
+    );
+    writeln!(out, "nosfry_connections {connections}").ok();
+    family(
+        out,
+        "nosfry_outbound_pending_bytes",
+        "Pending outbound bytes across all connections.",
+        "gauge",
+    );
+    writeln!(out, "nosfry_outbound_pending_bytes {outbound_pending}").ok();
+    family(
+        out,
+        "nosfry_sync_memory_bytes",
+        "Bytes reserved for sealed negentropy sync storages.",
+        "gauge",
+    );
+    writeln!(out, "nosfry_sync_memory_bytes {sync_memory}").ok();
+    family(
+        out,
+        "nosfry_subscription_bytes",
+        "Estimated live-subscription bytes charged to the budget.",
+        "gauge",
+    );
+    writeln!(out, "nosfry_subscription_bytes {subscription_bytes}").ok();
+    family(
+        out,
+        "nosfry_reader_jobs",
+        "Scan jobs admitted to the readers and not yet finished.",
+        "gauge",
+    );
+    writeln!(out, "nosfry_reader_jobs {reader_jobs}").ok();
 }
 
 /// `# HELP`/`# TYPE` header lines for one family.
@@ -447,10 +533,10 @@ mod tests {
 
     #[test]
     fn empty_render_has_families_and_gauge_only() {
-        let out = Metrics::new().render(0, 0, 0, 0);
+        let out = Metrics::new().render(0, 0, 0, 0, 0);
         assert!(out.contains("# HELP nostr_client_messages_total"));
         assert!(out.contains("# TYPE nostr_events_total counter"));
-        assert!(out.ends_with("nosfry_subscription_bytes 0\n"));
+        assert!(out.ends_with("nosfry_reader_jobs 0\n"));
         assert!(!out.contains('{'), "no series while every counter is 0");
     }
 
@@ -463,7 +549,7 @@ mod tests {
         for kind in 0..300u16 {
             metrics.event(kind);
         }
-        let out = metrics.render(0, 0, 0, 0);
+        let out = metrics.render(0, 0, 0, 0, 0);
         let series: Vec<_> = out
             .lines()
             .filter(|line| line.starts_with("nostr_events_total{"))
@@ -485,7 +571,7 @@ mod tests {
         // series stays its own.
         metrics.event(400);
         metrics.event(0);
-        let again = metrics.render(0, 0, 0, 0);
+        let again = metrics.render(0, 0, 0, 0, 0);
         assert!(
             again.contains("nostr_events_total{kind=\"0\"} 2"),
             "{again}"
@@ -516,8 +602,11 @@ mod tests {
         metrics.store_error(StoreOp::Write);
         metrics.store_error(StoreOp::Scan);
         metrics.store_error(StoreOp::Scan);
+        metrics.reader_busy(ReaderBusy::Scan);
+        metrics.reader_busy(ReaderBusy::ConnScan);
+        metrics.reader_busy(ReaderBusy::Control);
         assert_eq!(
-            metrics.render(3, 512, 0, 7),
+            metrics.render(3, 512, 0, 7, 11),
             "# HELP nostr_client_messages_total Inbound client messages by verb.\n\
              # TYPE nostr_client_messages_total counter\n\
              nostr_client_messages_total{verb=\"EVENT\"} 2\n\
@@ -546,6 +635,11 @@ mod tests {
              # TYPE nosfry_store_errors_total counter\n\
              nosfry_store_errors_total{op=\"write\"} 1\n\
              nosfry_store_errors_total{op=\"scan\"} 2\n\
+             # HELP nosfry_reader_busy_total Messages a shard dropped because the reader admission limits were hit.\n\
+             # TYPE nosfry_reader_busy_total counter\n\
+             nosfry_reader_busy_total{msg=\"scan\"} 1\n\
+             nosfry_reader_busy_total{msg=\"conn_scan\"} 1\n\
+             nosfry_reader_busy_total{msg=\"control\"} 1\n\
              # HELP nosfry_connections Current WebSocket connections.\n\
              # TYPE nosfry_connections gauge\n\
              nosfry_connections 3\n\
@@ -557,7 +651,10 @@ mod tests {
              nosfry_sync_memory_bytes 0\n\
              # HELP nosfry_subscription_bytes Estimated live-subscription bytes charged to the budget.\n\
              # TYPE nosfry_subscription_bytes gauge\n\
-             nosfry_subscription_bytes 7\n"
+             nosfry_subscription_bytes 7\n\
+             # HELP nosfry_reader_jobs Scan jobs admitted to the readers and not yet finished.\n\
+             # TYPE nosfry_reader_jobs gauge\n\
+             nosfry_reader_jobs 11\n"
         );
     }
 }

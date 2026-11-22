@@ -27,12 +27,17 @@ unless you ask otherwise, when the fixed release is out.
 
 - Every client message is untrusted input. Events are size- and
   structure-checked before their BIP-340 signature is verified.
-  Subscriptions, filters, scans, negentropy sessions, outbound bytes,
-  and the writer queue are bounded by the limits in
-  [`nosfry.example.toml`](nosfry.example.toml).
-- Known open resource bounds (audit round 1): the per-reader request
-  queues are unbounded (C-14), and `relay.max_connections` defaults to `0`
-  (unlimited). On a public relay set `max_connections`, keep
+  Connections, subscriptions, filters, scans and the reader queues,
+  negentropy sessions, outbound bytes, and the writer queue are bounded
+  by the limits in [`nosfry.example.toml`](nosfry.example.toml).
+- Reader queues are bounded too: past a reader's admission limit, or a
+  connection's limit of waiting queries, a query is refused with
+  `rate-limited:` instead of queued. That capacity is shared, not divided per
+  client, so enough connections flooding past their rate limits can get
+  other clients' queries refused while the flood lasts.
+- `relay.max_connections` is always finite, but its default is derived from
+  the open-file limit (874,936 at the default `relay.nofiles`) and bounds
+  descriptors, not memory. On a public relay size it to the host, keep
   `max_connections_per_ip` and the rate limits on, and put the relay behind
   a reverse proxy.
 - One panic aborts the process (`panic = "abort"`); run the relay under a

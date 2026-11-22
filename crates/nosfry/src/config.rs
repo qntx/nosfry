@@ -88,8 +88,11 @@ pub struct Relay {
     /// `blocked: subscription capacity exhausted` over budget
     /// (restart-only; 0 = unlimited).
     pub max_subscription_bytes_total: usize,
-    /// Maximum simultaneous WebSocket connections (0 = unlimited).
-    pub max_connections: usize,
+    /// Maximum simultaneous WebSocket connections. Omitted, the cap
+    /// derives from the soft open-file limit (see
+    /// `limiter::connection_ceiling`); an explicit `0` is refused —
+    /// there is no "unlimited".
+    pub max_connections: Option<usize>,
     /// Maximum simultaneous WebSocket connections per client IP
     /// (0 = unlimited). IPv4 counts per address; IPv6 per /64.
     pub max_connections_per_ip: usize,
@@ -199,7 +202,7 @@ impl Default for Relay {
             max_pending_outbound_bytes_total: 1_073_741_824,
             max_sync_memory_bytes: 1_073_741_824,
             max_subscription_bytes_total: 1_073_741_824,
-            max_connections: 0,
+            max_connections: None,
             max_connections_per_ip: 128,
             metrics: false,
             query_timeslice_budget_microseconds: 10_000,

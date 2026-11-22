@@ -8,13 +8,17 @@ HTTP, and passes the client address. nosfry has no TLS of its own.
 
 - [ ] `relay.service_url` is the public `wss://` URL (NIP-42 AUTH, NIP-62 and
       NIP-86 need it).
-- [ ] `relay.max_connections` is finite and sized to memory: an idle
-      connection costs about 7.2 KiB (100,000 connections, about 0.7 GiB).
+- [ ] `relay.max_connections` is sized to memory: an idle connection costs
+      about 7.2 KiB (100,000 connections, about 0.7 GiB). Unset, it is derived
+      from the open-file limit (874,936 at the default `nofiles`), which bounds
+      descriptors, not memory.
 - [ ] `relay.bind` stays `127.0.0.1`; only the proxy reaches the relay.
 - [ ] The proxy rate-limits HTTP, overwrites `X-Forwarded-For`, and the relay
       sets `relay.real_ip_header = "X-Forwarded-For"`.
 - [ ] `/metrics` is not reachable from the internet.
-- [ ] The open-file hard limit is above `max_connections` plus a margin.
+- [ ] The open-file hard limit leaves room for `max_connections`: the relay
+      refuses to start when `max_connections` exceeds `limit - 64 - limit/8`
+      of the soft limit `nofiles` raised it to.
 - [ ] The database volume has free space for growth, and alerts watch it
       (see [Disk space](#disk-space)).
 - [ ] Backups are scheduled ([administration.md](administration.md#backup-and-restore)).
@@ -110,24 +114,26 @@ production, also:
 format on the relay port. It is unauthenticated: scrape it from the host, and
 keep it off the proxy.
 
-| Metric                                 | Type    | Meaning                                                                                                                                | Alert on                             |
-| -------------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| `nosfry_store_errors_total{op}`        | counter | Failed store operations                                                                                                                | any increase (disk full, I/O errors) |
-| `nosfry_connections`                   | gauge   | Live WebSocket connections                                                                                                             | above 80 % of `max_connections`      |
-| `nosfry_connections_rejected_total`    | counter | Refused upgrades (caps)                                                                                                                | a sustained rate                     |
-| `nosfry_outbound_pending_bytes`        | gauge   | Process-wide queued outbound bytes                                                                                                     | above 50 % of the total budget       |
-| `nosfry_subscription_bytes`            | gauge   | Estimated live-subscription memory                                                                                                     | above 80 % of the budget             |
-| `nosfry_sync_memory_bytes`             | gauge   | Memory held by negentropy sessions                                                                                                     | above 80 % of the budget             |
-| `nosfry_rate_limited_total{verb}`      | counter | Rate-limit refusals                                                                                                                    | informational                        |
-| `nostr_client_messages_total{verb}`    | counter | Inbound messages by verb                                                                                                               | informational                        |
-| `nostr_relay_messages_total{verb}`     | counter | Frames written to sockets                                                                                                              | informational                        |
-| `nostr_events_total{kind}`             | counter | Events persisted to the store; at most 256 kinds get an own series, the rest count under `kind="other"`                                | informational                        |
-| `nosfry_event_outcomes_total{outcome}` | counter | Verified publishes by outcome: `stored`, `ephemeral`, `duplicate`, `superseded`, `deleted`, `vanished`, `moderated`, `policy`, `error` | a rising `error` outcome             |
+| Metric                                 | Type    | Meaning                                                                                                                                                | Alert on                             |
+| -------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
+| `nosfry_store_errors_total{op}`        | counter | Failed store operations                                                                                                                                | any increase (disk full, I/O errors) |
+| `nosfry_connections`                   | gauge   | Live WebSocket connections                                                                                                                             | above 80 % of `max_connections`      |
+| `nosfry_connections_rejected_total`    | counter | Refused upgrades (caps)                                                                                                                                | a sustained rate                     |
+| `nosfry_outbound_pending_bytes`        | gauge   | Process-wide queued outbound bytes                                                                                                                     | above 50 % of the total budget       |
+| `nosfry_subscription_bytes`            | gauge   | Estimated live-subscription memory                                                                                                                     | above 80 % of the budget             |
+| `nosfry_sync_memory_bytes`             | gauge   | Memory held by negentropy sessions                                                                                                                     | above 80 % of the budget             |
+| `nosfry_reader_jobs`                   | gauge   | Queries admitted to the reader threads and not yet finished                                                                                            | near 4,096 × `threads.readers`       |
+| `nosfry_reader_busy_total{msg}`        | counter | Work refused because the readers were saturated (`relay busy`) or a connection had too many queries waiting: `scan`, `conn_scan`, `neg_msg`, `control` | a sustained `scan` rate              |
+| `nosfry_rate_limited_total{verb}`      | counter | Rate-limit refusals                                                                                                                                    | informational                        |
+| `nostr_client_messages_total{verb}`    | counter | Inbound messages by verb                                                                                                                               | informational                        |
+| `nostr_relay_messages_total{verb}`     | counter | Frames written to sockets                                                                                                                              | informational                        |
+| `nostr_events_total{kind}`             | counter | Events persisted to the store; at most 256 kinds get an own series, the rest count under `kind="other"`                                                | informational                        |
+| `nosfry_event_outcomes_total{outcome}` | counter | Verified publishes by outcome: `stored`, `ephemeral`, `duplicate`, `superseded`, `deleted`, `vanished`, `moderated`, `policy`, `error`                 | a rising `error` outcome             |
 
 A counter that has never moved prints only its `# HELP` and `# TYPE` lines, so
-treat a missing series as zero. There are no latency or queue-depth metrics
-yet; watch the process (RSS, open descriptors) with node-exporter or the
-container runtime.
+treat a missing series as zero. There are no latency metrics yet, and
+`nosfry_reader_jobs` is the only queue-depth gauge; watch the process (RSS,
+open descriptors) with node-exporter or the container runtime.
 
 Logs go to stderr (the journal under systemd). The relay warns about commits,
 enqueues and sweeps slower than 1 s. Per-message debugging targets are listed

@@ -100,6 +100,8 @@ fn init_tracing() {
             .json()
             .with_env_filter(filter)
             .with_span_events(FmtSpan::NONE)
+            .with_current_span(true)
+            .with_span_list(false)
             .with_writer(std::io::stderr)
             .init();
     } else {

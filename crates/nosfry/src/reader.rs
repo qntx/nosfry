@@ -18,7 +18,7 @@ use nosfry_lmdb::{CountResult, CountScan, Progress, Scan, Store, StoreError};
 use tokio::sync::mpsc as tokio_mpsc;
 use tokio::sync::watch;
 
-use crate::channels::{ConnId, Out, Outbound, ReaderMsg, ScanKind, ShardMsg, route};
+use crate::channels::{ConnId, Out, Outbound, ReaderMsg, ScanKind, ScanLease, ShardMsg, route};
 use crate::metrics::{Metrics, StoreOp};
 
 /// How long an idle reader waits for new work.
@@ -198,6 +198,12 @@ struct ScanEntry {
     sub: SubKey,
     job: Job,
     out: Outbound,
+    /// The admission's job-slot leases — the connection's budget and
+    /// the reader's — released whenever the entry drops: on finish,
+    /// error, `Cancel`, `CancelConn`, or (for a `NEG-OPEN`) when the
+    /// scan seals into a `NegSession`, whose memory is bounded by
+    /// `max_sync_memory_bytes` instead.
+    _lease: ScanLease,
     /// The scan's first emitted frame already went out as its own
     /// chunk so the first event never waits for a full chunk.
     first_pushed: bool,
@@ -347,51 +353,33 @@ fn step(
     metrics: &Metrics,
     work: &mut Work,
 ) {
+    // Sync scans share none of the emit machinery; they get their
+    // own slice runner.
+    if matches!(entry.job, Job::Neg(_)) {
+        step_neg(entry, store, tuning, metrics, work);
+        return;
+    }
     let budget = tuning.budget;
     let ScanEntry {
         conn,
         sub,
         job,
         out,
+        _lease: lease,
         first_pushed,
         filters,
         mut events,
         started,
     } = entry;
     match job {
-        Job::Neg(mut neg) => {
-            let result = neg.scan.step_records(store, budget, &mut |created_at, id| {
-                neg.records.push((created_at, id));
-            });
-            if !charge_neg_scan(&mut neg, tuning) {
-                out.push(Out::Neg {
-                    sub: sub.clone(),
-                    text: neg_err_frame(&sub.id, "blocked: sync capacity exhausted"),
-                    closes: true,
-                });
-                return;
-            }
-            match result {
-                Ok(Progress::Pending) => work.resumed.push_back(ScanEntry {
-                    conn,
-                    sub,
-                    job: Job::Neg(neg),
-                    out,
-                    first_pushed,
-                    filters,
-                    events,
-                    started,
-                }),
-                Ok(Progress::Done) => finish_neg(conn, &sub, &out, *neg, &mut work.negs, tuning),
-                Err(err) => neg_failed(conn, &sub, &out, &err, metrics),
-            }
-        }
+        Job::Neg(_) => {} // dispatched to `step_neg` above.
         Job::Count(mut scan) => match scan.step(store, budget) {
             Ok(Progress::Pending) => work.resumed.push_back(ScanEntry {
                 conn,
                 sub,
                 job: Job::Count(scan),
                 out,
+                _lease: lease,
                 first_pushed,
                 filters,
                 events,
@@ -448,6 +436,7 @@ fn step(
                     sub,
                     job: Job::Scan(scan),
                     out,
+                    _lease: lease,
                     first_pushed,
                     filters,
                     events,
@@ -465,6 +454,57 @@ fn step(
                 Err(err) => scan_failed(conn, &sub, &out, &err, metrics),
             }
         }
+    }
+}
+
+/// One `NEG-OPEN` time-slice: records accumulate under the
+/// `max_sync_memory_bytes` reservation until the scan seals into
+/// `work.negs`; over-budget and failed scans close the sync.
+fn step_neg(entry: ScanEntry, store: &Store, tuning: &Tuning, metrics: &Metrics, work: &mut Work) {
+    let ScanEntry {
+        conn,
+        sub,
+        job,
+        out,
+        _lease: lease,
+        first_pushed,
+        filters,
+        events,
+        started,
+    } = entry;
+    let Job::Neg(mut neg) = job else {
+        // `step` only dispatches `Job::Neg` here.
+        return;
+    };
+    let result = neg
+        .scan
+        .step_records(store, tuning.budget, &mut |created_at, id| {
+            neg.records.push((created_at, id));
+        });
+    if !charge_neg_scan(&mut neg, tuning) {
+        out.push(Out::Neg {
+            sub: sub.clone(),
+            text: neg_err_frame(&sub.id, "blocked: sync capacity exhausted"),
+            closes: true,
+        });
+        return;
+    }
+    match result {
+        Ok(Progress::Pending) => work.resumed.push_back(ScanEntry {
+            conn,
+            sub,
+            job: Job::Neg(neg),
+            out,
+            _lease: lease,
+            first_pushed,
+            filters,
+            events,
+            started,
+        }),
+        // The lease ends with the scan: the sealed session is
+        // bounded by `max_sync_memory_bytes`, not job slots.
+        Ok(Progress::Done) => finish_neg(conn, &sub, &out, *neg, &mut work.negs, tuning),
+        Err(err) => neg_failed(conn, &sub, &out, &err, metrics),
     }
 }
 
@@ -681,7 +721,7 @@ fn reap_negs(negs: &mut Negs) {
 /// Apply an inbox message.
 fn apply(msg: ReaderMsg, work: &mut Work, tuning: &Tuning) {
     match msg {
-        ReaderMsg::Start(start) => {
+        ReaderMsg::Start { start, lease } => {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, |d| d.as_secs());
@@ -727,6 +767,7 @@ fn apply(msg: ReaderMsg, work: &mut Work, tuning: &Tuning) {
                 sub: start.sub,
                 job,
                 out: start.out,
+                _lease: lease,
                 first_pushed: false,
                 filters,
                 events: 0,
@@ -797,7 +838,22 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::*;
-    use crate::channels::{ScanKind, ScanStart};
+    use crate::channels::{JobBudget, JobSlot, ScanKind, ScanStart};
+
+    /// A connection budget that never refuses (tests only).
+    fn unbounded_budget() -> Arc<JobBudget> {
+        Arc::new(JobBudget::new(usize::MAX))
+    }
+
+    /// A job-slot pair on `jobs` (reader budget) and an unbounded
+    /// connection budget (tests only).
+    fn test_lease(jobs: &Arc<JobBudget>) -> ScanLease {
+        ScanLease {
+            _conn: JobSlot::try_acquire(&Arc::new(JobBudget::new(usize::MAX)))
+                .expect("unbounded test slot"),
+            _reader: JobSlot::try_acquire(jobs).expect("unbounded test slot"),
+        }
+    }
 
     /// A signed kind-1 event at a distinct `created_at`.
     fn event(i: u64) -> Arc<nosfry_core::event::Event> {
@@ -842,18 +898,23 @@ mod tests {
         let (shard_tx, _shard_rx) = mpsc::channel(8);
         let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
-        tx.send(ReaderMsg::Start(Box::new(ScanStart {
-            conn: 1,
-            sub: SubKey {
-                id: SubId::parse("s").unwrap(),
-                generation: 1,
-            },
-            kind: ScanKind::Req,
-            filters,
-            gate: ReadGate::default(),
-            snapshot: u64::MAX,
-            out,
-        })))
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        tx.send(ReaderMsg::Start {
+            start: Box::new(ScanStart {
+                conn: 1,
+                sub: SubKey {
+                    id: SubId::parse("s").unwrap(),
+                    generation: 1,
+                },
+                kind: ScanKind::Req,
+                filters,
+                gate: ReadGate::default(),
+                snapshot: u64::MAX,
+                out,
+                conn_jobs: unbounded_budget(),
+            }),
+            lease: test_lease(&jobs),
+        })
         .unwrap();
         let reader = std::thread::spawn(move || {
             run(
@@ -910,18 +971,23 @@ mod tests {
             text: "x".repeat(1024),
         });
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
-        tx.send(ReaderMsg::Start(Box::new(ScanStart {
-            conn: 1,
-            sub: SubKey {
-                id: SubId::parse("s").unwrap(),
-                generation: 1,
-            },
-            kind: ScanKind::Req,
-            filters,
-            gate: ReadGate::default(),
-            snapshot: 0,
-            out,
-        })))
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        tx.send(ReaderMsg::Start {
+            start: Box::new(ScanStart {
+                conn: 1,
+                sub: SubKey {
+                    id: SubId::parse("s").unwrap(),
+                    generation: 1,
+                },
+                kind: ScanKind::Req,
+                filters,
+                gate: ReadGate::default(),
+                snapshot: 0,
+                out,
+                conn_jobs: unbounded_budget(),
+            }),
+            lease: test_lease(&jobs),
+        })
         .unwrap();
 
         // The reader runs on its own thread and returns its private
@@ -977,19 +1043,24 @@ mod tests {
         });
         let (caught_out, caught_rx) = Outbound::new(1 << 30, Arc::clone(&total));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
         for (conn, out) in [(1, behind_out), (2, caught_out)] {
-            tx.send(ReaderMsg::Start(Box::new(ScanStart {
-                conn,
-                sub: SubKey {
-                    id: SubId::parse(&format!("s{conn}")).unwrap(),
-                    generation: 1,
-                },
-                kind: ScanKind::Req,
-                filters: Arc::clone(&filters),
-                gate: ReadGate::default(),
-                snapshot: u64::MAX,
-                out,
-            })))
+            tx.send(ReaderMsg::Start {
+                start: Box::new(ScanStart {
+                    conn,
+                    sub: SubKey {
+                        id: SubId::parse(&format!("s{conn}")).unwrap(),
+                        generation: 1,
+                    },
+                    kind: ScanKind::Req,
+                    filters: Arc::clone(&filters),
+                    gate: ReadGate::default(),
+                    snapshot: u64::MAX,
+                    out,
+                    conn_jobs: unbounded_budget(),
+                }),
+                lease: test_lease(&jobs),
+            })
             .unwrap();
         }
         let reader = std::thread::spawn(move || {
@@ -1061,18 +1132,23 @@ mod tests {
         let all: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
         let one: Arc<[Filter]> =
             Arc::from(vec![Filter::parse("{\"kinds\":[1],\"limit\":1}").unwrap()]);
-        tx.send(ReaderMsg::Start(Box::new(ScanStart {
-            conn: 1,
-            sub: SubKey {
-                id: SubId::parse("long").unwrap(),
-                generation: 1,
-            },
-            kind: ScanKind::Req,
-            filters: Arc::clone(&all),
-            gate: ReadGate::default(),
-            snapshot: u64::MAX,
-            out: long_out,
-        })))
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        tx.send(ReaderMsg::Start {
+            start: Box::new(ScanStart {
+                conn: 1,
+                sub: SubKey {
+                    id: SubId::parse("long").unwrap(),
+                    generation: 1,
+                },
+                kind: ScanKind::Req,
+                filters: Arc::clone(&all),
+                gate: ReadGate::default(),
+                snapshot: u64::MAX,
+                out: long_out,
+                conn_jobs: unbounded_budget(),
+            }),
+            lease: test_lease(&jobs),
+        })
         .unwrap();
         // Queue the flood before the reader starts so every scan is
         // applied before the first step: `new_scans` is [long, n0..n499]
@@ -1080,18 +1156,22 @@ mod tests {
         // the resumed queue until the whole flood is done.
         for i in 0..500u64 {
             let (out, _rx) = Outbound::new(0, Arc::new(AtomicUsize::new(0)));
-            tx.send(ReaderMsg::Start(Box::new(ScanStart {
-                conn: 2 + i,
-                sub: SubKey {
-                    id: SubId::parse(&format!("n{i}")).unwrap(),
-                    generation: 1,
-                },
-                kind: ScanKind::Req,
-                filters: Arc::clone(&one),
-                gate: ReadGate::default(),
-                snapshot: u64::MAX,
-                out,
-            })))
+            tx.send(ReaderMsg::Start {
+                start: Box::new(ScanStart {
+                    conn: 2 + i,
+                    sub: SubKey {
+                        id: SubId::parse(&format!("n{i}")).unwrap(),
+                        generation: 1,
+                    },
+                    kind: ScanKind::Req,
+                    filters: Arc::clone(&one),
+                    gate: ReadGate::default(),
+                    snapshot: u64::MAX,
+                    out,
+                    conn_jobs: unbounded_budget(),
+                }),
+                lease: test_lease(&jobs),
+            })
             .unwrap();
         }
         let reader = std::thread::spawn(move || {
@@ -1233,21 +1313,31 @@ mod tests {
     }
 
     /// A `NEG-OPEN` start message for `conn`/`id` over `filters`.
-    fn neg_start(conn: u64, id: &str, filters: Arc<[Filter]>, out: Outbound) -> ReaderMsg {
-        ReaderMsg::Start(Box::new(ScanStart {
-            conn,
-            sub: SubKey {
-                id: SubId::parse(id).unwrap(),
-                generation: 1,
-            },
-            kind: ScanKind::Neg {
-                msg: vec![0x61].into(),
-            },
-            filters,
-            gate: ReadGate::default(),
-            snapshot: u64::MAX,
-            out,
-        }))
+    fn neg_start(
+        conn: u64,
+        id: &str,
+        filters: Arc<[Filter]>,
+        out: Outbound,
+        jobs: &Arc<JobBudget>,
+    ) -> ReaderMsg {
+        ReaderMsg::Start {
+            start: Box::new(ScanStart {
+                conn,
+                sub: SubKey {
+                    id: SubId::parse(id).unwrap(),
+                    generation: 1,
+                },
+                kind: ScanKind::Neg {
+                    msg: vec![0x61].into(),
+                },
+                filters,
+                gate: ReadGate::default(),
+                snapshot: u64::MAX,
+                out,
+                conn_jobs: unbounded_budget(),
+            }),
+            lease: test_lease(jobs),
+        }
     }
 
     /// Wait until `pred` holds for the counter or panic after 5 s.
@@ -1257,6 +1347,11 @@ mod tests {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// `until` on a job budget's in-flight count.
+    fn until_jobs(budget: &JobBudget, pred: impl Fn(usize) -> bool, what: &str) {
+        until(&budget.jobs, pred, what);
     }
 
     /// A sync whose records exceed `max_sync_memory_bytes` is refused
@@ -1272,7 +1367,8 @@ mod tests {
         let (tx, counter, reader) = spawn_reader(store, Duration::from_secs(10), 1_000);
         let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
-        tx.send(neg_start(1, "n", filters, out)).unwrap();
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        tx.send(neg_start(1, "n", filters, out, &jobs)).unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
             let frame = out_rx.blocking_recv().unwrap();
@@ -1300,7 +1396,8 @@ mod tests {
         let (tx, counter, reader) = spawn_reader(store, Duration::ZERO, 0);
         let (out, _out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
-        tx.send(neg_start(1, "n", filters, out)).unwrap();
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        tx.send(neg_start(1, "n", filters, out, &jobs)).unwrap();
         until(&counter, |n| n > 0, "the first charge");
         tx.send(ReaderMsg::CancelConn { conn: 1 }).unwrap();
         until(&counter, |n| n == 0, "reservation released on cancel");
@@ -1319,7 +1416,9 @@ mod tests {
         let (tx, counter, reader) = spawn_reader(store, Duration::from_secs(10), 0);
         let (outbound, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
         let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
-        tx.send(neg_start(1, "n", filters, outbound)).unwrap();
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        tx.send(neg_start(1, "n", filters, outbound, &jobs))
+            .unwrap();
         // The session seals once the NEG-MSG reply arrives; its
         // reservation covers one 1024-record step.
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -1338,6 +1437,256 @@ mod tests {
         })
         .unwrap();
         until(&counter, |n| n == 0, "reservation released on close");
+        drop(tx);
+        reader.join().unwrap();
+    }
+
+    /// A finished REQ releases its job slot: the counter the shard
+    /// charged at admission returns to 0 at EOSE.
+    #[test]
+    fn finished_scan_releases_the_job_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let events: Vec<Arc<nosfry_core::event::Event>> = (0..10).map(event).collect();
+        store.write(&events, None).unwrap();
+        let (tx, _counter, reader) = spawn_reader(store, Duration::from_secs(10), 0);
+        let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
+        tx.send(ReaderMsg::Start {
+            start: Box::new(ScanStart {
+                conn: 1,
+                sub: SubKey {
+                    id: SubId::parse("s").unwrap(),
+                    generation: 1,
+                },
+                kind: ScanKind::Req,
+                filters,
+                gate: ReadGate::default(),
+                snapshot: u64::MAX,
+                out,
+                conn_jobs: unbounded_budget(),
+            }),
+            lease: test_lease(&jobs),
+        })
+        .unwrap();
+        assert_eq!(jobs.jobs.load(Ordering::Relaxed), 1);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let frame = out_rx.blocking_recv().unwrap();
+            if matches!(frame, Out::Frame { ref text, .. } if text.contains("EOSE")) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "no EOSE within 5 s");
+        }
+        until_jobs(&jobs, |n| n == 0, "job slot released at EOSE");
+        drop(tx);
+        reader.join().unwrap();
+    }
+
+    /// `Cancel` and `CancelConn` drop the queued scan entry and with
+    /// it the job slot.
+    #[test]
+    fn cancelled_scan_releases_the_job_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        // A zero-time step budget keeps the scans in flight while the
+        // cancels land.
+        let events: Vec<Arc<nosfry_core::event::Event>> = (0..5_000).map(event).collect();
+        store.write(&events, None).unwrap();
+        let (tx, _counter, reader) = spawn_reader(store, Duration::ZERO, 0);
+        let (out, _out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
+        let start = |conn: u64, id: &str, counter: &Arc<JobBudget>| ReaderMsg::Start {
+            start: Box::new(ScanStart {
+                conn,
+                sub: SubKey {
+                    id: SubId::parse(id).unwrap(),
+                    generation: 1,
+                },
+                kind: ScanKind::Req,
+                filters: Arc::clone(&filters),
+                gate: ReadGate::default(),
+                snapshot: u64::MAX,
+                out: out.clone(),
+                conn_jobs: unbounded_budget(),
+            }),
+            lease: test_lease(counter),
+        };
+        tx.send(start(1, "a", &jobs)).unwrap();
+        tx.send(start(2, "b", &jobs)).unwrap();
+        until_jobs(&jobs, |n| n == 2, "both scans admitted");
+        tx.send(ReaderMsg::Cancel {
+            conn: 1,
+            sub_id: SubId::parse("a").unwrap(),
+        })
+        .unwrap();
+        tx.send(ReaderMsg::CancelConn { conn: 2 }).unwrap();
+        // A scan that finished before its cancel already released its
+        // slot; the terminal state is 0 either way.
+        until_jobs(&jobs, |n| n == 0, "cancels released both slots");
+        drop(tx);
+        reader.join().unwrap();
+    }
+
+    /// A `NEG-OPEN` releases its job slot when the scan seals into a
+    /// `NegSession` — sessions are bounded by `max_sync_memory_bytes`,
+    /// not by job slots.
+    #[test]
+    fn sealed_sync_releases_the_job_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let events: Vec<Arc<nosfry_core::event::Event>> = (0..10).map(event).collect();
+        store.write(&events, None).unwrap();
+        let (tx, _counter, reader) = spawn_reader(store, Duration::from_secs(10), 0);
+        let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{}").unwrap()]);
+        tx.send(neg_start(1, "n", filters, out, &jobs)).unwrap();
+        assert_eq!(jobs.jobs.load(Ordering::Relaxed), 1);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let frame = out_rx.blocking_recv().unwrap();
+            if let Out::Neg { text, .. } = frame {
+                assert!(text.contains("\"NEG-MSG\""), "{text}");
+                break;
+            }
+            assert!(Instant::now() < deadline, "no NEG-MSG within 5 s");
+        }
+        until_jobs(&jobs, |n| n == 0, "job slot released at seal");
+        drop(tx);
+        reader.join().unwrap();
+    }
+    /// The connection's pending-query slot returns with the
+    /// reader's: a finished scan releases at EOSE and a cancelled
+    /// one at its `Cancel`.
+    #[test]
+    fn conn_slot_releases_on_finish_and_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        // A zero-time step budget keeps the scans in flight while the
+        // cancel lands.
+        let events: Vec<Arc<nosfry_core::event::Event>> = (0..5_000).map(event).collect();
+        store.write(&events, None).unwrap();
+        let (tx, _counter, reader) = spawn_reader(store, Duration::ZERO, 0);
+        let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        let conn_jobs = Arc::new(JobBudget::new(4));
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
+        let start = |id: &str, ob: Outbound| ReaderMsg::Start {
+            start: Box::new(ScanStart {
+                conn: 1,
+                sub: SubKey {
+                    id: SubId::parse(id).unwrap(),
+                    generation: 1,
+                },
+                kind: ScanKind::Req,
+                filters: Arc::clone(&filters),
+                gate: ReadGate::default(),
+                snapshot: u64::MAX,
+                out: ob,
+                conn_jobs: Arc::clone(&conn_jobs),
+            }),
+            lease: ScanLease {
+                _conn: JobSlot::try_acquire(&conn_jobs).unwrap(),
+                _reader: JobSlot::try_acquire(&jobs).unwrap(),
+            },
+        };
+        tx.send(start("a", out.clone())).unwrap();
+        tx.send(start("b", out)).unwrap();
+        until_jobs(&conn_jobs, |n| n == 2, "both conn slots held");
+        tx.send(ReaderMsg::Cancel {
+            conn: 1,
+            sub_id: SubId::parse("b").unwrap(),
+        })
+        .unwrap();
+        // `a` runs to EOSE; `b` dies to its cancel.
+        let deadline = Instant::now() + Duration::from_secs(15);
+        loop {
+            let frame = out_rx.blocking_recv().unwrap();
+            if matches!(frame, Out::Frame { ref text, .. } if text.contains("EOSE")) {
+                break;
+            }
+            assert!(Instant::now() < deadline, "no EOSE within 15 s");
+        }
+        until_jobs(&conn_jobs, |n| n == 0, "both conn slots released");
+        drop(tx);
+        reader.join().unwrap();
+    }
+
+    /// Reservations must not pause a scan: `pending()` counts queued
+    /// bytes only, so a pending REQ whose buffered matches already
+    /// fill the high-water mark still steps to EOSE and sends its
+    /// `Activate` — the flush that releases the reservations.
+    #[test]
+    fn reservations_do_not_pause_scans() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let events: Vec<Arc<nosfry_core::event::Event>> = (0..3).map(event).collect();
+        store.write(&events, None).unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let (shard_tx, mut shard_rx) = mpsc::channel(8);
+        let (out, out_rx) = Outbound::new(1 << 30, Arc::new(AtomicUsize::new(0)));
+        // Over the high-water mark through reservations alone —
+        // nothing queued.
+        assert!(out.reserve(2048));
+        let filters: Arc<[Filter]> = Arc::from(vec![Filter::parse("{\"kinds\":[1]}").unwrap()]);
+        let jobs = Arc::new(JobBudget::new(usize::MAX));
+        tx.send(ReaderMsg::Start {
+            start: Box::new(ScanStart {
+                conn: 1,
+                sub: SubKey {
+                    id: SubId::parse("s").unwrap(),
+                    generation: 1,
+                },
+                kind: ScanKind::Req,
+                filters,
+                gate: ReadGate::default(),
+                snapshot: u64::MAX,
+                out,
+                conn_jobs: unbounded_budget(),
+            }),
+            lease: test_lease(&jobs),
+        })
+        .unwrap();
+        let reader = std::thread::spawn(move || {
+            run(
+                &store,
+                &rx,
+                &[shard_tx],
+                &Tuning {
+                    budget: Duration::from_secs(10),
+                    high_water: 1024,
+                    total_budget: 0,
+                    max_filter_limit: 500,
+                    max_filter_limit_count: 1_000_000,
+                    max_sync_events: 1_000_000,
+                    max_sync_memory_bytes: 0,
+                    sync_memory: Arc::new(AtomicUsize::new(0)),
+                },
+                &Metrics::new(),
+                &watch::channel(false).1,
+            );
+        });
+        // EOSE must arrive; if reservations paused the scan it never
+        // would.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut eose = false;
+        while !eose && Instant::now() < deadline {
+            match out_rx.try_recv() {
+                Some(Out::Frame { ref text, .. }) if text.contains("EOSE") => eose = true,
+                Some(_) | None => std::thread::sleep(Duration::from_millis(1)),
+            }
+        }
+        assert!(eose, "reserved bytes paused the scan");
+        // The finish sends `Activate`: the flush that returns the
+        // reservations can now happen.
+        assert_eq!(
+            shard_rx.blocking_recv().map(|_| ()),
+            Some(()),
+            "no Activate"
+        );
         drop(tx);
         reader.join().unwrap();
     }

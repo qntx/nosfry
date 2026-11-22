@@ -87,8 +87,13 @@ max_sync_memory_bytes = 1073741824
 # and refused CLOSED `blocked: subscription capacity exhausted` over
 # budget; CLOSE and disconnects release the charge.
 max_subscription_bytes_total = 1073741824
-# Maximum simultaneous WebSocket connections (0 = unlimited).
-max_connections = 0
+# Maximum simultaneous WebSocket connections. Omitted, the cap
+# derives from the soft open-file limit: limit - 64 - limit/8 —
+# 64 fds for the process itself, one eighth for sockets the cap
+# does not count (plain HTTP, header-read handshakes, upgrades in
+# flight). An explicit value may not exceed that ceiling; 0 is
+# refused — there is no "unlimited".
+# max_connections = 832
 # Maximum simultaneous WebSocket connections per client IP (0 =
 # unlimited). IPv4 counts per address; IPv6 per /64 prefix.
 max_connections_per_ip = 128

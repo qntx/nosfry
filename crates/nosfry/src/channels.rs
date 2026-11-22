@@ -3,6 +3,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::mpsc::SyncSender;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
 
@@ -148,11 +149,108 @@ pub(crate) enum ShardMsg {
     },
 }
 
+/// One reader thread's inbox plus its job budget: the shards route
+/// `conn % readers.len()` here and charge one job per admitted
+/// `Start`, so a shard's `try_send` never has to wait for a reader.
+#[derive(Debug)]
+pub(crate) struct ReaderInbox {
+    /// The bounded inbox (`sync_channel`, `crate::READER_QUEUE` slots).
+    pub(crate) tx: SyncSender<ReaderMsg>,
+    /// Scan jobs admitted to this reader and not yet finished —
+    /// summed into the `nosfry_reader_jobs` gauge.
+    pub(crate) jobs: Arc<JobBudget>,
+}
+
+/// A counted admission capacity: `jobs` slots in flight, refusing
+/// at `cap`. Shared per reader inbox ([`crate::READER_JOBS`]) and
+/// per connection — a connection's budget covers its live
+/// subscriptions plus as many replaced or cancelled scans still
+/// waiting for their `Cancel`, COUNTs and syncs included.
+#[derive(Debug)]
+pub(crate) struct JobBudget {
+    /// Jobs in flight — gauge input for the reader budgets.
+    pub(crate) jobs: AtomicUsize,
+    /// Admission limit.
+    cap: usize,
+}
+
+impl JobBudget {
+    /// An empty budget at `cap`.
+    pub(crate) const fn new(cap: usize) -> Self {
+        Self {
+            jobs: AtomicUsize::new(0),
+            cap,
+        }
+    }
+}
+
+/// RAII lease on one [`JobBudget`] slot: the shard takes it at
+/// admission and the scan entry drops it — finished, errored,
+/// cancelled, or the connection gone.
+#[derive(Debug)]
+pub(crate) struct JobSlot {
+    /// The budget this lease returns its slot to on drop.
+    budget: Arc<JobBudget>,
+}
+
+impl JobSlot {
+    /// Take one slot; `None` once `cap` jobs are in flight. CAS
+    /// loop like `shard::try_charge`: refuse, never overshoot.
+    pub(crate) fn try_acquire(budget: &Arc<JobBudget>) -> Option<Self> {
+        let mut current = budget.jobs.load(Ordering::Relaxed);
+        loop {
+            if current >= budget.cap {
+                return None;
+            }
+            match budget.jobs.compare_exchange_weak(
+                current,
+                current + 1,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Some(Self {
+                        budget: Arc::clone(budget),
+                    });
+                }
+                Err(now) => current = now,
+            }
+        }
+    }
+}
+
+impl Drop for JobSlot {
+    fn drop(&mut self) {
+        self.budget.jobs.fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+/// Both slot leases one admitted `Start` carries into the reader's
+/// scan entry: the owning connection's per-connection budget and the
+/// reader's shared `READER_JOBS` budget. Both release when the entry
+/// drops.
+#[derive(Debug)]
+pub(crate) struct ScanLease {
+    /// Slot on the owning connection's budget.
+    pub(crate) _conn: JobSlot,
+    /// Slot on the reader's budget.
+    pub(crate) _reader: JobSlot,
+}
+
 /// Inbox item for a reader thread.
 #[derive(Debug)]
 pub(crate) enum ReaderMsg {
-    /// Start a snapshot-bounded scan (boxed: it dwarfs the other variants).
-    Start(Box<ScanStart>),
+    /// Start a snapshot-bounded scan (boxed start: it dwarfs the
+    /// other variants). `slot` is the job lease admitted with it; the
+    /// reader keeps it inside the scan entry so it releases whenever
+    /// the entry drops.
+    Start {
+        /// The scan arguments.
+        start: Box<ScanStart>,
+        /// The job leases counted toward the connection's and
+        /// reader's budgets.
+        lease: ScanLease,
+    },
     /// Cancel one scan.
     Cancel {
         /// Owning connection.
@@ -209,6 +307,9 @@ pub(crate) struct ScanStart {
     pub(crate) snapshot: u64,
     /// Where results go.
     pub(crate) out: Outbound,
+    /// The owning connection's pending-query budget — its live subs
+    /// plus scans still waiting for their `Cancel`.
+    pub(crate) conn_jobs: Arc<JobBudget>,
 }
 
 /// A `NEG-MSG` forwarded to the reader owning the sync (boxed: it
@@ -295,9 +396,15 @@ impl Out {
                 text.len()
             }
             Self::Frames { texts, .. } => texts.iter().map(String::len).sum(),
-            Self::Event { sub, event } => event.json().len() + sub.id.json().len() + 12,
+            Self::Event { sub, event } => Self::event_bytes(sub, event),
             Self::Closed { sub, reason } => sub.id.json().len() + reason.len() + 14,
         }
+    }
+
+    /// The bytes a pushed `EVENT` frame for `sub`/`event` charges —
+    /// exactly what a reservation for the buffered match must cover.
+    pub(crate) fn event_bytes(sub: &SubKey, event: &Event) -> usize {
+        event.json().len() + sub.id.json().len() + 12
     }
 }
 
@@ -335,6 +442,11 @@ struct Shared {
     waker: AtomicWaker,
     /// Bytes queued on this connection.
     pending: AtomicUsize,
+    /// Bytes reserved for frames not queued yet — pending
+    /// subscriptions' buffered live matches. Kept out of `pending`:
+    /// a scan paused on `pending` would also pause the `Activate`
+    /// flush that returns the reservation.
+    reserved: AtomicUsize,
     /// Byte budget exceeded; the connection should close.
     dead: AtomicBool,
     /// Live `Outbound` clones; `recv` returns `None` once it hits 0.
@@ -344,8 +456,12 @@ struct Shared {
 }
 
 /// Per-connection outbound queue: unbounded frames plus a bounded byte
-/// budget tracked atomically. `total` is the process-wide sum of every
-/// connection's `pending`, shared by all `Outbound`s.
+/// budget tracked atomically. Queued `pending` and not-yet-queued
+/// `reserved` bytes each stay under `max_pending`, so one connection
+/// holds at most `2 * max_pending`; `total` is the process-wide sum of
+/// every connection's `pending` and `reserved`, shared by all
+/// `Outbound`s — it feeds the `nosfry_outbound_pending_bytes` gauge
+/// and the reader's total-budget pause.
 #[derive(Debug)]
 pub(crate) struct Outbound {
     shared: Arc<Shared>,
@@ -364,6 +480,7 @@ impl Outbound {
             }),
             waker: AtomicWaker::new(),
             pending: AtomicUsize::new(0),
+            reserved: AtomicUsize::new(0),
             dead: AtomicBool::new(false),
             senders: AtomicUsize::new(1),
             max_pending,
@@ -399,6 +516,44 @@ impl Outbound {
         self.shared.waker.wake();
     }
 
+    /// Charge `bytes` of the pending budget for a frame that is not
+    /// queued yet — a live match buffered by a pending subscription.
+    /// The CAS loop only takes `reserved` above its last value when
+    /// `pending + reserved + bytes` still fits `max_pending`: `false`
+    /// charges nothing and never marks the connection dead, leaving
+    /// the overflow decision to the caller. A reservation made after
+    /// the `OutboundRx` dropped stays charged until `unreserve` —
+    /// fine, because the shard always unreserves on `RemoveConn`.
+    pub(crate) fn reserve(&self, bytes: usize) -> bool {
+        let mut reserved = self.shared.reserved.load(Ordering::Relaxed);
+        loop {
+            let Some(next) = reserved.checked_add(bytes) else {
+                return false;
+            };
+            if self.shared.pending.load(Ordering::Relaxed) + next > self.shared.max_pending {
+                return false;
+            }
+            match self.shared.reserved.compare_exchange_weak(
+                reserved,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    self.total.fetch_add(bytes, Ordering::Relaxed);
+                    return true;
+                }
+                Err(now) => reserved = now,
+            }
+        }
+    }
+
+    /// Return `bytes` reserved by [`reserve`](Self::reserve).
+    pub(crate) fn unreserve(&self, bytes: usize) {
+        self.shared.reserved.fetch_sub(bytes, Ordering::Relaxed);
+        self.total.fetch_sub(bytes, Ordering::Relaxed);
+    }
+
     /// Undo a charge that never made it into the queue.
     fn release(&self, len: usize) {
         self.shared.pending.fetch_sub(len, Ordering::Relaxed);
@@ -414,14 +569,26 @@ impl Outbound {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Pending outbound bytes.
+    /// Pending outbound bytes — queued frames only; [`reserved`]
+    /// bytes are tracked separately so a reader's high-water pause
+    /// never stalls the flush that releases them.
+    ///
+    /// [`reserved`]: Self::reserved
     #[must_use]
     pub(crate) fn pending(&self) -> usize {
         self.shared.pending.load(Ordering::Relaxed)
     }
 
+    /// Bytes [`reserve`](Self::reserve)d and not yet
+    /// [`unreserve`](Self::unreserve)d.
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn reserved(&self) -> usize {
+        self.shared.reserved.load(Ordering::Relaxed)
+    }
+
     /// Process-wide pending outbound bytes (every connection's
-    /// `pending` summed).
+    /// `pending` and `reserved` summed).
     #[must_use]
     pub(crate) fn total(&self) -> usize {
         self.total.load(Ordering::Relaxed)
@@ -607,6 +774,57 @@ mod tests {
         out.push(frame(100));
         assert_eq!(out.pending(), 0);
         assert_eq!(out.total(), 0);
+    }
+
+    /// A reservation charges `reserved` and `total` — never queued
+    /// `pending` — only while it fits the budget; a refused one
+    /// charges nothing and never marks the connection dead.
+    #[test]
+    fn reserve_charges_within_budget_only() {
+        let total = Arc::new(AtomicUsize::new(0));
+        let (out, _rx) = Outbound::new(1000, Arc::clone(&total));
+        assert!(out.reserve(400));
+        assert_eq!(out.reserved(), 400);
+        assert_eq!(out.pending(), 0);
+        assert_eq!(out.total(), 400);
+        assert!(out.reserve(600));
+        assert_eq!(out.reserved(), 1000);
+        // One byte over refuses without charging — and the
+        // connection stays alive.
+        assert!(!out.reserve(1));
+        assert_eq!(out.reserved(), 1000);
+        assert_eq!(out.pending(), 0);
+        assert_eq!(out.total(), 1000);
+        assert!(!out.is_dead());
+        // `unreserve` returns both counters.
+        out.unreserve(1000);
+        assert_eq!(out.reserved(), 0);
+        assert_eq!(out.pending(), 0);
+        assert_eq!(out.total(), 0);
+    }
+
+    /// `push` checks queued `pending` only — a connection holding
+    /// reservations is never killed for them — while `reserve` weighs
+    /// queued and reserved bytes together.
+    #[test]
+    fn push_ignores_reservations_reserve_counts_both() {
+        let total = Arc::new(AtomicUsize::new(0));
+        let (out, out_rx) = Outbound::new(1000, Arc::clone(&total));
+        assert!(out.reserve(900));
+        // 500 queued bytes fit `max_pending` alone even though
+        // `total` is now 1400: push must not kill.
+        out.push(frame(500));
+        assert_eq!(out.pending(), 500);
+        assert_eq!(out.total(), 1400);
+        assert!(!out.is_dead());
+        // `reserve` sees both: 500 queued + 900 reserved + 1 over.
+        assert!(!out.reserve(1));
+        // Freeing the queued bytes makes the same reserve fit.
+        assert!(matches!(out_rx.try_recv(), Some(Out::Frame { .. })));
+        out_rx.written(500);
+        assert!(out.reserve(100));
+        assert_eq!(out.reserved(), 1000);
+        assert_eq!(out.total(), 1000);
     }
 
     /// `recv` returns `None` once the last `Outbound` clone drops.

@@ -47,8 +47,9 @@ start on Debian 12 or Ubuntu 22.04; use 0.4.0 or later. `cargo install nosfry
 
 Before you open the relay to the internet, read
 [guides/deployment.md](guides/deployment.md): put it behind a reverse proxy
-with TLS and HTTP rate limiting, and set `relay.service_url` and
-`relay.max_connections`.
+with TLS and HTTP rate limiting, set `relay.service_url`, and size
+`relay.max_connections` to the host's memory (unset, it is derived from the
+open-file limit).
 
 ## Supported NIPs
 

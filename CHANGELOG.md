@@ -10,13 +10,6 @@ The format is based on [Keep a Changelog]; this project follows
 
 ## [Unreleased]
 
-<!--
-Release notes for 0.4.0. One branch that lands separately adds its
-entries to the sections below and deletes its marker when it does:
-feat/bounded-server (bounded reader inboxes, the max_connections
-default, the pending-subscription budget, the connection and IP span).
--->
-
 ### Upgrading
 
 - The on-disk format stays at version 4 (unchanged since 0.2.0): to
@@ -31,8 +24,17 @@ default, the pending-subscription budget, the connection and IP span).
   `max_websocket_payload_size` is smaller than `max_event_size + 10`
   is refused at load and at reload — check this pair if you raised
   `max_event_size`.
-  <!-- feat/bounded-server: state the new max_connections default and
-  any new key here. -->
+- `[relay] max_connections` is always finite. `max_connections = 0`
+  (the old "unlimited" default) now stops the relay at startup, as
+  does a value above `limit - 64 - limit/8` of the soft open-file
+  limit: delete the line to get that ceiling as the default (874,936
+  at the default `nofiles = 1000000`), or set a value sized to the
+  host's memory. A reload carrying either is refused.
+- Under load the relay now refuses work it used to queue: a REQ or
+  COUNT can be answered `CLOSED rate-limited: relay busy` or
+  `rate-limited: too many pending queries`, and a NEG-OPEN or NEG-MSG
+  the same `NEG-ERR`. Malformed frames past the REQ rate budget get no
+  `NOTICE`.
 - `nosfry export` now also writes the persisted NIP-86 management
   state and NIP-62 vanish points as versioned
   `{"nosfry_state":1,…}` lines that `nosfry import` applies;
@@ -69,6 +71,13 @@ default, the pending-subscription budget, the connection and IP span).
   client could bypass both by rotating addresses inside its /64. It now
   groups IPv6 by /64 and folds IPv4-mapped addresses, as the native
   edition does. The NIP-86 IP block list still matches exact addresses.
+- The per-reader query queues were unbounded (audit C-14), so a REQ
+  flood could grow memory without limit. Each reader now admits at
+  most 4,096 queries and each connection at most twice
+  `max_subs_per_connection` waiting ones. Beyond that a REQ or COUNT
+  is answered `CLOSED` with `rate-limited: too many pending queries`
+  (that connection's own limit) or `rate-limited: relay busy` (the
+  shared one), and a NEG-OPEN or NEG-MSG with the same `NEG-ERR`.
 - A stored scan crossing one `created_at` shared by many events
   buffered every match in that tie group, so a client that
   published many events with one timestamp could make each query of it
@@ -78,12 +87,30 @@ default, the pending-subscription budget, the connection and IP span).
   once its session sealed, so concurrent syncs could collect past the
   budget. The scan is now charged while it collects and refused with
   `blocked: sync capacity exhausted` when the budget is spent.
+- Live matches buffered while a subscription's stored scan runs sat
+  outside every byte budget (audit C-13). They now reserve their bytes
+  against `max_pending_outbound_bytes` and count in the process-wide
+  outbound total; a subscription whose buffer no longer fits is closed
+  with `error: subscription fell behind`, as at the 4,096-event buffer
+  limit, and the connection stays open. A connection holds at most
+  twice `max_pending_outbound_bytes`: queued frames plus reservations.
+- `[relay] max_connections` defaulted to `0`, unlimited. It is now
+  always finite: omitted, it is derived from the soft open-file limit
+  after `nofiles` raised it, `limit - 64 - limit/8` (64 descriptors
+  for the process itself, one eighth for HTTP requests and handshakes
+  the cap does not count), e.g. 874,936 at the default
+  `nofiles = 1000000`. `0` and any value above the derived limit are
+  refused at startup and on reload. The effective cap is logged at
+  startup. It bounds descriptors, not memory: memory-bound deployments
+  should still set a lower value.
+- Frames that fail to parse were answered with a NOTICE each and
+  charged to no rate bucket (audit C-01). They now spend the
+  connection's and address's REQ rate tokens, and past the budget get
+  no reply, so a junk flood no longer buys one NOTICE per frame. The
+  unknown-verb NOTICE quotes at most 32 bytes of the verb.
 - The HTML landing page now sends `Content-Security-Policy`,
   `X-Content-Type-Options` and `Referrer-Policy`
   (`site::LANDING_HEADERS`), in both editions.
-
-<!-- feat/bounded-server: security-relevant fixes go here, most
-severe first. -->
 
 ### Added
 
@@ -116,6 +143,17 @@ severe first. -->
   configuration reference, deployment (a hardened systemd unit and an
   nginx site in [`contrib/`](contrib)), administration, security model,
   Tor, the Workers edition, and a test relay for client CI.
+- Every WebSocket connection logs inside a `conn{id, peer}` span on
+  target `nosfry::conn` (the peer after `real_ip_header`), so each
+  line of a connection is attributable, e.g. by fail2ban. With
+  `RUST_LOG=info,nosfry::conn=debug` the relay logs `connection open`,
+  `connection closed reason="..."`, and `connection cap reached
+  peer=...`; JSON lines carry the span as `"span":{"name":"conn",
+  "id":..,"peer":".."}`.
+- `nosfry_reader_busy_total{msg="scan|conn_scan|neg_msg|control"}`
+  counts queries and control messages shed because the readers were
+  saturated, and the `nosfry_reader_jobs` gauge shows the queries
+  admitted to the readers and not yet finished.
 
 ### Changed
 
