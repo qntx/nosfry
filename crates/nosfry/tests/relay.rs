@@ -1533,7 +1533,7 @@ async fn connection_cap_per_ip() {
 #[tokio::test]
 async fn connection_cap_total() {
     let mut config = common::config();
-    config.relay.max_connections = 1;
+    config.relay.max_connections = Some(1);
     let relay = Relay::start_with(config).await;
     let _ws1 = relay.connect().await;
     let status = upgrade_status(relay.addr).await;
@@ -2531,6 +2531,37 @@ async fn zero_auto_ping_reload_is_rejected() {
     let relay = Relay::start().await;
     let mut bad = reload_config("must not apply");
     bad.relay.auto_ping_seconds = 0;
+    relay.reload(bad);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(nip11_name(relay.addr).await, "nosfry");
+    relay.reload(reload_config("sentinel"));
+    assert!(wait_until(|| async { nip11_name(relay.addr).await == "sentinel" }).await);
+    relay.stop().await;
+}
+
+/// A `max_connections` above the open-file ceiling refuses to start
+/// with a `RelayValue` naming the key.
+#[tokio::test]
+async fn max_connections_over_ceiling_refuses_to_start() {
+    let mut config = common::config();
+    let dir = tempfile::tempdir().unwrap();
+    config.db.path = dir.path().to_path_buf();
+    config.relay.max_connections = Some(usize::MAX);
+    let err = nosfry::Server::new(config).unwrap_err();
+    let nosfry::ServerError::RelayValue(msg) = err else {
+        panic!("expected RelayValue, got {err:?}")
+    };
+    assert!(msg.starts_with("relay.max_connections"), "{msg}");
+}
+
+/// A reload pushing `max_connections` over the open-file ceiling is
+/// rejected whole: the running config keeps serving and a later
+/// valid reload still lands.
+#[tokio::test]
+async fn over_ceiling_reload_is_rejected() {
+    let relay = Relay::start().await;
+    let mut bad = reload_config("must not apply");
+    bad.relay.max_connections = Some(usize::MAX);
     relay.reload(bad);
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(nip11_name(relay.addr).await, "nosfry");

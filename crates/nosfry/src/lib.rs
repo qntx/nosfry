@@ -51,6 +51,7 @@ use hyper_util::service::TowerToHyperService;
 use nosfry_core::event::PublicKey;
 use nosfry_core::moderation::Moderation;
 use nosfry_lmdb::Store;
+#[cfg(not(unix))]
 use rlimit as _;
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
@@ -295,6 +296,52 @@ fn reader_tuning(config: &Config, sync_memory: &Arc<AtomicUsize>) -> reader::Tun
     }
 }
 
+/// The process's soft open-file limit (unix only).
+#[cfg(unix)]
+fn soft_nofile() -> Result<u64, ServerError> {
+    rlimit::getrlimit(rlimit::Resource::NOFILE)
+        .map(|(soft, _)| soft)
+        .map_err(|err| {
+            ServerError::RelayValue(format!("could not read the open-file limit: {err}"))
+        })
+}
+
+/// No fd limit exists off unix; report one so the ceiling is the
+/// whole `usize` range.
+#[cfg(not(unix))]
+fn soft_nofile() -> Result<u64, ServerError> {
+    Ok(u64::MAX)
+}
+
+/// Resolve `relay.max_connections` against the open-file ceiling:
+/// `None` takes the ceiling, `Some(0)` and over-ceiling values are
+/// refused. `soft` is the process's soft open-file limit — read by
+/// the caller (`Server::new` after `main` raised it, `reload_once`
+/// on every reload, since `relay.nofiles` is restart-only but the
+/// read is cheap).
+fn effective_max_connections(relay: &config::Relay, soft: u64) -> Result<usize, ServerError> {
+    if relay.max_connections == Some(0) {
+        return Err(ServerError::RelayValue(
+            "relay.max_connections must be at least 1; omit it for the open-file-limit default"
+                .to_owned(),
+        ));
+    }
+    let ceiling = limiter::connection_ceiling(soft);
+    match relay.max_connections {
+        None if ceiling == 0 => Err(ServerError::RelayValue(format!(
+            "the open-file limit {soft} leaves no room for connections"
+        ))),
+        None => Ok(ceiling),
+        Some(max) if max > ceiling => Err(ServerError::RelayValue(format!(
+            "relay.max_connections = {max} exceeds what the open-file limit allows: \
+             soft limit {soft} leaves room for {ceiling} connections \
+             ({soft} - 64 - {soft}/8); raise relay.nofiles or the hard limit, \
+             or lower max_connections"
+        ))),
+        Some(max) => Ok(max),
+    }
+}
+
 /// One reload: merge, validate, then apply. Validation runs before any
 /// side effect, so a rejected reload leaves the connection caps, the
 /// write-policy task, and the limits exactly as they were (`None`).
@@ -312,8 +359,17 @@ fn reload_once(
     }
     let limits = merged.limits().inspect_err(log_invalid_reload).ok()?;
     let admins = merged.admins().inspect_err(log_invalid_reload).ok()?;
+    let max_connections = soft_nofile()
+        .and_then(|soft| effective_max_connections(&merged.relay, soft))
+        .inspect_err(log_invalid_reload)
+        .ok()?;
     Some(Arc::new(apply_reload(
-        merged, limits, admins, live, limiter,
+        merged,
+        limits,
+        admins,
+        live,
+        limiter,
+        max_connections,
     )))
 }
 
@@ -343,9 +399,10 @@ fn apply_reload(
     admins: Arc<[PublicKey]>,
     live: &Live,
     limiter: &limiter::ConnectionLimiter,
+    max_connections: usize,
 ) -> Live {
     limiter.update_caps(
-        merged.relay.max_connections,
+        max_connections,
         merged.relay.max_connections_per_ip,
         limits.rate,
     );
@@ -400,6 +457,9 @@ impl Server {
     /// Outside a Tokio runtime: the deflate pool is sized from the
     /// current runtime's worker count.
     pub fn new(config: Config) -> Result<Self, ServerError> {
+        let soft_nofile = soft_nofile()?;
+        let max_connections = effective_max_connections(&config.relay, soft_nofile)?;
+        tracing::info!(max_connections, soft_nofile, "connection cap");
         let config = Arc::new(config);
         let store = Arc::new(Store::open(&config.db.path, &config.store_options())?);
         let monitors = config.relay.threads.monitors.max(1);
@@ -521,7 +581,7 @@ impl Server {
                 moderation: mod_rx,
                 live_tx: live_tx.clone(),
                 limiter: Arc::new(limiter::ConnectionLimiter::new(
-                    config.relay.max_connections,
+                    max_connections,
                     config.relay.max_connections_per_ip,
                     config.relay.rate_limits,
                 )),
@@ -746,6 +806,46 @@ pub async fn serve(
 #[allow(clippy::unwrap_used, reason = "unit tests may panic on failure")]
 mod tests {
     use super::*;
+
+    /// `max_connections` resolves against the fd ceiling: `None`
+    /// takes the ceiling, `Some(0)` and over-ceiling values are
+    /// refused, and a zero ceiling leaves no room at all.
+    #[test]
+    fn effective_max_connections_resolves_against_the_ceiling() {
+        let mut relay = config::Relay::default();
+        let soft = 1_024;
+        let ceiling = limiter::connection_ceiling(soft); // 832
+        assert_eq!(effective_max_connections(&relay, soft).unwrap(), ceiling);
+
+        relay.max_connections = Some(0);
+        let zero_err = effective_max_connections(&relay, soft).unwrap_err();
+        assert_eq!(
+            zero_err.to_string(),
+            "config: relay.max_connections must be at least 1; \
+             omit it for the open-file-limit default"
+        );
+
+        relay.max_connections = Some(ceiling);
+        assert_eq!(effective_max_connections(&relay, soft).unwrap(), ceiling);
+
+        relay.max_connections = Some(ceiling + 1);
+        let over_err = effective_max_connections(&relay, soft).unwrap_err();
+        assert!(
+            over_err
+                .to_string()
+                .contains("relay.max_connections = 833 exceeds"),
+            "{over_err}"
+        );
+
+        relay.max_connections = None;
+        let room_err = effective_max_connections(&relay, 64).unwrap_err();
+        assert!(
+            room_err
+                .to_string()
+                .contains("leaves no room for connections"),
+            "{room_err}"
+        );
+    }
 
     /// `tune` sets `SO_KEEPALIVE` only when asked; `TCP_NODELAY`
     /// always (asserted on a real loopback pair).

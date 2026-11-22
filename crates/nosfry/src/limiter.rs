@@ -24,19 +24,38 @@ struct IpEntry {
     buckets: Arc<AddressBuckets>,
 }
 
+/// The connection cap the open-file limit leaves room for:
+/// `soft - 64 - soft/8`. Every WebSocket holds one fd; the formula
+/// reserves 64 fds for the process itself (stdio, the LMDB data and
+/// lock files, listeners, kqueue/epoll and tokio internals, the
+/// write-policy plugin's pipes, log and metrics sockets) plus one
+/// eighth of the limit for sockets the cap does not count — plain
+/// HTTP requests (NIP-11, NIP-86, `NodeInfo`, /metrics), connections
+/// still inside the 10 s header-read window, and upgrades in
+/// flight.
+///
+/// `256 -> 160`, `1024 -> 832`, `65_536 -> 57_280`,
+/// `1_000_000 -> 874_936`, `64 -> 0`.
+pub(crate) fn connection_ceiling(soft_nofile: u64) -> usize {
+    let soft = usize::try_from(soft_nofile).unwrap_or(usize::MAX);
+    soft.saturating_sub(64 + soft / 8)
+}
+
 /// Caps on simultaneous connections, shared by every accepted socket.
-/// A cap of 0 means unlimited for that dimension. Both caps are
-/// atomics so a config reload updates them for every connection at
-/// once; connections already above a lowered cap are not closed.
+/// `max_total` is always finite — the server resolves it from
+/// `relay.max_connections` and the open-file limit — while
+/// `max_per_ip` keeps 0 = unlimited. Both caps are atomics so a
+/// config reload updates them for every connection at once;
+/// connections already above a lowered cap are not closed.
 #[derive(Debug)]
 pub(crate) struct ConnectionLimiter {
-    /// Live connections, counted even when `max_total` is unlimited.
+    /// Live connections.
     total: AtomicUsize,
     /// Live connections and shared rate-limit buckets per IP key;
     /// populated only when `max_per_ip` or any `ip_*` bucket is
     /// enabled.
     per_ip: Mutex<HashMap<AddressKey, IpEntry, foldhash::fast::RandomState>>,
-    /// Maximum `total` (0 = unlimited).
+    /// Maximum `total` — always finite.
     max_total: AtomicUsize,
     /// Maximum per `AddressKey` (0 = unlimited).
     max_per_ip: AtomicUsize,
@@ -80,8 +99,7 @@ impl ConnectionLimiter {
         *self.rate.lock().unwrap_or_else(PoisonError::into_inner) = rate;
     }
 
-    /// Live connections right now (the `nosfry_connections` gauge);
-    /// counted even when `max_total` is unlimited.
+    /// Live connections right now (the `nosfry_connections` gauge).
     pub(crate) fn total(&self) -> usize {
         self.total.load(Ordering::Relaxed)
     }
@@ -143,10 +161,6 @@ impl ConnectionLimiter {
     /// Take one global slot; `false` at the cap.
     fn take_total(&self) -> bool {
         let max_total = self.max_total.load(Ordering::Relaxed);
-        if max_total == 0 {
-            self.total.fetch_add(1, Ordering::Relaxed);
-            return true;
-        }
         let mut current = self.total.load(Ordering::Relaxed);
         loop {
             if current >= max_total {
@@ -233,9 +247,24 @@ mod tests {
         }
     }
 
+    /// The fd ceiling reserves 64 fds for the process plus one eighth
+    /// of the limit for uncounted sockets.
+    #[test]
+    fn connection_ceiling_reserves_process_fds() {
+        assert_eq!(connection_ceiling(256), 160);
+        assert_eq!(connection_ceiling(1_024), 832);
+        assert_eq!(connection_ceiling(65_536), 57_280);
+        assert_eq!(connection_ceiling(1_000_000), 874_936);
+        assert_eq!(connection_ceiling(64), 0);
+        assert_eq!(
+            connection_ceiling(u64::MAX),
+            usize::MAX - 64 - usize::MAX / 8
+        );
+    }
+
     #[test]
     fn acquire_release_and_map_cleanup() {
-        let limiter = Arc::new(ConnectionLimiter::new(0, 2, RateLimits::default()));
+        let limiter = Arc::new(ConnectionLimiter::new(usize::MAX, 2, RateLimits::default()));
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let first = limiter.try_acquire(ip).unwrap();
         let second = limiter.try_acquire(ip).unwrap();
@@ -254,7 +283,7 @@ mod tests {
 
     #[test]
     fn empty_map_after_last_release() {
-        let limiter = Arc::new(ConnectionLimiter::new(0, 2, RateLimits::default()));
+        let limiter = Arc::new(ConnectionLimiter::new(usize::MAX, 2, RateLimits::default()));
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
         drop(limiter.try_acquire(ip).unwrap());
         assert!(
@@ -280,7 +309,7 @@ mod tests {
     /// a different address gets its own.
     #[test]
     fn permits_share_buckets_per_address() {
-        let limiter = Arc::new(ConnectionLimiter::new(0, 0, RateLimits::default()));
+        let limiter = Arc::new(ConnectionLimiter::new(usize::MAX, 0, RateLimits::default()));
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let first = limiter.try_acquire(ip).unwrap();
         let second = limiter.try_acquire(ip).unwrap();
@@ -297,7 +326,7 @@ mod tests {
         );
         // Untracked permits (cap off, all ip buckets disabled) get a
         // fresh disabled pair each.
-        let open = Arc::new(ConnectionLimiter::new(0, 0, no_rates()));
+        let open = Arc::new(ConnectionLimiter::new(usize::MAX, 0, no_rates()));
         let a = open.try_acquire(ip).unwrap();
         let b = open.try_acquire(ip).unwrap();
         assert!(!Arc::ptr_eq(&a.buckets(), &b.buckets()));
@@ -308,7 +337,7 @@ mod tests {
     /// connection reuses it instead of buying a fresh burst.
     #[test]
     fn entry_removal_resets_buckets() {
-        let limiter = Arc::new(ConnectionLimiter::new(0, 0, RateLimits::default()));
+        let limiter = Arc::new(ConnectionLimiter::new(usize::MAX, 0, RateLimits::default()));
         let ip = IpAddr::V4(Ipv4Addr::LOCALHOST);
         // Idle entry: removed, and the next connection gets fresh
         // buckets built from the then-current rates.
@@ -328,7 +357,7 @@ mod tests {
             ip_events_burst: 1,
             ..RateLimits::default()
         };
-        let spent_limiter = Arc::new(ConnectionLimiter::new(0, 0, burst_one));
+        let spent_limiter = Arc::new(ConnectionLimiter::new(usize::MAX, 0, burst_one));
         let third = spent_limiter.try_acquire(ip).unwrap();
         let spent = third.buckets();
         assert!(spent.take_event(now_ms()).is_ok(), "fresh burst of 1");
