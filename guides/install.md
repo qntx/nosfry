@@ -18,6 +18,13 @@ containers before it publishes. The 0.3.0 and older Linux binaries need glibc
 build; nosfry relies on the system allocator, and glibc's is the one the
 benchmarks measured.
 
+Every archive also has an `-onion` variant
+(`nosfry-<version>-onion-<target>.tar.gz`): the same files, but the relay
+is built with `--features onion` — it links
+[Arti](https://arti.torproject.org/) and can embed the onion service
+itself instead of needing a separate C tor. It is otherwise identical;
+see [tor.md](tor.md) for the trade-offs.
+
 Each archive holds `nosfry`, `nosfry.example.toml`, `README.md`,
 `CHANGELOG.md` and the licenses, and comes with a `.sha256` file, a CycloneDX
 SBOM (`.cdx.json`) and GitHub build provenance attestations:
@@ -42,6 +49,9 @@ tags `<version>`, `<major>.<minor>`, `<major>` and `latest`. It is a distroless,
 non-root image: the binary is `/nosfry`, the configuration is
 `/etc/nosfry/nosfry.toml` (`NOSFRY_CONFIG`), and the database lives in the
 volume `/data`.
+
+The onion variant is published under `-onion` tags (`<version>-onion`,
+`<major>.<minor>-onion`, `<major>-onion`, `onion`) with the same layout.
 
 ```bash
 docker run -d --name nosfry \
