@@ -142,8 +142,9 @@ Trust boundaries:
   any single client, any single address, or the aggregate.
 - **Operator data.** The database files, logs (no secrets or event content at
   default levels), and metrics (bounded label sets).
-- **Release artifacts.** crates.io packages, GitHub release binaries and
-  checksums, and the multi-arch GHCR image.
+- **Release artifacts.** crates.io packages (trusted publishing), GitHub
+  release binaries with checksums, SBOMs, and build provenance attestations,
+  and the multi-arch GHCR image.
 
 ## Adversary model
 
@@ -453,7 +454,8 @@ In scope:
 - Configuration surface: `nosfry.example.toml`, `docker/nosfry.toml`,
   `crates/nosfry-worker/wrangler.toml`
 - Build and release:
-  - `.github/workflows/{ci,audit,container,publish,release,fuzz}.yml`;
+  - `.github/workflows/{ci,audit,release,fuzz}.yml` and
+    `.github/scripts/*.sh`;
   - the reusable workflows and actions they call from `qntx/workflows`,
     pinned by commit SHA (the caller side and the permissions granted);
   - `Dockerfile`, `.dockerignore`, `rust-toolchain.toml`.
