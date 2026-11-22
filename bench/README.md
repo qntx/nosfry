@@ -155,6 +155,7 @@ cp /amethyst/quartz/src/commonTest/resources/nostr_vitor_startup_data.json.gz /b
 
 # drivers, relay wrappers, and config variants
 cp /src/nosfry/bench/linux/*.sh /bench/
+cp -r /src/nosfry/bench/linux/relays /bench/relays
 cp -r /src/nosfry/bench/linux/variants /bench/variants
 ```
 
