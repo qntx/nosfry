@@ -27,7 +27,11 @@ max_readers = 256
 no_read_ahead = false
 
 [events]
-# Maximum canonical event size in bytes.
+# Maximum canonical event size in bytes. The WebSocket payload cap
+# must leave room for one EVENT frame around it:
+# max_websocket_payload_size >= max_event_size + 10 — a smaller cap
+# is refused at load and reload. A Marmot-ready 2 MiB profile is
+# max_event_size = 2097152 with max_websocket_payload_size = 2097168.
 max_event_size = 65536
 # Reject events this many seconds in the future.
 reject_events_newer_than_seconds = 900
@@ -46,9 +50,9 @@ bind = "127.0.0.1"
 port = 7777
 # The relay's canonical ws:// / wss:// URL. Clients echo it in the
 # AUTH event's "relay" tag and name it in a NIP-62 request to vanish.
-# Empty disables AUTH: restricted kinds are stored but never served
-# and protected events are rejected (vanish requests to ALL_RELAYS are
-# still honored).
+# Empty disables AUTH: restricted kinds are refused on write and never
+# served, and protected events are rejected (vanish requests to
+# ALL_RELAYS are still honored).
 service_url = ""
 # Raise the soft open-file limit at startup up to this value, capped by
 # the hard limit; 0 leaves it unchanged (restart-only).
@@ -57,7 +61,9 @@ nofiles = 1000000
 # last comma-separated value is trusted — set this only behind a proxy
 # that sets or appends the header.
 real_ip_header = ""
-# Maximum inbound WebSocket payload in bytes.
+# Maximum inbound WebSocket payload in bytes; inclusive — a frame of
+# exactly this size is accepted, one byte more closes with 1009.
+# Must be at least max_event_size + 10 (see [events]).
 max_websocket_payload_size = 131072
 # WebSocket ping interval in seconds; at least 1 (unlike strfry, 0
 # does not disable pings — it also bounds writes and idle closes).
@@ -155,8 +161,8 @@ timeout_seconds = 10
 
 [relay.auth]
 # Kinds served only to authenticated readers (strfry default: DMs and
-# gift wraps).
-restricted_read_kinds = [4, 1059]
+# both gift-wrap kinds).
+restricted_read_kinds = [4, 1059, 21059]
 # Serve restricted kinds only to authenticated pubkeys involved in the
 # event (author or "p" tag); false serves them to any authed reader.
 restrict_read_to_involved = true

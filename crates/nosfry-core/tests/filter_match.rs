@@ -44,6 +44,18 @@ const DIVERGENCES: &[(&str, &str)] = &[
         "\"#1\"",
         "relay policy (strfry): `#` keys must be exactly one ASCII letter",
     ),
+    (
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "NIP-01 01.md: `ids`/`authors`/`#e`/`#p` values must be exact lowercase hex",
+    ),
+    (
+        "90A80DB6EB294B9EAB0B4E8DDFA3EFE7263458CE2D07566DF4E6C58868FEEF23",
+        "NIP-01 01.md: `ids`/`authors`/`#e`/`#p` values must be exact lowercase hex",
+    ),
+    (
+        "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+        "NIP-01 01.md: `ids`/`authors`/`#e`/`#p` values must be exact lowercase hex",
+    ),
 ];
 
 #[derive(Deserialize)]
@@ -99,5 +111,5 @@ fn filter_match() {
             serde_json::to_string(&case.event).unwrap_or_default()
         );
     }
-    assert_eq!(divergent, 4, "divergence count drift");
+    assert_eq!(divergent, 9, "divergence count drift");
 }

@@ -26,7 +26,7 @@ use crate::channels::{
     ConnId, Out, Outbound, OutboundRx, QueueCharge, ScanKind, ScanStart, ShardMsg, WriteRequest,
     WriterMsg, route,
 };
-use crate::metrics::Metrics;
+use crate::metrics::{EventOutcome, Metrics};
 
 /// Per-connection state handed down from the server.
 #[derive(Debug, Clone)]
@@ -289,6 +289,7 @@ impl<'a> Connection<'a> {
         let Some(reason) = self.handle.moderation.borrow().blocked_reason(event) else {
             return true;
         };
+        self.handle.metrics.event_outcome(EventOutcome::Moderated);
         self.out.push(Out::Frame {
             sub: None,
             verb: RelayVerb::Ok,
@@ -327,6 +328,7 @@ impl<'a> Connection<'a> {
             Decision::Reject(m) => (false, m),
             Decision::ShadowReject(m) => (true, m),
         };
+        self.handle.metrics.event_outcome(EventOutcome::Policy);
         self.out.push(Out::Frame {
             sub: None,
             verb: RelayVerb::Ok,
@@ -340,7 +342,6 @@ impl<'a> Connection<'a> {
     /// stored write; the writer pushes the `OK` onto this connection's
     /// `Outbound` itself.
     async fn publish(&self, event: Arc<nosfry_core::event::Event>, authed: Option<PublicKey>) {
-        self.handle.metrics.event(u16::from(event.kind()));
         if !self.moderation_allows(&event) {
             return;
         }
@@ -349,6 +350,7 @@ impl<'a> Connection<'a> {
         }
         if event.kind().is_ephemeral() {
             self.broadcast(&event).await;
+            self.handle.metrics.event_outcome(EventOutcome::Ephemeral);
             self.out.push(Out::Frame {
                 sub: None,
                 verb: RelayVerb::Ok,
@@ -360,6 +362,7 @@ impl<'a> Connection<'a> {
         let bytes = u32::try_from(event.json().len().clamp(1, crate::WRITER_QUEUE_BYTES))
             .unwrap_or(u32::MAX);
         let Some(charge) = QueueCharge::acquire(&self.handle.writer_budget, bytes).await else {
+            self.handle.metrics.event_outcome(EventOutcome::Error);
             self.out.push(Out::Frame {
                 sub: None,
                 verb: RelayVerb::Ok,
@@ -378,6 +381,7 @@ impl<'a> Connection<'a> {
             .await
             .is_err()
         {
+            self.handle.metrics.event_outcome(EventOutcome::Error);
             self.out.push(Out::Frame {
                 sub: None,
                 verb: RelayVerb::Ok,

@@ -12,6 +12,7 @@ use nosfry_core::sign::{event, keys, pubkey_hex};
 use nosfry_core::store::WriteOutcome;
 use nosfry_core::url::RelayUrl;
 use proptest::prelude::*;
+use serde_json::json;
 
 use crate::model::{Model, model_expire, model_records, model_scan, model_store, model_union};
 use crate::spec::{EventSpec, FilterSpec, SERVICE_URL, build_event, filter_json};
@@ -587,4 +588,129 @@ fn moderate_info(store: &mut dyn StoreDriver) {
             value: value.to_owned(),
         });
     }
+}
+
+/// Whether `id` is served by an `ids` scan against `store`.
+fn served(store: &mut dyn StoreDriver, id: &EventId) -> usize {
+    let filters: Arc<[Filter]> = Arc::from(vec![
+        Filter::parse(&format!("{{\"ids\":[\"{id}\"]}}")).unwrap(),
+    ]);
+    store
+        .scan(filters, &ReadGate::default(), u64::MAX, 10, u64::MAX)
+        .len()
+}
+
+/// One event written alone, answering its single outcome.
+fn write_one(store: &mut dyn StoreDriver, ev: &Arc<Event>) -> WriteOutcome {
+    store
+        .write(std::slice::from_ref(ev))
+        .first()
+        .copied()
+        .unwrap_or_else(|| panic!("no outcome for {}", ev.id()))
+}
+
+/// A deterministic NIP-09/NIP-59 deletion script for every store.
+///
+/// Same-author deletion, the wrap recipient's deletion (first and
+/// non-first `p` values), a third party's no-op, `p`-tagged non-1059
+/// immunity, kinds 5/62 immunity, the re-publish block and its lift
+/// when the carrier expires, and ephemeral 21059 never consulting
+/// blocks.
+///
+/// # Panics
+///
+/// Panics on any divergence.
+pub fn deletion_check(store: &mut impl StoreDriver) {
+    let pool = keys();
+    let (w, r, x) = (&pool[3], &pool[0], &pool[2]);
+    let (w_hex, r_hex, r2_hex) = (pubkey_hex(3), pubkey_hex(0), pubkey_hex(1));
+    let wrap = event(w, 1059, 100, &json!([["p", r_hex]]), "wrap");
+    let wrap2 = event(w, 1059, 101, &json!([["p", r2_hex], ["p", r_hex]]), "wrap2");
+    let dm = event(w, 4, 102, &json!([["p", r_hex]]), "dm");
+    let note = event(r, 1, 103, &json!([]), "note");
+    let carrier = event(x, 5, 104, &json!([["e", "00".repeat(32)]]), "del");
+    let vanish = event(r, 62, 105, &json!([]), "vanish");
+    let eph = event(r, 21059, 106, &json!([["p", w_hex]]), "eph");
+    for ev in [&wrap, &wrap2, &dm, &note, &carrier, &vanish] {
+        assert!(
+            matches!(write_one(store, ev), WriteOutcome::Stored { .. }),
+            "{} did not store",
+            ev.id()
+        );
+    }
+
+    // A third party's kind 5 on the wraps deletes nothing.
+    let foreign = event(
+        x,
+        5,
+        200,
+        &json!([
+            ["e", wrap.id().to_string()],
+            ["e", wrap2.id().to_string()],
+            ["k", "1059"]
+        ]),
+        "",
+    );
+    assert!(
+        matches!(write_one(store, &foreign), WriteOutcome::Stored { .. }),
+        "third-party kind 5 refused"
+    );
+    assert_eq!(served(store, &wrap.id()), 1, "foreign kind 5 deleted");
+    assert_eq!(served(store, &wrap2.id()), 1, "foreign kind 5 deleted");
+
+    // The `p` recipient's kind 5 deletes both wraps — `wrap2` via
+    // its non-first `p` value — plus its own note, but not the
+    // kind-4 DM, not the kind-5 carrier, not the kind-62 request,
+    // and it registers a block for the ephemeral id.
+    let del = event(
+        r,
+        5,
+        300,
+        &json!([
+            ["e", wrap.id().to_string()],
+            ["e", wrap2.id().to_string()],
+            ["e", dm.id().to_string()],
+            ["e", note.id().to_string()],
+            ["e", carrier.id().to_string()],
+            ["e", vanish.id().to_string()],
+            ["e", eph.id().to_string()],
+            ["k", "1059"],
+            ["expiration", "400"]
+        ]),
+        "",
+    );
+    assert!(
+        matches!(write_one(store, &del), WriteOutcome::Stored { .. }),
+        "recipient kind 5 refused"
+    );
+    for (ev, want) in [
+        (&wrap, 0),
+        (&wrap2, 0),
+        (&note, 0),
+        (&dm, 1),
+        (&carrier, 1),
+        (&vanish, 1),
+    ] {
+        assert_eq!(served(store, &ev.id()), want, "{}", ev.id());
+    }
+
+    // The ephemeral never consults the block row the kind 5 wrote.
+    assert_eq!(
+        write_one(store, &eph),
+        WriteOutcome::Ephemeral,
+        "ephemeral consulted a deletion block"
+    );
+
+    // Re-publication of the wrap stays blocked until the carrier
+    // kind 5 expires.
+    assert_eq!(
+        write_one(store, &wrap),
+        WriteOutcome::Deleted,
+        "re-publish not blocked"
+    );
+    store.expire(400);
+    assert!(
+        matches!(write_one(store, &wrap), WriteOutcome::Stored { .. }),
+        "carrier expiry did not lift the block"
+    );
 }

@@ -10,14 +10,51 @@ The format is based on [Keep a Changelog]; this project follows
 
 ## [Unreleased]
 
+No on-disk format change in this round; `export`/`import` remains
+the upgrade path and now carries management state.
+
 ### Added
 
+- Gift wraps (kind 1059) are deleted by their `p` recipient's
+  NIP-09 kind 5, with re-publication blocked (NIP-59).
+- An AUTH challenge is sent whenever an unauthenticated REQ, COUNT,
+  or NEG-OPEN filter could match a restricted kind; restricted
+  events stay hidden until AUTH.
+- The NIP-01 `rate-limited:` retry hint (milliseconds until the
+  bucket refills) on `OK` and `CLOSED`.
+- NIP-59 in `supported_nips` when AUTH is on and 1059 is restricted.
+- `nosfry export` appends versioned `{"nosfry_state":1,…}` lines
+  (NIP-86 bans, allow/disallow lists, kind lists, IP blocks, and
+  NIP-11 overrides plus NIP-62 vanish points) and `nosfry import`
+  applies them; a malformed state line aborts the import.
+  `export --events-only` writes events only, for piping into other
+  relays (native).
+- `nosfry_event_outcomes_total{outcome}` counts verified publishes
+  by outcome (native).
 - The HTML landing page sends `Content-Security-Policy`,
   `X-Content-Type-Options`, and `Referrer-Policy`
   (`site::LANDING_HEADERS`), in both editions.
 
 ### Changed
 
+- `restricted_read_kinds` defaults to 4, 1059, 21059 (was 4, 1059;
+  strfry master has 4, 1059).
+- With AUTH disabled (empty `service_url`), writes of restricted
+  kinds are refused with `restricted:` instead of acknowledged and
+  never served; set `restricted_read_kinds = []` to accept and
+  serve them openly.
+- `ids`, `authors`, `#e`, and `#p` filter values must be 64
+  lowercase hex characters; anything else is refused with
+  `invalid:` (strfry accepts uppercase and a `0x` prefix).
+- NIP-11 `limitation.max_message_length` is now
+  `min(max_websocket_payload_size, max_event_size + 10)`.
+- A config whose `max_websocket_payload_size` is smaller than
+  `max_event_size + 10` is refused at load and at reload.
+- `nostr_events_total{kind}` counts events persisted to the store
+  (strfry master semantics, #225) instead of every verified
+  publish, and at most 256 kinds get their own series — later kinds
+  count under `kind="other"`. Dashboards built on strfry 1.1.3's
+  ingress semantics will see lower numbers (native).
 - AUTH events are checked against a dedicated symmetric ±600 s
   window (`created_at` within ~10 minutes of the relay's time, per
   NIP-42) instead of the ephemeral-age rules that limited them to
@@ -37,6 +74,9 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Fixed
 
+- The native relay refused a WebSocket frame of exactly
+  `max_websocket_payload_size` bytes (yawc's limit is exclusive);
+  the limit is now inclusive on both editions.
 - The Workers edition now groups IPv6 clients by /64 and folds
   IPv4-mapped addresses for the per-IP connection cap and the shared
   per-address rate buckets (`AddressKey` in `nosfry-core::limits`),

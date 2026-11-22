@@ -229,8 +229,11 @@ const COMPRESSION_THRESHOLD: usize = 128;
 /// connection costs only its socket buffers; with `sliding_window`
 /// each connection keeps its own (~370 KiB once used).
 fn upgrade_options(relay: &crate::config::Relay, pool: &yawc::DeflatePool) -> Options {
+    // yawc refuses a frame of `>= max_payload_read` bytes, so pass
+    // one past the limit: `max_websocket_payload_size` stays the
+    // inclusive bound, same as the worker's `len > max` check.
     let options = Options::default()
-        .with_max_payload_read(relay.max_websocket_payload_size)
+        .with_max_payload_read(relay.max_websocket_payload_size.saturating_add(1))
         .with_read_buffer_capacity(READ_BUFFER_CAPACITY)
         .with_write_buffer_capacity(WRITE_BUFFER_CAPACITY);
     if !relay.compression.enabled {
@@ -312,11 +315,15 @@ fn client_ip(config: &Config, headers: &header::HeaderMap, peer: IpAddr) -> IpAd
 
 /// The optional capabilities the `[relay]` configuration advertises
 /// in the NIP-11 document and on the landing page.
-const fn features(relay: &crate::config::Relay) -> nosfry_core::info::Features {
+fn features(
+    relay: &crate::config::Relay,
+    auth: &nosfry_core::auth::AuthRules,
+) -> nosfry_core::info::Features {
     nosfry_core::info::Features {
         count: relay.limits.max_filter_limit_count > 0,
         sync: relay.limits.max_sync_events > 0,
         auth: !relay.service_url.is_empty(),
+        gift_wrap: auth.guards_gift_wraps(),
         management: !relay.management.admins.is_empty(),
     }
 }
@@ -332,7 +339,7 @@ pub(crate) fn nip11(
     nosfry_core::info::document(
         &relay.info,
         moderation,
-        features(relay),
+        features(relay, &limits.auth),
         limits,
         relay.max_websocket_payload_size,
     )
@@ -340,9 +347,18 @@ pub(crate) fn nip11(
 
 /// The HTML landing page, rendered alongside [`nip11`] (same
 /// effective info, same rebuild points).
-pub(crate) fn landing(config: &Config, moderation: &Moderation) -> String {
+pub(crate) fn landing(
+    config: &Config,
+    limits: &nosfry_core::limits::Limits,
+    moderation: &Moderation,
+) -> String {
     let relay = &config.relay;
-    nosfry_core::site::landing_page(&relay.info, moderation, features(relay), &relay.service_url)
+    nosfry_core::site::landing_page(
+        &relay.info,
+        moderation,
+        features(relay, &limits.auth),
+        &relay.service_url,
+    )
 }
 
 #[cfg(test)]
@@ -382,9 +398,10 @@ mod tests {
         let pool = yawc::DeflatePool::new(1);
         let options = upgrade_options(&config.relay, &pool);
         assert!(options.compression.is_none());
+        // yawc's cap is exclusive: one past the configured limit.
         assert_eq!(
             options.max_payload_read,
-            Some(config.relay.max_websocket_payload_size)
+            Some(config.relay.max_websocket_payload_size + 1)
         );
         assert_eq!(options.read_buffer_capacity, Some(READ_BUFFER_CAPACITY));
         assert_eq!(options.write_buffer_capacity, Some(WRITE_BUFFER_CAPACITY));

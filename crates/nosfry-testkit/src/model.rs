@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use nosfry_core::auth::ReadGate;
-use nosfry_core::deletion::DeletionTarget;
+use nosfry_core::deletion::{self, DeletionTarget};
 use nosfry_core::event::{Event, EventId, PublicKey, cmp_newest_first, supersedes};
 use nosfry_core::filter::Filter;
 use nosfry_core::url::RelayUrl;
@@ -161,9 +161,11 @@ pub fn model_store(events: &[Arc<Event>], service_url: Option<&RelayUrl>) -> Mod
             }
         }
         if !matches!(ev.kind().0, 5 | 62)
-            && m.blocked_ids
-                .get(&(ev.id(), ev.pubkey()))
-                .is_some_and(|set| !set.is_empty())
+            && deletion::blockers(ev.packed()).any(|blocker| {
+                m.blocked_ids
+                    .get(&(ev.id(), PublicKey(blocker)))
+                    .is_some_and(|set| !set.is_empty())
+            })
         {
             continue; // Deleted by an earlier e target
         }
@@ -231,13 +233,15 @@ fn model_apply_deletions(m: &mut Model, ev: &Event, seq: u64) {
             continue;
         };
         let deletable = m.stored.get(&tseq).is_some_and(|t| {
-            t.pubkey() == ev.pubkey()
-                && match target {
-                    // NIP-09/NIP-62: deletions and requests to vanish
-                    // are never deletable.
-                    DeletionTarget::Event(_) => !matches!(t.kind().0, 5 | 62),
-                    DeletionTarget::Address(_) => t.created_at() <= ev.created_at(),
+            match target {
+                // NIP-09/NIP-59: the deleter's own event or a wrap
+                // `p`-tagged to the deleter; deletions and requests
+                // to vanish are never deletable.
+                DeletionTarget::Event(_) => deletion::deletes(t.packed(), &ev.pubkey()),
+                DeletionTarget::Address(_) => {
+                    t.pubkey() == ev.pubkey() && t.created_at() <= ev.created_at()
                 }
+            }
         });
         if deletable {
             model_delete_seq(m, tseq);

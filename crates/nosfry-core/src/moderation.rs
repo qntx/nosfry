@@ -12,7 +12,7 @@ use crate::event::{Event, EventId, PublicKey};
 use crate::packed::PackedRef;
 
 /// A NIP-86 management operation applied by a store's `moderate`.
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModOp {
     /// Ban `pubkey` (also drops its allow entry).
     BanPubkey {
@@ -82,7 +82,7 @@ pub enum ModOp {
 }
 
 /// A NIP-11 info field writable through [`ModOp::SetInfo`].
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InfoField {
     /// `changerelayname`.
     Name,

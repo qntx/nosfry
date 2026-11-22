@@ -10,7 +10,7 @@ use crate::kind::Kind;
 use crate::limits::{AddressBuckets, Limits, TokenBucket};
 use crate::message::{
     ClientMessage, ClientVerb, MessageError, Reason, RelayVerb, SubId, auth_frame, closed_frame,
-    neg_err_frame, notice_frame, ok_frame,
+    closed_frame_with_params, neg_err_frame, notice_frame, ok_frame, ok_frame_with_params,
 };
 
 /// Identity of an open subscription: the id plus a generation counter that
@@ -263,19 +263,21 @@ impl Session {
         match message {
             ClientMessage::Event(unverified) | ClientMessage::Auth(unverified) => {
                 // Charge the connection bucket first; only a pass
-                // spends from the address-wide bucket.
-                if !self
+                // spends from the address-wide bucket. The hint is
+                // the wait of whichever bucket refused.
+                if let Err(wait_ms) = self
                     .event_bucket
                     .as_mut()
-                    .is_none_or(|bucket| bucket.take(now_ms))
-                    || !self.address.take_event(now_ms)
+                    .map_or(Ok(()), |bucket| bucket.take(now_ms))
+                    .and_then(|()| self.address.take_event(now_ms))
                 {
                     out.push(Command::Send {
                         verb: RelayVerb::Ok,
-                        text: ok_frame(
+                        text: ok_frame_with_params(
                             &unverified.id(),
                             false,
                             &Reason::RateLimited.message("slow down"),
+                            &wait_ms.to_string(),
                         ),
                     });
                     return Received {
@@ -484,6 +486,24 @@ impl Session {
                 return;
             }
         }
+        // A restricted kind is only served to authenticated readers;
+        // with AUTH disabled there is no reader to serve, so the
+        // write is refused — ephemeral restricted kinds too (they are
+        // never stored, and imports bypass this gate by design).
+        if !limits.auth.enabled() && limits.auth.is_restricted(unverified.kind().0) {
+            out.push(Command::Send {
+                verb: RelayVerb::Ok,
+                text: ok_frame(
+                    &unverified.id(),
+                    false,
+                    &Reason::Restricted.message(&format!(
+                        "kind {} is only served to authenticated readers and AUTH is disabled on this relay",
+                        unverified.kind().0
+                    )),
+                ),
+            });
+            return;
+        }
         let id = unverified.id();
         match unverified.verify(&limits.event) {
             Ok(event) => {
@@ -585,33 +605,40 @@ impl Session {
     }
 
     /// The connection + address REQ tokens one REQ/`COUNT`/negentropy
-    /// message spends.
-    fn req_charge(&mut self, now_ms: u64) -> bool {
+    /// message spends; `Err(ms)` is the refusing bucket's wait.
+    fn req_charge(&mut self, now_ms: u64) -> Result<(), u64> {
         self.req_bucket
             .as_mut()
-            .is_none_or(|bucket| bucket.take(now_ms))
-            && self.address.take_req(now_ms)
+            .map_or(Ok(()), |bucket| bucket.take(now_ms))
+            .and_then(|()| self.address.take_req(now_ms))
     }
 
     /// Spend one REQ/`COUNT` token from the connection and address
-    /// buckets; on a refusal drop the sub id and answer `rate-limited`.
+    /// buckets; on a refusal drop the sub id and answer `rate-limited`
+    /// with the retry hint (NIP-01 OK/CLOSED params).
     fn charge_req(&mut self, now_ms: u64, sub_id: &SubId, out: &mut Vec<Command>) -> bool {
-        if self.req_charge(now_ms) {
+        let Err(wait_ms) = self.req_charge(now_ms) else {
             return true;
-        }
+        };
         self.drop_sub(sub_id, out);
         out.push(Command::Send {
             verb: RelayVerb::Closed,
-            text: closed_frame(sub_id, &Reason::RateLimited.message("slow down")),
+            text: closed_frame_with_params(
+                sub_id,
+                &Reason::RateLimited.message("slow down"),
+                &wait_ms.to_string(),
+            ),
         });
         false
     }
 
     /// The same charge for a `NEG-OPEN`/`NEG-MSG`; a refusal drops the
     /// negentropy session (an unapplied message leaves the stream
-    /// inconsistent) and answers `NEG-ERR`.
+    /// inconsistent) and answers `NEG-ERR`. NIP-01's retry params
+    /// exist only on OK and CLOSED — NIP-77's NEG-ERR 4th element is
+    /// `blocked`-only — so this refusal carries no hint.
     fn charge_neg(&mut self, now_ms: u64, sub_id: &SubId, out: &mut Vec<Command>) -> bool {
-        if self.req_charge(now_ms) {
+        if self.req_charge(now_ms).is_ok() {
             return true;
         }
         self.drop_neg(sub_id, out);
@@ -754,6 +781,15 @@ impl Session {
             }
             return;
         }
+        // A filter that may match restricted kinds earns the AUTH
+        // challenge before `NegOpen` — the read gate keeps hiding
+        // them either way.
+        if self.authed.is_empty()
+            && self.limits.auth.enabled()
+            && self.limits.auth.may_restrict(std::slice::from_ref(&filter))
+        {
+            self.issue_challenge(out);
+        }
         let generation = self.next_generation;
         self.next_generation += 1;
         if self.neg.insert(sub_id.clone(), generation).is_some() {
@@ -857,6 +893,15 @@ impl Session {
                 });
             }
             return false;
+        }
+        // A filter group that may match restricted kinds earns the
+        // AUTH challenge but still proceeds — the read gate keeps
+        // hiding what an unauthenticated reader must not see.
+        if self.authed.is_empty()
+            && self.limits.auth.enabled()
+            && self.limits.auth.may_restrict(filters)
+        {
+            self.issue_challenge(out);
         }
         true
     }

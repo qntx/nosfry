@@ -402,6 +402,26 @@ fn subkey_generation_monotonic() {
     }
 }
 
+/// A REQ whose `ids` carries uppercase hex is an `invalid:` CLOSE —
+/// NIP-01 wants exact lowercase hex in filter value lists.
+#[test]
+fn req_with_uppercase_filter_hex_is_invalid() {
+    let mut s = session();
+    let upper = "AB".repeat(32);
+    let out = feed(
+        &mut s,
+        1_700_000_000,
+        &format!(r#"["REQ","u",{{"ids":["{upper}"]}}]"#),
+    );
+    let frames = sends(&out);
+    assert!(
+        frames
+            .iter()
+            .any(|f| f.contains("\"CLOSED\"") && f.contains("invalid:")),
+        "{out:?}"
+    );
+}
+
 #[test]
 fn expired_event_is_rejected_invalid() {
     let mut s = session();
@@ -511,6 +531,69 @@ fn req_over_limit_is_closed_rate_limited() {
         sends(&out)[0].contains("rate-limited: slow down"),
         "{out:?}"
     );
+}
+
+/// NIP-01 (01.md): a `rate-limited:` OK or CLOSED carries the backoff
+/// as a positive-integer millisecond string in the extra element —
+/// [4] for OK, [3] for CLOSED. `NEG-ERR` carries none.
+#[test]
+fn rate_limited_frames_carry_retry_ms() {
+    let rate = nosfry_core::limits::RateLimits {
+        events_per_second: 1,
+        events_burst: 1,
+        reqs_per_second: 1,
+        reqs_burst: 1,
+        ip_events_per_second: 0,
+        ip_events_burst: 0,
+        ip_reqs_per_second: 0,
+        ip_reqs_burst: 0,
+    };
+    let mut s = session_with_rate(rate);
+    let t = 1_000u64;
+
+    let assert_hint = |frame: &str, index: usize| {
+        let json: serde_json::Value = serde_json::from_str(frame).unwrap();
+        let hint = json[index]
+            .as_str()
+            .unwrap_or_else(|| panic!("no retry hint in {json}"));
+        assert!(
+            hint.bytes().all(|b| b.is_ascii_digit()) && hint.starts_with(|c: char| c != '0'),
+            "hint must match ^[1-9][0-9]*$: {hint}"
+        );
+        assert!(
+            hint.parse::<u64>().unwrap() <= 1_000,
+            "hint over bound: {hint}"
+        );
+    };
+
+    // EVENT: burst of 1 passes, the second gets the hint in [4].
+    let event = signed_event(1_700_000_000, 1, "gm");
+    feed_ms(&mut s, t, &event);
+    let out = feed_ms(&mut s, t, &event);
+    let frames = sends(&out);
+    assert!(frames[0].contains("rate-limited: slow down"), "{frames:?}");
+    assert_hint(frames[0], 4);
+
+    // REQ: burst of 1 passes, the second's CLOSED carries it in [3].
+    feed_ms(&mut s, t, "[\"REQ\",\"a\",{}]");
+    let out = feed_ms(&mut s, t, "[\"REQ\",\"b\",{}]");
+    let frames = sends(&out);
+    let closed = frames
+        .iter()
+        .find(|f| f.contains("rate-limited:"))
+        .unwrap_or_else(|| panic!("{out:?}"));
+    assert_hint(closed, 3);
+
+    // NEG-ERR: NIP-77 gives its 4th element only to `blocked:` —
+    // `rate-limited:` stays a 3-element frame.
+    let out = feed_ms(&mut s, t, "[\"NEG-OPEN\",\"n\",{},\"aabb\"]");
+    let frames = sends(&out);
+    let neg = frames
+        .iter()
+        .find(|f| f.contains("rate-limited:"))
+        .unwrap_or_else(|| panic!("{out:?}"));
+    let json: serde_json::Value = serde_json::from_str(neg).unwrap();
+    assert_eq!(json.as_array().unwrap().len(), 3, "{json}");
 }
 
 #[test]
@@ -709,6 +792,167 @@ fn req_fully_restricted_auth_disabled() {
     );
     assert!(
         !out.iter().any(|c| matches!(c, Command::Subscribe { .. })),
+        "{out:?}"
+    );
+}
+
+/// A filter that may match a restricted kind earns the challenge
+/// but the REQ still subscribes — the gate keeps hiding what the
+/// unauthenticated reader must not see.
+#[test]
+fn req_maybe_restricted_challenges_and_continues() {
+    let p = "0000000000000000000000000000000000000000000000000000000000000000";
+    for filter in [
+        "{\"kinds\":[1,1059]}".to_owned(),
+        format!("{{\"#p\":[\"{p}\"]}}"),
+        "{}".to_owned(),
+    ] {
+        let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+        let out = feed(&mut s, 1, &format!("[\"REQ\",\"a\",{filter}]"));
+        assert!(
+            matches!(
+                out.as_slice(),
+                [Command::Send { .. }, Command::Subscribe { .. }]
+            ) && sends(&out) == ["[\"AUTH\",\"challenge\"]"],
+            "{filter}: {out:?}"
+        );
+    }
+}
+
+/// `kinds:[1]` can never match a restricted kind — no challenge —
+/// and a qualifying REQ challenges at most once per connection.
+#[test]
+fn req_maybe_restricted_challenges_once() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1]}]");
+    assert!(
+        sends(&out).is_empty() && matches!(out.as_slice(), [Command::Subscribe { .. }]),
+        "{out:?}"
+    );
+    let out = feed(&mut s, 1, "[\"REQ\",\"b\",{\"kinds\":[1,1059]}]");
+    assert_eq!(sends(&out), ["[\"AUTH\",\"challenge\"]"], "{out:?}");
+    assert!(
+        matches!(out.last(), Some(Command::Subscribe { .. })),
+        "{out:?}"
+    );
+    let out = feed(&mut s, 1, "[\"REQ\",\"c\",{}]");
+    assert!(
+        sends(&out).is_empty() && matches!(out.as_slice(), [Command::Subscribe { .. }]),
+        "{out:?}"
+    );
+}
+
+/// An authenticated connection gets no challenge.
+#[test]
+fn req_maybe_restricted_authed_no_challenge() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let out = feed(&mut s, 1, &auth_frame([7; 32], 1));
+    assert!(!s.authenticated().is_empty(), "{out:?}");
+    let out = feed(&mut s, 2, "[\"REQ\",\"a\",{\"kinds\":[1,1059]}]");
+    assert!(
+        sends(&out).is_empty() && matches!(out.as_slice(), [Command::Subscribe { .. }]),
+        "{out:?}"
+    );
+}
+
+/// With AUTH disabled a maybe-restricted filter is never
+/// challenged.
+#[test]
+fn req_maybe_restricted_auth_disabled_no_challenge() {
+    let mut s = session_auth("", &[4, 1059], true);
+    let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1,4]}]");
+    assert!(
+        sends(&out).is_empty() && matches!(out.as_slice(), [Command::Subscribe { .. }]),
+        "{out:?}"
+    );
+}
+
+/// `COUNT` shares `validate_read`: same challenge, then the count.
+#[test]
+fn count_maybe_restricted_challenges() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let out = feed(&mut s, 1, "[\"COUNT\",\"a\",{\"kinds\":[1,1059]}]");
+    assert!(
+        matches!(
+            out.as_slice(),
+            [Command::Send { .. }, Command::Count { .. }]
+        ) && sends(&out) == ["[\"AUTH\",\"challenge\"]"],
+        "{out:?}"
+    );
+}
+
+/// `NEG-OPEN` challenges before the `NegOpen` command, so the AUTH
+/// frame precedes any `NEG-MSG` on the wire.
+#[test]
+fn neg_open_maybe_restricted_challenges() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059], true);
+    let out = feed(&mut s, 1, "[\"NEG-OPEN\",\"n\",{},\"aabb\"]");
+    assert!(
+        matches!(
+            out.as_slice(),
+            [Command::Send { .. }, Command::NegOpen { .. }]
+        ) && sends(&out) == ["[\"AUTH\",\"challenge\"]"],
+        "{out:?}"
+    );
+}
+
+/// With AUTH disabled a restricted kind has no reader to serve:
+/// the write is refused `restricted:` — including the ephemeral
+/// wrap kind — while ordinary kinds still publish.
+#[test]
+fn restricted_writes_refused_when_auth_disabled() {
+    let mut s = session_auth("", &[4, 1059, 21059], true);
+    let out = feed(&mut s, 1, &signed_event(1, 1059, "wrap"));
+    let frames = sends(&out);
+    assert_eq!(frames.len(), 1, "{out:?}");
+    assert!(frames[0].starts_with("[\"OK\""), "{frames:?}");
+    assert!(
+        frames[0].contains(
+            "\"restricted: kind 1059 is only served to authenticated readers and AUTH is disabled on this relay\""
+        ),
+        "{frames:?}"
+    );
+    let out = feed(&mut s, 2, &signed_event(2, 21059, "eph"));
+    let frames = sends(&out);
+    assert!(
+        frames[0].contains("restricted: kind 21059 is only served to authenticated readers"),
+        "{frames:?}"
+    );
+    let out = feed(&mut s, 3, &signed_event(3, 1, "note"));
+    assert!(
+        matches!(out.as_slice(), [Command::Publish { .. }]),
+        "{out:?}"
+    );
+}
+
+/// With AUTH enabled a restricted kind publishes normally.
+#[test]
+fn restricted_writes_publish_when_auth_enabled() {
+    let mut s = session_auth("wss://relay.example.com", &[4, 1059, 21059], true);
+    let out = feed(&mut s, 1, &signed_event(1, 1059, "wrap"));
+    assert!(
+        matches!(out.as_slice(), [Command::Publish { .. }]),
+        "{out:?}"
+    );
+}
+
+/// The shipped default restricts the ephemeral wrap kind too:
+/// kind-21059 filters are fully restricted and challenged like DMs.
+#[test]
+fn req_ephemeral_wrap_restricted_by_default() {
+    let mut s = session_auth(
+        "wss://relay.example.com",
+        &nosfry_core::auth::AuthConfig::default().restricted_read_kinds,
+        true,
+    );
+    let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[21059]}]");
+    let frames = sends(&out);
+    assert_eq!(
+        frames.as_slice(),
+        [
+            "[\"AUTH\",\"challenge\"]",
+            "[\"CLOSED\",\"a\",\"auth-required: requested filter requires authentication\"]",
+        ],
         "{out:?}"
     );
 }
@@ -1020,9 +1264,12 @@ fn repost_embedding_protected_is_blocked() {
 fn mixed_req_gate_hides_restricted() {
     let mut s = session_auth("wss://relay.example.com", &[4], true);
     let out = feed(&mut s, 1, "[\"REQ\",\"a\",{\"kinds\":[1,4]}]");
-    let [Command::Subscribe { gate, .. }] = out.as_slice() else {
-        panic!("expected Subscribe, got {out:?}");
+    // A mixed group may match restricted kinds: AUTH challenge first,
+    // then the subscription proceeds under the read gate.
+    let [Command::Send { .. }, Command::Subscribe { gate, .. }] = out.as_slice() else {
+        panic!("expected AUTH + Subscribe, got {out:?}");
     };
+    assert_eq!(sends(&out), ["[\"AUTH\",\"challenge\"]"]);
     let ev = |kind: u16| {
         nosfry_core::packed::PackedEvent::build(
             &nosfry_core::event::EventId([1; 32]),

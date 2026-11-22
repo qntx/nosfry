@@ -1,0 +1,23 @@
+# Alternate relay profile for the suite's second pass (see run.sh):
+# no `service_url` is injected, so AUTH is disabled — restricted
+# kinds are refused on write and never served, protected events are
+# rejected, and NIP-11 drops 42 and 59. Everything else is the
+# shipped default; only `alt_*` cases run against this profile.
+
+# Marmot-ready 2 MiB profile: Marmot asks inbox and group relays to
+# accept events of at least 2 MiB. The payload cap must reach
+# max_event_size + 10 — the largest EVENT frame — so NIP-11 can
+# advertise a truthful max_message_length of 2097162.
+[events]
+max_event_size = 2097152
+
+[relay]
+max_websocket_payload_size = 2097168
+
+# One EVENT per second sustained with a burst of 4: enough for every
+# alt case to publish, tight enough that 6 back-to-back EVENTs trip
+# the limiter so `alt_rate_limited_carries_retry_ms` can read the
+# NIP-01 retry hint. The shared ip_* defaults stay untouched.
+[relay.rate_limits]
+events_per_second = 1
+events_burst      = 4

@@ -31,8 +31,8 @@ pub struct Config {
 pub struct Relay {
     /// The relay's canonical `ws://`/`wss://` URL clients sign into an
     /// AUTH event's `relay` tag. Empty disables AUTH: restricted
-    /// kinds are stored but never served, and protected events are
-    /// rejected.
+    /// kinds are refused on write and never served, and protected
+    /// events are rejected.
     pub service_url: String,
     /// Maximum inbound WebSocket payload in bytes.
     pub max_websocket_payload_size: usize,
@@ -159,6 +159,10 @@ pub enum ConfigError {
     /// An invalid `[relay.filter_validation]` value.
     #[error(transparent)]
     FilterValidation(#[from] FilterValidationError),
+    /// `[relay] max_websocket_payload_size` cannot carry the largest
+    /// allowed EVENT frame.
+    #[error(transparent)]
+    PayloadTooSmall(#[from] nosfry_core::limits::PayloadTooSmall),
 }
 
 impl Config {
@@ -197,6 +201,10 @@ impl Config {
     /// `[relay] service_url`, [`ConfigError::FilterValidation`] on an
     /// invalid `[relay.filter_validation]` value.
     pub fn limits(&self) -> Result<Limits, ConfigError> {
+        nosfry_core::limits::check_payload_size(
+            self.relay.max_websocket_payload_size,
+            &self.events,
+        )?;
         Ok(Limits {
             event: self.events,
             req: ReqLimits {

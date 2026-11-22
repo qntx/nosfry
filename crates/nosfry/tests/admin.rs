@@ -22,12 +22,15 @@ mod common;
 use std::io::{Cursor, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use common::{event, key};
 use nosfry::admin::{AdminError, ImportStats, delete, export, import, scan};
 use nosfry_core::event::{Event, EventLimits};
 use nosfry_core::filter::Filter;
-use nosfry_lmdb::{Store, StoreOptions};
+use nosfry_core::moderation::{InfoField, ModOp};
+use nosfry_core::store::WriteOutcome;
+use nosfry_lmdb::{Progress, Scan, Store, StoreOptions};
 use serde_json::json;
 
 const MAX_LINE: usize = 4096;
@@ -55,7 +58,7 @@ fn bad_sig_line() -> String {
 
 fn export_bytes(store: &Store) -> Vec<u8> {
     let mut out = Vec::new();
-    export(store, 0, u64::MAX, false, &mut out).unwrap();
+    export(store, 0, u64::MAX, false, false, &mut out).unwrap();
     out
 }
 
@@ -110,12 +113,13 @@ fn import_mixed_corpus_stats() {
             superseded: 1,
             ephemeral: 1,
             blocked: 0,
+            state: 0,
             rejected: 3,
         }
     );
 
     let mut out = Vec::new();
-    let count = export(&store, 0, u64::MAX, false, &mut out).unwrap();
+    let count = export(&store, 0, u64::MAX, false, false, &mut out).unwrap();
     assert_eq!(count, 6);
     let exported = String::from_utf8(out).unwrap();
     for expected in &good[0..5] {
@@ -293,12 +297,18 @@ fn delete_removes_matches_and_dry_run_counts() {
     let filter = || Filter::parse("{\"kinds\":[1]}").unwrap();
     assert_eq!(delete(&store, filter(), true).unwrap(), 5);
     let mut out = Vec::new();
-    assert_eq!(export(&store, 0, u64::MAX, false, &mut out).unwrap(), 6);
+    assert_eq!(
+        export(&store, 0, u64::MAX, false, false, &mut out).unwrap(),
+        6
+    );
 
     // The real run deletes only the matches; deleting again finds none.
     assert_eq!(delete(&store, filter(), false).unwrap(), 5);
     let mut after = Vec::new();
-    assert_eq!(export(&store, 0, u64::MAX, false, &mut after).unwrap(), 1);
+    assert_eq!(
+        export(&store, 0, u64::MAX, false, false, &mut after).unwrap(),
+        1
+    );
     assert_eq!(delete(&store, filter(), false).unwrap(), 0);
 }
 
@@ -353,6 +363,7 @@ fn import_counts_blocked_events() {
             superseded: 0,
             ephemeral: 0,
             blocked: 1,
+            state: 0,
             rejected: 0,
         }
     );
@@ -796,4 +807,286 @@ fn import_overlong_line_is_rejected_and_skipped() {
         .unwrap();
     assert_eq!(ids.len(), 2);
     assert!(ids.iter().any(|j| j.contains("\"second\"")), "{ids:?}");
+}
+
+/// Pubkey of a test `Keypair` as the `PublicKey` newtype.
+fn pubkey(keypair: &secp256k1::Keypair) -> nosfry_core::event::PublicKey {
+    nosfry_core::event::PublicKey(keypair.x_only_public_key().0.to_byte_array())
+}
+
+/// A store holding every kind of persisted management state, plus the
+/// events deletion/vanish behavior keys on. Returns it alongside the
+/// fixtures the round-trip assertions need.
+struct Fixture {
+    store: Store,
+    _dir: tempfile::TempDir,
+    banned_author_ev: std::sync::Arc<Event>,
+    allowed_ev: std::sync::Arc<Event>,
+    banned_ev: std::sync::Arc<Event>,
+    deleted_ev: std::sync::Arc<Event>,
+    deleted_wrap: std::sync::Arc<Event>,
+    vanished_ev: std::sync::Arc<Event>,
+}
+
+fn managed_store() -> Fixture {
+    let (dir, store) = store();
+    let banned = key(20);
+    let q = key(21);
+    let allowed = key(22);
+    let v = key(23);
+    let w = key(24);
+    let r = key(25);
+
+    let banned_author_ev = event(&banned, 1, 100, &json!([]), "p");
+    let deleted_ev = event(&q, 1, 100, &json!([]), "q-target");
+    // Banned id authored by the allow-listed key: the `banevent`
+    // entry — not the allow list — is what refuses it.
+    let banned_ev = event(&allowed, 1, 300, &json!([]), "banned");
+    let allowed_ev = event(&allowed, 1, 100, &json!([]), "allowed");
+    let vanished_ev = event(&v, 1, 50, &json!([]), "v-old");
+    let deleted_wrap = event(
+        &w,
+        1059,
+        90,
+        &json!([["p", format!("{}", pubkey(&r))]]),
+        "wrap",
+    );
+    store
+        .write(
+            &[
+                std::sync::Arc::clone(&banned_author_ev),
+                std::sync::Arc::clone(&deleted_ev),
+                std::sync::Arc::clone(&banned_ev),
+                std::sync::Arc::clone(&allowed_ev),
+                std::sync::Arc::clone(&vanished_ev),
+                std::sync::Arc::clone(&deleted_wrap),
+            ],
+            None,
+        )
+        .unwrap();
+    // NIP-09 carriers: Q deletes its note, the wrap's recipient
+    // deletes the wrap (NIP-59).
+    let del_q = event(
+        &q,
+        5,
+        110,
+        &json!([["e", format!("{}", deleted_ev.id())]]),
+        "",
+    );
+    let del_wrap = event(
+        &r,
+        5,
+        95,
+        &json!([["e", format!("{}", deleted_wrap.id())], ["k", "1059"]]),
+        "",
+    );
+    store.write(&[del_q, del_wrap], None).unwrap();
+    // A vanish point whose kind-62 carrier is then deleted — the
+    // point must still export.
+    let vanish = event(&v, 62, 200, &json!([["relay", "ALL_RELAYS"]]), "");
+    let written = store.write(&[vanish], None).unwrap();
+    let seq = match written.outcomes[0] {
+        WriteOutcome::Stored { seq } => seq,
+        ref other => panic!("vanish request stored: {other:?}"),
+    };
+    while store.vanish_step(10_000).unwrap().more {}
+    assert_eq!(store.delete(&[seq]).unwrap(), 1, "kind-62 removed");
+
+    store
+        .moderate(ModOp::BanPubkey {
+            pubkey: pubkey(&banned),
+            reason: Some("spam".to_owned()),
+        })
+        .unwrap();
+    store
+        .moderate(ModOp::AllowPubkey {
+            pubkey: pubkey(&allowed),
+            reason: None,
+        })
+        .unwrap();
+    store
+        .moderate(ModOp::BanEvent {
+            id: banned_ev.id(),
+            reason: Some("illegal".to_owned()),
+        })
+        .unwrap();
+    store.moderate(ModOp::DisallowKind { kind: 7 }).unwrap();
+    store
+        .moderate(ModOp::BlockIp {
+            ip: "192.0.2.1".parse().unwrap(),
+            reason: None,
+        })
+        .unwrap();
+    store
+        .moderate(ModOp::SetInfo {
+            field: InfoField::Name,
+            value: "test relay".to_owned(),
+        })
+        .unwrap();
+    // An empty-string override is a real entry and must round-trip.
+    store
+        .moderate(ModOp::SetInfo {
+            field: InfoField::Icon,
+            value: String::new(),
+        })
+        .unwrap();
+    Fixture {
+        store,
+        _dir: dir,
+        banned_author_ev,
+        allowed_ev,
+        banned_ev,
+        deleted_ev,
+        deleted_wrap,
+        vanished_ev,
+    }
+}
+
+/// Export → import carries the full management state in one stream:
+/// moderation snapshot, vanish points, deletion blocks — and the
+/// imported store behaves identically.
+#[test]
+fn export_import_carries_management_state() {
+    let f = managed_store();
+    let dump = export_bytes(&f.store);
+    assert!(
+        String::from_utf8_lossy(&dump).contains("{\"nosfry_state\":1,"),
+        "export lacks state lines"
+    );
+
+    let (_dir_b, b) = store();
+    let stats = import(
+        &b,
+        &EventLimits::default(),
+        None,
+        MAX_LINE,
+        Cursor::new(&dump),
+        false,
+        false,
+    )
+    .unwrap();
+    // 7 management entries (2 pubkeys, 1 event, 1 kind, 1 ip, 2 info
+    // fields) plus 1 vanish point.
+    assert_eq!(stats.state, 8, "{stats:?}");
+
+    assert_eq!(b.moderation().unwrap(), f.store.moderation().unwrap());
+    assert_eq!(b.vanish_points().unwrap(), f.store.vanish_points().unwrap());
+    assert_eq!(
+        export_bytes(&b),
+        dump,
+        "a second export must be byte-identical"
+    );
+
+    // The imported store behaves like the source: the banned author's
+    // stored events stay stored but a moderated scan hides them.
+    let gate = nosfry_core::auth::ReadGate::default()
+        .with_moderation(std::sync::Arc::new(b.moderation().unwrap()));
+    let mut emitted = Vec::new();
+    let mut scan = Scan::new(
+        std::sync::Arc::from([Filter::parse("{}").unwrap()]),
+        gate,
+        b.snapshot().unwrap(),
+        u64::MAX,
+        0,
+    );
+    loop {
+        let progress = scan
+            .step(&b, Duration::from_secs(1), &mut |_seq, json| {
+                emitted.push(json.to_owned());
+            })
+            .unwrap();
+        if progress == Progress::Done {
+            break;
+        }
+    }
+    let banned_id = format!("\"id\":\"{}\"", f.banned_author_ev.id());
+    assert!(
+        !emitted.iter().any(|json| json.contains(&banned_id)),
+        "banned author's event visible: {emitted:?}"
+    );
+    let allowed_id = format!("\"id\":\"{}\"", f.allowed_ev.id());
+    assert!(
+        emitted.iter().any(|json| json.contains(&allowed_id)),
+        "allowed author's event hidden: {emitted:?}"
+    );
+
+    // Rebuilt deletion blocks refuse the rewrites, the imported
+    // vanish point refuses the old event, and the banned id stays
+    // refused by moderation.
+    let outcomes = |events: &[std::sync::Arc<Event>]| b.write(events, None).unwrap().outcomes;
+    assert_eq!(
+        outcomes(std::slice::from_ref(&f.deleted_ev)).as_slice(),
+        [WriteOutcome::Deleted]
+    );
+    assert_eq!(
+        outcomes(std::slice::from_ref(&f.deleted_wrap)).as_slice(),
+        [WriteOutcome::Deleted]
+    );
+    assert_eq!(
+        outcomes(std::slice::from_ref(&f.vanished_ev)).as_slice(),
+        [WriteOutcome::Vanished]
+    );
+    assert_eq!(
+        b.moderation().unwrap().blocked_reason(&f.banned_ev),
+        Some("blocked: event banned")
+    );
+}
+
+/// `--events-only` emits no state lines; a stream containing them
+/// (default export) still round-trips.
+#[test]
+fn export_events_only_omits_state_lines() {
+    let f = managed_store();
+    let mut out = Vec::new();
+    export(&f.store, 0, u64::MAX, false, true, &mut out).unwrap();
+    assert!(
+        !String::from_utf8_lossy(&out).contains("nosfry_state"),
+        "events-only export has state lines"
+    );
+}
+
+/// A malformed, unknown-version, or out-of-vocabulary state line is a
+/// hard error naming the line — never a silent drop.
+#[test]
+fn import_refuses_bad_state_lines() {
+    let good = line(&event(&key(30), 1, 100, &json!([]), "ok"));
+    for (bad_line, needle) in [
+        (
+            "{\"nosfry_state\":2,\"method\":\"banpubkey\",\"params\":[]}",
+            "version 2",
+        ),
+        (
+            "{\"nosfry_state\":1,\"method\":\"listbannedpubkeys\",\"params\":[]}",
+            "listbannedpubkeys",
+        ),
+        (
+            "{\"nosfry_state\":1,\"method\":\"unbanpubkey\",\"params\":[]}",
+            "unbanpubkey",
+        ),
+        (
+            "{\"nosfry_state\":1,\"method\":\"vanish\",\"params\":[]}",
+            "params[0]",
+        ),
+        ("{\"nosfry_state\":", "malformed"),
+    ] {
+        let (_dir, b) = store();
+        let corpus = format!("{good}\n{bad_line}\n{good}");
+        let err = import(
+            &b,
+            &EventLimits::default(),
+            None,
+            MAX_LINE,
+            Cursor::new(corpus),
+            false,
+            false,
+        )
+        .unwrap_err();
+        match &err {
+            AdminError::State { line, reason } => {
+                assert_eq!(*line, 2, "{err}");
+                assert!(reason.contains(needle), "{err}");
+            }
+            other => panic!("expected AdminError::State, got {other}"),
+        }
+    }
 }

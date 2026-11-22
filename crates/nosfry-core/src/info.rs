@@ -108,6 +108,8 @@ pub struct Features {
     pub sync: bool,
     /// NIP-42 AUTH configured (`service_url` set).
     pub auth: bool,
+    /// NIP-59 gift wraps guarded (AUTH enabled, kind 1059 restricted).
+    pub gift_wrap: bool,
     /// NIP-86 management admins configured.
     pub management: bool,
 }
@@ -122,6 +124,9 @@ pub fn supported_nips(features: Features) -> Vec<u16> {
     }
     if features.sync {
         nips.push(77);
+    }
+    if features.gift_wrap {
+        nips.push(59);
     }
     if features.auth {
         nips.push(42);
@@ -141,13 +146,21 @@ pub fn supported_nips(features: Features) -> Vec<u16> {
 /// `pubkey`, `contact`, `icon`, `banner`, `self`, `terms_of_service`,
 /// and `privacy_policy` are omitted when empty; `name` stays
 /// unconditionally.
+///
+/// NIP-11 (11.md) calls `limitation.max_message_length` the maximum
+/// incoming JSON message / WebSocket frame size and says it
+/// "effectively limits the maximum size of any event". The value
+/// advertised here is `max_payload` capped at the largest allowed
+/// EVENT frame (`max_event_size + 10`): clients that read it as the
+/// event limit (MDK) get the truth and clients that read it as the
+/// frame limit get a safe value.
 #[must_use]
 pub fn document(
     info: &Info,
     moderation: &Moderation,
     features: Features,
     limits: &Limits,
-    max_message_length: usize,
+    max_payload: usize,
 ) -> String {
     let info = info.with_overrides(moderation);
     let nips = info
@@ -160,7 +173,7 @@ pub fn document(
         "software": "https://github.com/qntx/nosfry",
         "version": env!("CARGO_PKG_VERSION"),
         "limitation": {
-            "max_message_length": max_message_length,
+            "max_message_length": crate::limits::max_message_length(max_payload, &limits.event),
             "max_subscriptions": limits.req.max_subs_per_connection,
             "max_limit": limits.req.max_filter_limit,
             "default_limit": limits.req.max_filter_limit,
@@ -217,6 +230,28 @@ mod tests {
         .unwrap()
     }
 
+    /// NIP-11 (11.md): `limitation.max_message_length` is the
+    /// smaller of the payload cap and the largest allowed EVENT
+    /// frame — truthful under either client reading.
+    #[test]
+    fn limitation_max_message_length_is_truthful() {
+        let doc = doc(
+            &Info::default(),
+            &Moderation::default(),
+            Features::default(),
+        );
+        assert_eq!(doc["limitation"]["max_message_length"], 1_024);
+        let big: serde_json::Value = serde_json::from_str(&document(
+            &Info::default(),
+            &Moderation::default(),
+            Features::default(),
+            &Limits::default(),
+            131_072,
+        ))
+        .unwrap();
+        assert_eq!(big["limitation"]["max_message_length"], 65_546);
+    }
+
     #[test]
     fn empty_fields_are_omitted() {
         let doc = doc(
@@ -269,6 +304,7 @@ mod tests {
                 count: true,
                 sync: true,
                 auth: true,
+                gift_wrap: true,
                 management: true,
             },
         );
@@ -284,12 +320,42 @@ mod tests {
                 count: true,
                 sync: true,
                 auth: true,
+                gift_wrap: true,
                 management: true,
             },
         );
         assert_eq!(
             doc["supported_nips"],
-            json!([1, 9, 11, 40, 42, 45, 62, 70, 77, 86])
+            json!([1, 9, 11, 40, 42, 45, 59, 62, 70, 77, 86])
+        );
+    }
+
+    /// NIP-59 advertises only with `gift_wrap`; AUTH alone does not.
+    #[test]
+    fn gift_wrap_flag_controls_59() {
+        let auth_only = doc(
+            &Info::default(),
+            &Moderation::default(),
+            Features {
+                auth: true,
+                ..Features::default()
+            },
+        );
+        assert_eq!(
+            auth_only["supported_nips"],
+            json!([1, 9, 11, 40, 42, 62, 70])
+        );
+        let wraps_only = doc(
+            &Info::default(),
+            &Moderation::default(),
+            Features {
+                gift_wrap: true,
+                ..Features::default()
+            },
+        );
+        assert_eq!(
+            wraps_only["supported_nips"],
+            json!([1, 9, 11, 40, 59, 62, 70])
         );
     }
 

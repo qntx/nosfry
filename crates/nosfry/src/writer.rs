@@ -13,7 +13,7 @@ use tokio::sync::watch;
 
 use crate::Live;
 use crate::channels::{Batch, Out, Outbound, ShardMsg, WriteRequest, WriterMsg};
-use crate::metrics::{Metrics, StoreOp};
+use crate::metrics::{EventOutcome, Metrics, StoreOp};
 
 /// Events deleted per expiry sweep; a sweep hitting the cap keeps
 /// looping (without blocking on the inbox) until it clears.
@@ -230,7 +230,7 @@ fn write_batch(
         );
     }
     let vanish = written.vanish_pending;
-    let (batch, replies) = collect_batch(reqs, written, events);
+    let (batch, replies) = collect_batch(reqs, written, events, metrics);
     enqueue_batch(batch, shards);
     for (out, text) in replies {
         out.push(Out::Frame {
@@ -242,12 +242,14 @@ fn write_batch(
     vanish
 }
 
-/// A failed commit: count the error and answer every request
+/// A failed commit: count the store error plus one `error` outcome
+/// per request, and answer every request
 /// `OK false "error: internal error"`.
 fn write_failed(reqs: Vec<WriteRequest>, metrics: &Metrics, err: &nosfry_lmdb::StoreError) {
     metrics.store_error(StoreOp::Write);
     tracing::error!(%err, "store write failed");
     for req in reqs {
+        metrics.event_outcome(EventOutcome::Error);
         req.out.push(Out::Frame {
             sub: None,
             verb: RelayVerb::Ok,
@@ -275,11 +277,16 @@ fn enqueue_batch(batch: Batch, shards: &[mpsc::Sender<ShardMsg>]) {
 
 /// Split a commit's outcomes into the shard batch (`Stored` events
 /// minus the ones the same transaction deleted) and each request's
-/// serialized `OK` reply.
+/// serialized `OK` reply. Metrics count where the outcome is decided:
+/// `nostr_events_total` only for `Stored` (the strfry
+/// `EventWriteStatus::Written` rule — a `Stored` seq deleted by the
+/// same transaction was still persisted), `nosfry_event_outcomes_total`
+/// for every outcome.
 fn collect_batch(
     reqs: Vec<WriteRequest>,
     written: nosfry_lmdb::Written,
     events: Vec<Arc<nosfry_core::event::Event>>,
+    metrics: &Metrics,
 ) -> (Batch, Vec<(Outbound, String)>) {
     let mut batch = Vec::new();
     let mut replies = Vec::with_capacity(reqs.len());
@@ -287,12 +294,14 @@ fn collect_batch(
         .into_iter()
         .zip(written.outcomes.into_iter().zip(events))
     {
+        metrics.event_outcome(EventOutcome::of(outcome));
         let (accepted, message) = outcome.ok_reply();
         replies.push((req.out, ok_frame(&event.id(), accepted, message)));
-        if let WriteOutcome::Stored { seq } = outcome
-            && !written.deleted.contains(&seq)
-        {
-            batch.push((seq, event));
+        if let WriteOutcome::Stored { seq } = outcome {
+            metrics.event(u16::from(event.kind()));
+            if !written.deleted.contains(&seq) {
+                batch.push((seq, event));
+            }
         }
     }
     (batch, replies)
