@@ -65,6 +65,9 @@ struct ConnState {
     /// releases the charge, so a `Remove` for a refused or gone sub
     /// is a no-op.
     sub_bytes: Map<SubId, usize>,
+    /// Each REQ's scan snapshot: the live stream delivers only seqs
+    /// above it, so an event can never arrive both stored and live.
+    snapshots: Map<SubId, u64>,
 }
 
 /// One monitor shard's state: the monitor index, connection outbound
@@ -86,6 +89,9 @@ struct Shard {
     sub_charge: Arc<AtomicUsize>,
     /// `[relay] max_subscription_bytes_total` (`0` = unlimited).
     sub_budget: usize,
+    /// Re-read at `Register` so foreign writers on the same LMDB env
+    /// (a `nosfry sync`/`import` process) become visible to new scans.
+    store: Arc<Store>,
     last_seq: u64,
     hits: Vec<(ConnId, SubKey)>,
 }
@@ -126,7 +132,7 @@ fn release_sub(state: &mut ConnState, sub_id: &SubId, charge: &AtomicUsize) {
 
 impl Shard {
     fn new(
-        store: &Store,
+        store: &Arc<Store>,
         readers: Arc<[ReaderInbox]>,
         sub_charge: Arc<AtomicUsize>,
         sub_budget: usize,
@@ -140,6 +146,7 @@ impl Shard {
             sub_charge,
             sub_budget,
             last_seq: store.snapshot().unwrap_or(0),
+            store: Arc::clone(store),
             hits: Vec::new(),
         }
     }
@@ -150,7 +157,10 @@ impl Shard {
             ShardMsg::Register(mut start) => {
                 // The snapshot is assigned before the Start is queued
                 // on the reader, so a `Cancel` forwarded later can
-                // never overtake it.
+                // never overtake it. Seqs committed by another process
+                // on the same env never arrive via `Batch`, so re-read
+                // the store here.
+                self.last_seq = self.last_seq.max(self.store.snapshot().unwrap_or(0));
                 start.snapshot = self.last_seq;
                 self.register(start);
             }
@@ -209,11 +219,11 @@ impl Shard {
             ShardMsg::Batch(batch) => {
                 for (seq, event) in batch.iter() {
                     self.last_seq = self.last_seq.max(*seq);
-                    self.deliver(event);
+                    self.deliver(event, Some(*seq));
                 }
             }
             ShardMsg::Ephemeral(event) => {
-                self.deliver(&event);
+                self.deliver(&event, None);
             }
         }
     }
@@ -329,6 +339,7 @@ impl Shard {
             if let Some(pending) = state.pending.remove(sub_id) {
                 state.out.unreserve(pending.reserved);
             }
+            state.snapshots.remove(sub_id);
             release_sub(state, sub_id, &self.sub_charge);
         }
     }
@@ -355,6 +366,7 @@ impl Shard {
                 out: start.out.clone(),
                 pending: map(),
                 sub_bytes: map(),
+                snapshots: map(),
             });
         // A re-REQ arrives as Remove + Register, but releasing an
         // old charge on insert keeps the accounting right for a
@@ -373,6 +385,9 @@ impl Shard {
         ) {
             state.out.unreserve(old.reserved);
         }
+        state
+            .snapshots
+            .insert(start.sub.id.clone(), start.snapshot);
         self.monitors.insert(
             start.conn,
             start.sub.clone(),
@@ -382,8 +397,10 @@ impl Shard {
         true
     }
 
-    /// Match the event against the monitor index and route each hit.
-    fn deliver(&mut self, event: &Arc<Event>) {
+    /// Match the event against the monitor index and route each hit;
+    /// `seq` is `Some` for stored [`Batch`] events and `None` for
+    /// ephemeral ones, which always deliver.
+    fn deliver(&mut self, event: &Arc<Event>, seq: Option<u64>) {
         self.monitors.matches(event.packed(), &mut self.hits);
         let Self {
             monitors,
@@ -396,7 +413,7 @@ impl Shard {
             let Some(state) = conns.get_mut(&conn) else {
                 continue;
             };
-            route_hit(monitors, state, conn, sub, event, sub_charge);
+            route_hit(monitors, state, conn, sub, event, seq, sub_charge);
         }
     }
 }
@@ -410,8 +427,14 @@ fn route_hit(
     conn: ConnId,
     sub: SubKey,
     event: &Arc<Event>,
+    seq: Option<u64>,
     sub_charge: &AtomicUsize,
 ) {
+    // Exactly-once: a seq at or under the sub's REQ snapshot was (or
+    // will be) returned by its stored scan — live delivery skips it.
+    if seq.is_some_and(|s| s <= state.snapshots.get(&sub.id).copied().unwrap_or(0)) {
+        return;
+    }
     let Some(pending) = state.pending.get_mut(&sub.id) else {
         state.out.push(Out::Event {
             sub,
@@ -440,6 +463,7 @@ fn route_hit(
     if let Some(bytes) = state.sub_bytes.remove(&sub.id) {
         release(sub_charge, bytes);
     }
+    state.snapshots.remove(&sub.id);
     monitors.remove(conn, &sub.id);
 }
 
@@ -461,20 +485,21 @@ fn flush(out: &Outbound, sub_id: &SubId, pending: PendingSub) {
     }
 }
 
-/// Shard thread main loop. `last_seq` starts at the store snapshot —
-/// every later seq arrives only via [`ShardMsg::Batch`]. `readers` is
-/// the routing table the shard forwards scan control into;
+/// Shard thread main loop. `last_seq` starts at the store snapshot,
+/// is re-read on every `Register` so foreign writers become visible,
+/// and otherwise advances via [`ShardMsg::Batch`]. `readers` is the
+/// routing table the shard forwards scan control into;
 /// `sub_charge`/`sub_budget` are the process-wide live-subscription
 /// byte accounting the shards share.
 pub(crate) fn run(
-    store: &Store,
+    store: &Arc<Store>,
     mut rx: mpsc::Receiver<ShardMsg>,
     readers: Arc<[ReaderInbox]>,
     sub_charge: Arc<AtomicUsize>,
     sub_budget: usize,
     metrics: Arc<Metrics>,
 ) {
-    let mut shard = Shard::new(store, readers, sub_charge, sub_budget, metrics);
+    let mut shard = Shard::new(&store, readers, sub_charge, sub_budget, metrics);
     while let Some(msg) = rx.blocking_recv() {
         shard.handle(msg);
     }
@@ -571,7 +596,7 @@ mod tests {
         tempfile::TempDir,
     ) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let store = Arc::new(Store::open(dir.path(), &StoreOptions::default()).unwrap());
         let (readers, rx, jobs) = readers(cap);
         (
             Shard::new(
@@ -592,7 +617,7 @@ mod tests {
     #[test]
     fn stale_activate_does_not_flush_new_generation() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let store = Arc::new(Store::open(dir.path(), &StoreOptions::default()).unwrap());
         let (readers, _reader_rx, _jobs) = readers(8);
         let mut shard = Shard::new(
             &store,
@@ -657,7 +682,7 @@ mod tests {
     #[test]
     fn register_starts_scan_at_current_snapshot() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let store = Arc::new(Store::open(dir.path(), &StoreOptions::default()).unwrap());
         let (readers, reader_rx, _jobs) = readers(8);
         let mut shard = Shard::new(
             &store,
@@ -687,13 +712,75 @@ mod tests {
         }
     }
 
+    /// A writer on the same env but outside this process — `nosfry
+    /// sync` or `import` — commits seqs the shard never sees in a
+    /// `Batch`: the snapshot re-read at `Register` makes them
+    /// visible to the new REQ's stored scan, and the per-sub
+    /// snapshot check keeps the late `Batch` from delivering them
+    /// a second time.
+    #[test]
+    fn foreign_writes_visible_once() {
+        use nosfry_core::url::RelayNames;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(dir.path(), &StoreOptions::default()).unwrap());
+        let (readers, _reader_rx, _jobs) = readers(8);
+        let mut shard = Shard::new(
+            &store,
+            readers,
+            Arc::new(AtomicUsize::new(0)),
+            0,
+            Arc::new(Metrics::new()),
+        );
+        // `old` registers before the foreign write: snapshot 0.
+        let (out_old, out_old_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
+        shard.handle(req(1, "old", 1, &out_old));
+        // A foreign writer commits seq 1 without a `Batch`.
+        let foreign = event(1, "foreign");
+        store
+            .write(&[Arc::clone(&foreign)], &RelayNames::default())
+            .unwrap();
+        // `new` registers after: its snapshot covers seq 1.
+        let (out_new, out_new_rx) = Outbound::new(1 << 20, Arc::new(AtomicUsize::new(0)));
+        shard.handle(req(2, "new", 1, &out_new));
+        // Both subscriptions go live.
+        shard.handle(ShardMsg::Activate {
+            conn: 1,
+            sub: sub_key("old", 1),
+        });
+        shard.handle(ShardMsg::Activate {
+            conn: 2,
+            sub: sub_key("new", 1),
+        });
+        // The foreign seq's `Batch` arrives late, plus a newer one.
+        let newer = event(1, "newer");
+        let batch: crate::channels::Batch = vec![
+            (1, Arc::clone(&foreign)),
+            (2, Arc::clone(&newer)),
+        ];
+        shard.handle(ShardMsg::Batch(Arc::new(batch)));
+        // The ephemeral has no seq: both subs take it.
+        let eph = event(1, "ephemeral");
+        shard.handle(ShardMsg::Ephemeral(Arc::clone(&eph)));
+        let mut old_ids = Vec::new();
+        while let Some(Out::Event { event, .. }) = out_old_rx.try_recv() {
+            old_ids.push(event.id());
+        }
+        assert_eq!(old_ids, vec![foreign.id(), newer.id(), eph.id()]);
+        let mut new_ids = Vec::new();
+        while let Some(Out::Event { event, .. }) = out_new_rx.try_recv() {
+            new_ids.push(event.id());
+        }
+        assert_eq!(new_ids, vec![newer.id(), eph.id()]);
+    }
+
     /// `Register` then `Remove` must reach the reader as `Start` then
     /// `Cancel` in that order — the FIFO channel keeps a fast REQ+CLOSE
     /// from spawning a scan after its cancel.
     #[test]
     fn register_then_remove_orders_start_before_cancel() {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let store = Arc::new(Store::open(dir.path(), &StoreOptions::default()).unwrap());
         let (readers, reader_rx, _jobs) = readers(8);
         let mut shard = Shard::new(
             &store,
@@ -771,7 +858,7 @@ mod tests {
         tempfile::TempDir,
     ) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let store = Arc::new(Store::open(dir.path(), &StoreOptions::default()).unwrap());
         let (readers, reader_rx, _jobs) = readers(8);
         let charge = Arc::new(AtomicUsize::new(0));
         (
@@ -1072,7 +1159,7 @@ mod tests {
         tempfile::TempDir,
     ) {
         let dir = tempfile::tempdir().unwrap();
-        let store = Store::open(dir.path(), &StoreOptions::default()).unwrap();
+        let store = Arc::new(Store::open(dir.path(), &StoreOptions::default()).unwrap());
         // Capacity 1, already occupied by an unrelated message.
         let (readers, rx, jobs) = readers(1);
         readers[0]
