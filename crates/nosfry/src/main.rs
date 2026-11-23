@@ -3,6 +3,9 @@
     unused_crate_dependencies,
     reason = "the binary uses only the thin-cli subset of the package's dependencies"
 )]
+// `run` awaits `nosfry::sync::run`; proving its future `Send` walks
+// Arti's `TorClient::connect` type graph (see the library root).
+#![cfg_attr(feature = "onion", recursion_limit = "256")]
 
 use std::io::Write;
 use std::path::{Path, PathBuf};

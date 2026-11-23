@@ -103,15 +103,15 @@ running listeners and logs `relay.listen` among the ignored restart-only keys. S
 
 ### `[relay.onion]`
 
-Settings of the embedded onion service — used only by `onion:`
-listeners, which need a build with `--features onion`. The derived
-`ws://<addr>.onion` URLs act as the relay's name: with an empty
-`service_url` the first is the canonical URL, otherwise all are
-aliases.
+Settings of the embedded onion service — used by `onion:` listeners
+and by `nosfry sync` dialing a `.onion` peer, both of which need a
+build with `--features onion`. The derived `ws://<addr>.onion` URLs
+act as the relay's name: with an empty `service_url` the first is the
+canonical URL, otherwise all are aliases.
 
 | Key                                   | Default           | Reload  | Meaning                                                                                                                                                 |
 | ------------------------------------- | ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `relay.onion.state_dir`               | `"./nosfry-onion"` | restart | Arti state root (`state/` with the service keystores, `cache/` beneath it). A missing directory is created with mode 0700; an existing one must already be mode 0700. |
+| `relay.onion.state_dir`               | `"./nosfry-onion"` | restart | Arti state root (`state/` with the service keystores, `cache/` beneath it). A missing directory is created with mode 0700; an existing one must already be mode 0700. `nosfry sync` shares it for `.onion` peers (read-only next to a running relay). |
 | `relay.onion.max_circuits`            | `256`             | restart | Concurrent rendezvous circuits per onion listener, including ones being established; further introductions are dropped.                                   |
 | `relay.onion.max_streams_per_circuit` | `128`             | restart | Streams a client may open on one circuit before Arti closes it; a client multiplexes all its connections onto that circuit.   |                                                                                         |
 | `relay.onion.intro_rate`              | `0`               | restart | Introduction rate limit announced to the intro points (requests per second); `0` = unset, and then `intro_burst` must be `0` too.                        |

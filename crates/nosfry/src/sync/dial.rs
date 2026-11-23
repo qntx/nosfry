@@ -1,14 +1,17 @@
 //! Resolve and vet a peer URL, then dial it into a byte stream.
 //!
-//! This is the seam a later onion (Arti) or iroh dialer plugs into:
-//! everything after [`dial`] is generic over `S: AsyncRead +
-//! AsyncWrite`. Only `ws://`/`wss://` are supported; user info is
-//! refused (it would leak into logs); `.onion` is refused outright —
-//! there is no Tor dialer yet and a clearnet DNS lookup would leak
-//! the address. Every resolved address must be globally routable
-//! unless `--allow-private` admits loopback, RFC 1918, CGNAT,
-//! link-local and unique-local addresses; unspecified, multicast and
-//! broadcast addresses are always refused.
+//! This is the seam a later iroh dialer plugs into: everything after
+//! [`Dialer::dial`] is generic over `S: AsyncRead + AsyncWrite`. Only
+//! `ws://`/`wss://` are supported; user info is refused (it would
+//! leak into logs). A `.onion` host never resolves over clearnet
+//! DNS — that would leak the address — and needs the `onion` cargo
+//! feature: then only `ws://` (the circuit already encrypts and
+//! authenticates the service) with a v3 address as the label before
+//! `.onion` is admitted, and `Route::Onion` is dialed through the
+//! embedded Arti client. Every resolved address must be globally
+//! routable unless `--allow-private` admits loopback, RFC 1918,
+//! CGNAT, link-local and unique-local addresses; unspecified,
+//! multicast and broadcast addresses are always refused.
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -26,9 +29,11 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use url::Url;
 
 use super::SyncError;
+#[cfg(feature = "onion")]
+use super::tor;
 
-/// A resolved, vetted dial target: the parsed URL plus the exact
-/// addresses the connection may use (no second resolution happens).
+/// A resolved, vetted dial target: the parsed URL plus the route the
+/// connection must take (no second resolution happens).
 #[derive(Debug)]
 pub(crate) struct Target {
     /// The URL as parsed — the WebSocket handshake and NIP-11 read it.
@@ -37,8 +42,19 @@ pub(crate) struct Target {
     pub(crate) host: String,
     /// Whether to wrap the stream in TLS (`wss://`).
     pub(crate) tls: bool,
-    /// Vetted addresses, in resolution order.
-    pub(crate) addrs: Vec<SocketAddr>,
+    /// How to reach the peer.
+    pub(crate) route: Route,
+}
+
+/// How a vetted target is reached.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    /// Vetted clearnet addresses, in resolution order.
+    Tcp(Vec<SocketAddr>),
+    /// An embedded onion service, dialed through Arti — never a
+    /// clearnet lookup (the `onion` cargo feature).
+    #[cfg(feature = "onion")]
+    Onion,
 }
 
 /// How an address classifies for dialing.
@@ -131,14 +147,64 @@ const fn classify(ip: IpAddr) -> Scope {
     }
 }
 
+/// `.onion` hosts without the `onion` feature: refuse, naming it.
+/// A clearnet lookup must never happen for one — it would leak the
+/// address — so this runs before any resolution.
+#[cfg(not(feature = "onion"))]
+fn resolve_onion(_: &Url, _: String) -> Result<Target, SyncError> {
+    Err(SyncError::Url(
+        "onion URLs need nosfry built with the `onion` cargo feature".to_owned(),
+    ))
+}
+
+/// An `.onion` target: `ws://` only (the circuit already encrypts
+/// and authenticates the service) and the label before `.onion` must
+/// be a v3 address — 56 base32 characters, any subdomain labels
+/// before it kept for Tor's vhosting. Never a DNS lookup.
+#[cfg(feature = "onion")]
+fn resolve_onion(parsed: &Url, host: String) -> Result<Target, SyncError> {
+    if parsed.scheme() != "ws" {
+        return Err(SyncError::Url(
+            "refusing wss:// for an onion service: the circuit already encrypts \
+             and authenticates it; use ws://"
+                .to_owned(),
+        ));
+    }
+    let label = host
+        .trim_end_matches('.')
+        .to_ascii_lowercase()
+        .strip_suffix(".onion")
+        .and_then(|rest| rest.rsplit('.').next().map(str::to_owned));
+    let valid = label.is_some_and(|label| {
+        label.len() == 56
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || (b'2'..=b'7').contains(&b))
+    });
+    if !valid {
+        return Err(SyncError::Url(
+            "the label before .onion must be a v3 address (56 base32 characters)".to_owned(),
+        ));
+    }
+    if parsed.port_or_known_default().is_none() {
+        return Err(SyncError::Url("the peer URL has no port".to_owned()));
+    }
+    Ok(Target {
+        url: parsed.clone(),
+        host,
+        tls: false,
+        route: Route::Onion,
+    })
+}
+
 /// Parse `url`, resolve it, and vet every address. Errors name the
 /// rule that fired.
 ///
 /// # Errors
 ///
 /// [`SyncError::Url`] on a non-`ws`/`wss` scheme, user info, an
-/// `.onion` host, a resolution failure, an empty answer, or an
-/// address class the flags do not admit.
+/// `.onion` host the build cannot dial, a resolution failure, an
+/// empty answer, or an address class the flags do not admit.
 pub(crate) async fn resolve(url: &str, allow_private: bool) -> Result<Target, SyncError> {
     // Never echo the raw URL into an error: it may carry credentials
     // or junk. `url::ParseError` messages are fixed strings.
@@ -163,9 +229,7 @@ pub(crate) async fn resolve(url: &str, allow_private: bool) -> Result<Target, Sy
     };
     let onion = host.trim_end_matches('.');
     if onion.eq_ignore_ascii_case("onion") || onion.to_ascii_lowercase().ends_with(".onion") {
-        return Err(SyncError::Url(
-            "onion dialing is not supported yet (a follow-up adds it)".to_owned(),
-        ));
+        return resolve_onion(&parsed, host);
     }
     let port = parsed
         .port_or_known_default()
@@ -207,18 +271,21 @@ pub(crate) async fn resolve(url: &str, allow_private: bool) -> Result<Target, Sy
         url: parsed,
         host,
         tls,
-        addrs,
+        route: Route::Tcp(addrs),
     })
 }
 
-/// A dialed byte stream, TLS or plain. Everything downstream is
-/// generic over `AsyncRead + AsyncWrite`.
+/// A dialed byte stream, TLS, plain, or over Tor. Everything
+/// downstream is generic over `AsyncRead + AsyncWrite`.
 #[derive(Debug)]
 pub(crate) enum Stream {
     /// `ws://`.
     Plain(TcpStream),
     /// `wss://` — boxed so the enum stays small.
     Tls(Box<TlsStream<TcpStream>>),
+    /// `ws://<v3>.onion` — Arti's stream, boxed like `Tls`.
+    #[cfg(feature = "onion")]
+    Onion(Box<arti_client::DataStream>),
 }
 
 impl AsyncRead for Stream {
@@ -230,6 +297,8 @@ impl AsyncRead for Stream {
         match self.get_mut() {
             Self::Plain(s) => Pin::new(s).poll_read(cx, buf),
             Self::Tls(s) => Pin::new(&mut **s).poll_read(cx, buf),
+            #[cfg(feature = "onion")]
+            Self::Onion(s) => Pin::new(&mut **s).poll_read(cx, buf),
         }
     }
 }
@@ -243,6 +312,8 @@ impl AsyncWrite for Stream {
         match self.get_mut() {
             Self::Plain(s) => Pin::new(s).poll_write(cx, buf),
             Self::Tls(s) => Pin::new(&mut **s).poll_write(cx, buf),
+            #[cfg(feature = "onion")]
+            Self::Onion(s) => Pin::new(&mut **s).poll_write(cx, buf),
         }
     }
 
@@ -250,6 +321,8 @@ impl AsyncWrite for Stream {
         match self.get_mut() {
             Self::Plain(s) => Pin::new(s).poll_flush(cx),
             Self::Tls(s) => Pin::new(&mut **s).poll_flush(cx),
+            #[cfg(feature = "onion")]
+            Self::Onion(s) => Pin::new(&mut **s).poll_flush(cx),
         }
     }
 
@@ -257,6 +330,8 @@ impl AsyncWrite for Stream {
         match self.get_mut() {
             Self::Plain(s) => Pin::new(s).poll_shutdown(cx),
             Self::Tls(s) => Pin::new(&mut **s).poll_shutdown(cx),
+            #[cfg(feature = "onion")]
+            Self::Onion(s) => Pin::new(&mut **s).poll_shutdown(cx),
         }
     }
 
@@ -268,6 +343,8 @@ impl AsyncWrite for Stream {
         match self.get_mut() {
             Self::Plain(s) => Pin::new(s).poll_write_vectored(cx, bufs),
             Self::Tls(s) => Pin::new(&mut **s).poll_write_vectored(cx, bufs),
+            #[cfg(feature = "onion")]
+            Self::Onion(s) => Pin::new(&mut **s).poll_write_vectored(cx, bufs),
         }
     }
 
@@ -275,6 +352,8 @@ impl AsyncWrite for Stream {
         match self {
             Self::Plain(s) => s.is_write_vectored(),
             Self::Tls(s) => s.is_write_vectored(),
+            #[cfg(feature = "onion")]
+            Self::Onion(s) => s.is_write_vectored(),
         }
     }
 }
@@ -289,6 +368,90 @@ fn tls_config() -> Arc<ClientConfig> {
     Arc::new(config)
 }
 
+/// One `sync` run's dialer: clearnet targets direct, `.onion`
+/// targets over a single Arti client bootstrapped on first use and
+/// shared by both connections of the run (NIP-11, then the
+/// WebSocket).
+pub(crate) struct Dialer {
+    /// `[relay.onion]` — the shared Arti state root.
+    #[cfg(feature = "onion")]
+    onion: crate::config::Onion,
+    /// The lazily bootstrapped Tor client; a failed bootstrap leaves
+    /// the cell empty so the next dial retries it.
+    #[cfg(feature = "onion")]
+    tor: tokio::sync::OnceCell<Arc<crate::onion::Client>>,
+}
+
+// `TorClient` has no `Debug`; show whether the lazy client exists.
+impl std::fmt::Debug for Dialer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        #[cfg(feature = "onion")]
+        return f
+            .debug_struct("Dialer")
+            .field("onion", &self.onion)
+            .field("tor_bootstrapped", &self.tor.initialized())
+            .finish();
+        #[cfg(not(feature = "onion"))]
+        f.debug_struct("Dialer").finish()
+    }
+}
+
+impl Dialer {
+    /// A dialer whose `.onion` targets ride the Arti state under
+    /// `onion.state_dir` — the same `state/`/`cache/` pair the relay's
+    /// onion listeners use (see `tor`'s module docs).
+    #[cfg(feature = "onion")]
+    pub(crate) fn new(onion: &crate::config::Onion) -> Self {
+        Self {
+            onion: onion.clone(),
+            tor: tokio::sync::OnceCell::new(),
+        }
+    }
+
+    /// TCP-only dialer: `.onion` targets never reach it (`resolve`
+    /// refused them without the `onion` feature).
+    #[cfg(not(feature = "onion"))]
+    pub(crate) const fn new(_: &crate::config::Onion) -> Self {
+        Self {}
+    }
+
+    /// Dial the vetted target into a byte stream.
+    ///
+    /// # Errors
+    ///
+    /// [`SyncError::Connect`] when every candidate fails within
+    /// `timeout`, the TLS handshake fails, or the Tor client
+    /// bootstrap/stream open fails.
+    #[cfg_attr(
+        not(feature = "onion"),
+        allow(
+            clippy::unused_self,
+            reason = "the Tor client is a feature-gated field"
+        )
+    )]
+    pub(crate) async fn dial(
+        &self,
+        target: &Target,
+        timeout: Duration,
+    ) -> Result<Stream, SyncError> {
+        match &target.route {
+            Route::Tcp(addrs) => dial_tcp(target, addrs, timeout)
+                .await
+                .map_err(|err| SyncError::Connect(err.to_string())),
+            #[cfg(feature = "onion")]
+            Route::Onion => {
+                let client = self
+                    .tor
+                    .get_or_try_init(|| tor::client(&self.onion))
+                    .await?;
+                let port = target.url.port_or_known_default().unwrap_or(80);
+                let stream = tor::connect(client, target.host.clone(), port, timeout).await?;
+                Ok(Stream::Onion(Box::new(stream)))
+            }
+        }
+    }
+}
+
 /// Connect to the vetted addresses in order, `TCP_NODELAY` on, TLS
 /// with SNI when `target.tls`. The last failure is returned.
 ///
@@ -296,10 +459,10 @@ fn tls_config() -> Arc<ClientConfig> {
 ///
 /// `io::Error` when every address fails to connect within `timeout`
 /// (in total, not per address) or the TLS handshake fails.
-pub(crate) async fn dial(target: &Target, timeout: Duration) -> io::Result<Stream> {
+async fn dial_tcp(target: &Target, addrs: &[SocketAddr], timeout: Duration) -> io::Result<Stream> {
     let tcp = tokio::time::timeout(timeout, async {
         let mut last = io::Error::new(io::ErrorKind::HostUnreachable, "no addresses");
-        for addr in &target.addrs {
+        for addr in addrs {
             match TcpStream::connect(addr).await {
                 Ok(stream) => return Ok(stream),
                 Err(err) => last = err,
@@ -458,13 +621,82 @@ mod tests {
         for (url, want) in [
             ("http://relay.example.com", "scheme"),
             ("ws://user:pw@relay.example.com", "user info"),
-            ("ws://relay.onion", "onion"),
-            ("ws://abcxyz.onion:8080", "onion"),
-            ("wss://RELAY.ONION.", "onion"), // trailing dot fails .onion suffix? — see below
         ] {
             let err = resolve(url, true).await.err().unwrap().to_string();
             assert!(err.contains(want), "{url} → {err}");
         }
+    }
+
+    #[cfg(not(feature = "onion"))]
+    #[tokio::test]
+    async fn resolve_onion_needs_the_feature() {
+        for url in [
+            "ws://onion",
+            "ws://relay.onion",
+            "ws://abcxyz.onion:8080",
+            "wss://RELAY.ONION.",
+        ] {
+            let err = resolve(url, true).await.err().unwrap().to_string();
+            assert!(err.contains("`onion` cargo feature"), "{url} → {err}");
+        }
+    }
+
+    #[cfg(feature = "onion")]
+    #[tokio::test]
+    async fn resolve_onion_targets() {
+        // A valid v3 host routes over Arti: default and explicit
+        // port, uppercase, and a subdomain label (Tor vhosting).
+        let v3 = "a".repeat(56);
+        for url in [
+            format!("ws://{v3}.onion"),
+            format!("ws://{v3}.onion:8080"),
+            format!("ws://{}.ONION", v3.to_ascii_uppercase()),
+            format!("ws://sub.{v3}.onion"),
+        ] {
+            let target = resolve(&url, false).await.unwrap();
+            assert!(matches!(target.route, Route::Onion), "{url}");
+            assert!(!target.tls, "{url}");
+        }
+        let target = resolve(&format!("ws://{v3}.onion"), false).await.unwrap();
+        assert_eq!(target.host, format!("{v3}.onion"));
+        for (url, want) in [
+            // wss adds nothing: the circuit authenticates the service.
+            (format!("wss://{v3}.onion"), "wss"),
+            // A short or invalid label is not a v3 address.
+            ("ws://onion".to_owned(), "v3"),
+            ("ws://abcxyz.onion".to_owned(), "v3"),
+            ("ws://relay.onion".to_owned(), "v3"),
+            (format!("ws://{}.onion", "0".repeat(56)), "v3"),
+        ] {
+            let err = resolve(&url, true).await.err().unwrap().to_string();
+            assert!(err.contains(want), "{url} → {err}");
+        }
+    }
+
+    /// `prepare_state_dir` refuses a state dir group/others can read
+    /// — the `Dialer` surfaces it as `SyncError` before the client is
+    /// built or any network work happens.
+    #[cfg(all(feature = "onion", unix))]
+    #[tokio::test]
+    async fn dialer_refuses_an_open_state_dir() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let onion = crate::config::Onion {
+            state_dir: dir.path().join("state"),
+            ..Default::default()
+        };
+        std::fs::create_dir(&onion.state_dir).unwrap();
+        std::fs::set_permissions(&onion.state_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let target = resolve(&format!("ws://{}.onion", "a".repeat(56)), false)
+            .await
+            .unwrap();
+        let err = Dialer::new(&onion)
+            .dial(&target, Duration::from_secs(5))
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(err.contains("mode 755"), "{err}");
     }
 
     #[tokio::test]
@@ -472,13 +704,16 @@ mod tests {
         // Loopback literal needs --allow-private.
         assert!(resolve("ws://127.0.0.1:7777", false).await.is_err());
         let target = resolve("ws://127.0.0.1:7777", true).await.unwrap();
-        assert_eq!(target.addrs, vec!["127.0.0.1:7777".parse().unwrap()]);
+        assert_eq!(
+            target.route,
+            Route::Tcp(vec!["127.0.0.1:7777".parse().unwrap()])
+        );
         assert!(!target.tls);
         assert_eq!(target.host, "127.0.0.1");
         // v6 literal.
         let v6 = resolve("wss://[::1]", true).await.unwrap();
         assert!(v6.tls);
-        assert_eq!(v6.addrs, vec!["[::1]:443".parse().unwrap()]);
+        assert_eq!(v6.route, Route::Tcp(vec!["[::1]:443".parse().unwrap()]));
         // A global literal needs no flag.
         assert!(resolve("ws://8.8.8.8:80", false).await.is_ok());
         // Unspecified and multicast are refused even with the flag.

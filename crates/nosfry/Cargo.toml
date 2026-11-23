@@ -62,18 +62,19 @@ sha2.workspace       = true
 tempfile.workspace   = true
 
 [features]
-onion = ["dep:arti-client", "dep:tor-hsservice", "dep:tor-cell", "dep:tor-proto", "dep:tor-keymgr", "dep:tor-rtcompat", "dep:safelog"]
-# Test-only: the Tor client the network test and the bridge example dial
-# the onion listener through (precedent: nosfry-core's "test-util").
-onion-e2e = ["onion", "arti-client/onion-service-client"]
+onion = ["dep:arti-client", "dep:tor-hsservice", "dep:tor-cell", "dep:tor-proto", "dep:tor-keymgr", "dep:tor-rtcompat", "dep:safelog", "arti-client/onion-service-client"]
 
 [[test]]
 name              = "onion"
-required-features = ["onion-e2e"]
+required-features = ["onion"]
+
+[[test]]
+name              = "onion_sync"
+required-features = ["onion"]
 
 [[example]]
 name              = "onion_bridge"
-required-features = ["onion-e2e"]
+required-features = ["onion"]
 
 [lints]
 workspace = true

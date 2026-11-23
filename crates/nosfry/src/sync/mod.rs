@@ -15,6 +15,8 @@ mod dial;
 mod engine;
 mod ingest;
 mod nip11;
+#[cfg(feature = "onion")]
+mod tor;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -277,8 +279,12 @@ fn validate(opts: &SyncOptions, limits: &nosfry_core::limits::Limits) -> Result<
 
 /// Fetch NIP-11 limits on their own connection. Every failure warns
 /// and falls back to the protocol defaults.
-async fn peer_limits(target: &dial::Target, timeout: Duration) -> nosfry_core::client::PeerLimits {
-    let peer = try_fetch(target, timeout).await.unwrap_or_default();
+async fn peer_limits(
+    dialer: &dial::Dialer,
+    target: &dial::Target,
+    timeout: Duration,
+) -> nosfry_core::client::PeerLimits {
+    let peer = try_fetch(dialer, target, timeout).await.unwrap_or_default();
     if peer
         .supported_nips
         .as_ref()
@@ -291,10 +297,11 @@ async fn peer_limits(target: &dial::Target, timeout: Duration) -> nosfry_core::c
 
 /// One best-effort NIP-11 fetch; a failure logs why and yields `None`.
 async fn try_fetch(
+    dialer: &dial::Dialer,
     target: &dial::Target,
     timeout: Duration,
 ) -> Option<nosfry_core::client::PeerLimits> {
-    let io = match dial::dial(target, timeout).await {
+    let io = match dialer.dial(target, timeout).await {
         Ok(io) => io,
         Err(err) => {
             tracing::warn!(%err, "NIP-11 dial failed; assuming default peer limits");
@@ -347,11 +354,10 @@ pub async fn run(
         );
     }
     let target = dial::resolve(&opts.url, opts.allow_private).await?;
-    let peer = peer_limits(&target, opts.timeout).await;
+    let dialer = dial::Dialer::new(&config.relay.onion);
+    let peer = peer_limits(&dialer, &target, opts.timeout).await;
     let frame_limit = nosfry_core::client::neg_frame_limit(peer.max_message_length)?;
-    let io = dial::dial(&target, opts.timeout)
-        .await
-        .map_err(|err| SyncError::Connect(err.to_string()))?;
+    let io = dialer.dial(&target, opts.timeout).await?;
     let options = yawc::Options::default()
         .with_max_payload_read(MAX_PAYLOAD_READ)
         .with_balanced_compression();

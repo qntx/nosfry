@@ -160,13 +160,42 @@ Without a key, a remote that requires authentication ends the run with
 exit code 1. Events the remote serves only to authenticated readers (for
 example direct messages addressed to the key) are synced only with the key.
 
+## Syncing over Tor
+
+A `ws://<addr>.onion` peer syncs through an embedded Arti client when
+nosfry was built with the `onion` cargo feature — the `-onion` release
+archives and images, or `cargo install nosfry --locked --features onion`
+(see `guides/tor.md`). Other builds refuse the URL with
+`onion URLs need nosfry built with the 'onion' cargo feature`.
+
+```bash
+nosfry sync ws://<56-character v3 address>.onion --dir both
+```
+
+The Arti client shares `[relay.onion] state_dir` with the onion
+listeners: one guard set per installation, and a directory cache a
+running relay keeps warm. When a relay is already running on the same
+configuration, Arti's own lock files make the sync's client read the
+shared state and cache without writing — `nosfry sync` already runs as
+the relay's user to open the LMDB store, so the mode-0700 directory is
+readable. A cold bootstrap can take up to 180 seconds downloading the
+consensus (a warm one takes seconds); each connection then waits at most
+`--timeout` seconds. Failures say `tor bootstrap timed out`,
+`tor bootstrap failed`, `onion connect timed out` or
+`onion connect failed`.
+
 ## Which URLs are accepted
 
 - Only `ws://` and `wss://`. `wss://` verifies the certificate against the
   Mozilla root store bundled in the binary.
 - No user name or password in the URL; use NIP-42 for authentication.
-- `.onion` addresses are refused: there is no Tor dialer yet, and a
-  clearnet lookup would leak the address.
+- `.onion` addresses never resolve over clearnet DNS — that would leak
+  the address. With the `onion` cargo feature a `ws://` URL whose label
+  before `.onion` is a 56-character v3 address (subdomain labels allowed)
+  is dialed through Arti (see [Syncing over Tor](#syncing-over-tor));
+  `wss://` is refused because the circuit already encrypts and
+  authenticates the service, and `--allow-private` is irrelevant. Without
+  the feature every `.onion` URL is refused.
 - Every address the name resolves to must be publicly routable. Loopback
   (`127.0.0.1`, `::1`, `localhost`), private (RFC 1918, `fc00::/7`),
   shared (`100.64.0.0/10`) and link-local addresses need
