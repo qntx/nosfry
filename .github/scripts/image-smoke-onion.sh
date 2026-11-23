@@ -12,11 +12,9 @@ set -euo pipefail
 image="${1:?usage: image-smoke-onion.sh <image> <version>}"
 version="${2:?usage: image-smoke-onion.sh <image> <version>}"
 cid=""
+vol=""
 work="$(mktemp -d)"
-# The container's nonroot user owns what it wrote under $work/data, so
-# the runner may be unable to remove all of it; that must not fail the
-# smoke.
-trap 'if [ -n "$cid" ]; then docker rm -f "$cid" >/dev/null 2>&1 || true; fi; rm -rf "$work" 2>/dev/null || true' EXIT
+trap 'if [ -n "$cid" ]; then docker rm -f "$cid" >/dev/null 2>&1 || true; fi; if [ -n "$vol" ]; then docker volume rm "$vol" >/dev/null 2>&1 || true; fi; rm -rf "$work"' EXIT
 
 docker run --rm "$image" --version | grep -qx "nosfry $version"
 [ "$(docker image inspect --format '{{.Config.User}}' "$image")" = "nonroot:nonroot" ]
@@ -39,15 +37,15 @@ TOML
 chmod 644 "$work/nosfry.toml"
 
 # No interfaces but loopback: the key and its URL are derived locally.
-# /data is bind-mounted from the work dir so the relay run below reuses
-# the same key and logs this exact address. It is world-writable for the
-# image's nonroot user, with the sticky bit: Arti's fs-mistrust accepts
-# a world-writable intermediate directory only when it is sticky.
-mkdir "$work/data"
-chmod 1777 "$work/data"
+# /data is a fresh volume shared by both runs, so the relay below reuses
+# the same key and logs this exact address. Docker seeds an empty volume
+# from the image's /data, owned by nonroot: Arti's fs-mistrust requires
+# every directory on the key store's path to be owned by root or the
+# running user, which a bind-mounted runner directory is not.
+vol="$(docker volume create)"
 addr="$(docker run --rm --network none \
     -v "$work/nosfry.toml:/etc/nosfry/nosfry.toml:ro" \
-    -v "$work/data:/data" \
+    -v "$vol:/data" \
     "$image" onion address)"
 printf '%s\n' "$addr" | grep -Eqx 'ws://[a-z2-7]{56}\.onion'
 
@@ -55,7 +53,7 @@ printf '%s\n' "$addr" | grep -Eqx 'ws://[a-z2-7]{56}\.onion'
 # failure does not block the clearnet listener.
 cid="$(docker run -d -p 127.0.0.1::7777 \
     -v "$work/nosfry.toml:/etc/nosfry/nosfry.toml:ro" \
-    -v "$work/data:/data" \
+    -v "$vol:/data" \
     "$image")"
 port="$(docker port "$cid" 7777/tcp | head -n 1 | sed 's/.*://')"
 body=""
