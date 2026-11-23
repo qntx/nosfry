@@ -236,7 +236,7 @@ checksum = "fd6f12461d14b5768028d39fab3cdfbcefb0bc7f09e95f413a00b6fdedcc9c2d"
 
 [[package]]
 name = "nosfry-blossom"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64",
  "faster-hex",
@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "nosfry-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "base64",
  "faster-hex",
