@@ -11,6 +11,12 @@ updates:
       interval: "weekly"
     cooldown:
       default-days: 7
+    ignore:
+      # Held at 0.40.x: tor-dirmgr 0.48 (Arti, onion feature) requires
+      # rusqlite >=0.36, <0.41 and the workspace links one
+      # libsqlite3-sys. Drop this with the pin (qntx/nosfry#116).
+      - dependency-name: "rusqlite"
+        versions: [">= 0.41"]
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
