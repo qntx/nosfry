@@ -1,5 +1,5 @@
 //! `nosfry sync`: a windowed NIP-77 client that reconciles the local
-//! store with a remote relay (ADR `0010-sync-client`).
+//! store with a remote relay (ADR `0011-sync-client`).
 //!
 //! [`run`] resolves and vets the URL (`dial`), fetches the peer's
 //! NIP-11 limits (`nip11`) over a first connection, opens the
