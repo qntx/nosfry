@@ -2658,6 +2658,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "negentropy",
+ "nosfry-blossom",
  "nosfry-core",
  "nosfry-lmdb",
  "proptest",
@@ -2685,6 +2686,30 @@ dependencies = [
  "url",
  "webpki-roots",
  "yawc",
+]
+
+[[package]]
+name = "nosfry-blossom"
+version = "0.3.0"
+dependencies = [
+ "axum",
+ "base64 0.23.1",
+ "bytes",
+ "faster-hex",
+ "futures-util",
+ "heed",
+ "nosfry-core",
+ "proptest",
+ "secp256k1",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tower",
+ "tracing",
 ]
 
 [[package]]

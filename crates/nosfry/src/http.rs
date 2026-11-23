@@ -54,6 +54,10 @@ pub(crate) struct AppState {
     pub(crate) moderation: watch::Receiver<Arc<Moderation>>,
     /// [`Live`] sender — `changerelay*` ops rebuild `nip11`.
     pub(crate) live_tx: watch::Sender<Arc<Live>>,
+    /// The running blob service (the `blossom` cargo feature),
+    /// `Some` only when `[blossom] enabled` — set by `serve()`.
+    #[cfg(feature = "blossom")]
+    pub(crate) blossom: Option<crate::blossom::Blossom>,
 }
 
 /// `DeflatePool` has no `Debug`; every other field does.
@@ -96,26 +100,31 @@ pub(crate) fn router(state: AppState) -> Router {
 
 /// Prometheus text exposition format (0.0.4), no CORS.
 async fn metrics(State(state): State<AppState>) -> Response {
-    (
-        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
-        state.metrics.render(
-            state.limiter.total(),
-            state
-                .conn
-                .outbound_total
-                .load(std::sync::atomic::Ordering::Relaxed),
-            state.sync_memory.load(std::sync::atomic::Ordering::Relaxed),
-            state
-                .subscription_bytes
-                .load(std::sync::atomic::Ordering::Relaxed),
-            state
-                .reader_jobs
-                .iter()
-                .map(|budget| budget.jobs.load(std::sync::atomic::Ordering::Relaxed))
-                .sum(),
-        ),
-    )
-        .into_response()
+    #[cfg_attr(
+        not(feature = "blossom"),
+        expect(unused_mut, reason = "only blossom appends to the body")
+    )]
+    let mut body = state.metrics.render(
+        state.limiter.total(),
+        state
+            .conn
+            .outbound_total
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state.sync_memory.load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .subscription_bytes
+            .load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .reader_jobs
+            .iter()
+            .map(|budget| budget.jobs.load(std::sync::atomic::Ordering::Relaxed))
+            .sum(),
+    );
+    #[cfg(feature = "blossom")]
+    if let Some(blossom) = &state.blossom {
+        body.push_str(&blossom.render_metrics());
+    }
+    ([(header::CONTENT_TYPE, "text/plain; version=0.0.4")], body).into_response()
 }
 
 /// Apply [`nosfry_core::site::CORS_HEADERS`] — shared by the

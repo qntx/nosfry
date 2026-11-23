@@ -17,6 +17,10 @@ faster-hex    = "1.0"
 [dependencies.nosfry-core]
 path = "../crates/nosfry-core"
 
+[dependencies.nosfry-blossom]
+path             = "../crates/nosfry-blossom"
+default-features = false
+
 # Isolated from the parent workspace so the main gates never see libFuzzer.
 [workspace]
 members = ["."]
@@ -101,6 +105,20 @@ bench = false
 [[bin]]
 name  = "relay_message"
 path  = "fuzz_targets/relay_message.rs"
+test  = false
+doc   = false
+bench = false
+
+[[bin]]
+name  = "blossom_auth"
+path  = "fuzz_targets/blossom_auth.rs"
+test  = false
+doc   = false
+bench = false
+
+[[bin]]
+name  = "blossom_range"
+path  = "fuzz_targets/blossom_range.rs"
 test  = false
 doc   = false
 bench = false

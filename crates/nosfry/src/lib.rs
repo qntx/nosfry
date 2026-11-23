@@ -27,6 +27,10 @@
 #![cfg_attr(feature = "onion", recursion_limit = "256")]
 
 pub mod admin;
+#[cfg(feature = "blossom")]
+pub mod blob_admin;
+#[cfg(feature = "blossom")]
+mod blossom;
 mod channels;
 pub mod config;
 mod connection;
@@ -145,6 +149,11 @@ pub enum ServerError {
     #[cfg(feature = "onion")]
     #[error("onion: {0}")]
     Onion(String),
+    /// The Blossom blob store failed to open (the `blossom`
+    /// cargo feature).
+    #[cfg(feature = "blossom")]
+    #[error("blossom: {0}")]
+    Blossom(String),
 }
 
 /// The live-reloadable slice of server state. Every reader clones the
@@ -222,11 +231,18 @@ async fn reload_loop(
     limiter: Arc<limiter::ConnectionLimiter>,
     moderation: watch::Receiver<Arc<Moderation>>,
     mut live: Arc<Live>,
+    #[cfg(feature = "blossom")] blossom_tx: Option<watch::Sender<Arc<nosfry_blossom::Policy>>>,
 ) {
     while reload.changed().await.is_ok() {
         let incoming = reload.borrow_and_update().clone();
         if let Some(next) = reload_once(incoming, &live, &limiter) {
             live = next;
+            #[cfg(feature = "blossom")]
+            if let Some(policy_tx) = &blossom_tx {
+                // Live `[blossom]` keys and `relay.management.admins`
+                // both land in one policy snapshot.
+                policy_tx.send_replace(Arc::new(live.config.blossom.policy(&live.admins)));
+            }
             live_tx.send_modify(|current| {
                 let snapshot = moderation.borrow().clone();
                 let mut updated = (*live).clone();
@@ -339,6 +355,18 @@ fn soft_nofile() -> Result<u64, ServerError> {
 #[cfg(not(unix))]
 fn soft_nofile() -> Result<u64, ServerError> {
     Ok(u64::MAX)
+}
+
+/// The process-wide byte counters: pending outbound bytes (shared
+/// by every connection's `Outbound`), sealed sync-storage bytes
+/// (every reader), and live-subscription bytes (every monitor
+/// shard).
+fn shared_counters() -> (Arc<AtomicUsize>, Arc<AtomicUsize>, Arc<AtomicUsize>) {
+    (
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+        Arc::new(AtomicUsize::new(0)),
+    )
 }
 
 /// Resolve `relay.max_connections` against the open-file ceiling:
@@ -514,9 +542,7 @@ impl Server {
         // connection's `Outbound`; process-wide sealed-sync-storage
         // bytes, shared by every reader; process-wide live-subscription
         // bytes, shared by every monitor shard.
-        let outbound_total = Arc::new(AtomicUsize::new(0));
-        let sync_memory = Arc::new(AtomicUsize::new(0));
-        let subscription_bytes = Arc::new(AtomicUsize::new(0));
+        let (outbound_total, sync_memory, subscription_bytes) = shared_counters();
         let tuning = reader_tuning(&config, &sync_memory);
         let mut threads = Vec::with_capacity(monitors + readers + 1);
         let (stop_tx, stop_rx) = watch::channel(false);
@@ -632,6 +658,8 @@ impl Server {
                     max_connections,
                     &config.relay.profiles(),
                 )),
+                #[cfg(feature = "blossom")]
+                blossom: None,
             },
             live_tx,
             stop_tx,
@@ -688,7 +716,7 @@ fn onion_nicknames(config: &Config) -> impl Iterator<Item = Arc<str>> + '_ {
 fn with_onion_urls(mut config: Config, listeners: &[Listener]) -> Config {
     let derived: Vec<String> = listeners
         .iter()
-        .filter_map(|listener| match &listener.0 {
+        .filter_map(|listener| match &listener.kind {
             ListenerKind::Onion { bound, .. } => Some(bound.url.clone()),
             _ => None,
         })
@@ -729,10 +757,24 @@ fn tune<S: std::os::fd::AsFd>(tcp: &S, keepalive: bool) {
     }
 }
 
-/// One bound `[[relay.listen]]` entry: the socket plus the fixed
-/// listener info every connection it accepts carries.
+/// Which service a bound [`Listener`] serves — the relay router or
+/// the Blossom blob router (the `blossom` cargo feature).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Service {
+    /// `[[relay.listen]]` — WebSocket + relay HTTP.
+    Relay,
+    /// `[[blossom.listen]]` — the blob server only.
+    Blossom,
+}
+
+/// One bound `[[relay.listen]]` or `[[blossom.listen]]` entry: the
+/// socket plus the fixed listener info every connection it accepts
+/// carries.
 #[derive(Debug)]
-pub struct Listener(ListenerKind);
+pub struct Listener {
+    service: Service,
+    kind: ListenerKind,
+}
 
 #[derive(Debug)]
 enum ListenerKind {
@@ -786,11 +828,17 @@ impl Drop for UnixSocketGuard {
 }
 
 impl Listener {
+    /// Which service this listener serves.
+    #[must_use]
+    pub const fn service(&self) -> Service {
+        self.service
+    }
+
     /// The bound TCP address — `Some` only for TCP listeners. Tests
     /// bind `127.0.0.1:0` and read the real port here.
     #[must_use]
     pub fn local_addr(&self) -> Option<std::net::SocketAddr> {
-        match &self.0 {
+        match &self.kind {
             ListenerKind::Tcp { listener, .. } => listener.local_addr().ok(),
             #[cfg(unix)]
             ListenerKind::Unix { .. } => None,
@@ -804,7 +852,7 @@ impl Listener {
 /// address or the `unix:` path.
 impl std::fmt::Display for Listener {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self.0 {
+        match &self.kind {
             ListenerKind::Tcp { listener, info } => match listener.local_addr() {
                 Ok(addr) => addr.fmt(f),
                 Err(_) => info.id.fmt(f),
@@ -843,18 +891,24 @@ pub async fn bind(config: &Config) -> Result<Vec<Listener>, ServerError> {
             last_warn_secs: std::sync::atomic::AtomicU64::new(0),
         });
         match &listen.address {
-            ListenAddress::Tcp(sock) => listeners.push(Listener(ListenerKind::Tcp {
-                listener: TcpListener::bind(sock).await?,
-                info,
-            })),
+            ListenAddress::Tcp(sock) => listeners.push(Listener {
+                service: Service::Relay,
+                kind: ListenerKind::Tcp {
+                    listener: TcpListener::bind(sock).await?,
+                    info,
+                },
+            }),
             #[cfg(unix)]
             ListenAddress::Unix(path) => {
                 let (listener, guard) = bind_unix(path).await?;
-                listeners.push(Listener(ListenerKind::Unix {
-                    listener,
-                    info,
-                    guard,
-                }));
+                listeners.push(Listener {
+                    service: Service::Relay,
+                    kind: ListenerKind::Unix {
+                        listener,
+                        info,
+                        guard,
+                    },
+                });
             }
             #[cfg(not(unix))]
             ListenAddress::Unix(path) => {
@@ -868,13 +922,63 @@ pub async fn bind(config: &Config) -> Result<Vec<Listener>, ServerError> {
                 {
                     let bound =
                         onion::bind_service(&config.relay.onion, nickname, &mut onion_client)?;
-                    listeners.push(Listener(ListenerKind::Onion { info, bound }));
+                    listeners.push(Listener {
+                        service: Service::Relay,
+                        kind: ListenerKind::Onion { info, bound },
+                    });
                 }
                 #[cfg(not(feature = "onion"))]
                 return Err(ServerError::RelayValue(format!(
                     "relay.listen: \"onion:{nickname}\" needs nosfry built with the onion \
                      cargo feature (cargo install nosfry --features onion)"
                 )));
+            }
+        }
+    }
+    // `[[blossom.listen]]` after the relay listeners: TCP and unix
+    // through the same helpers (onion was refused at load).
+    #[cfg(feature = "blossom")]
+    if config.blossom.enabled {
+        for listen in &config.blossom.listen {
+            let info = Arc::new(ListenerInfo {
+                id: Arc::from(listen.address.to_string().as_str()),
+                profile: Arc::from("default"),
+                real_ip_header: String::new(),
+                last_warn_secs: std::sync::atomic::AtomicU64::new(0),
+            });
+            match &listen.address {
+                ListenAddress::Tcp(sock) => listeners.push(Listener {
+                    service: Service::Blossom,
+                    kind: ListenerKind::Tcp {
+                        listener: TcpListener::bind(sock).await?,
+                        info,
+                    },
+                }),
+                #[cfg(unix)]
+                ListenAddress::Unix(path) => {
+                    let (listener, guard) = bind_unix(path).await?;
+                    listeners.push(Listener {
+                        service: Service::Blossom,
+                        kind: ListenerKind::Unix {
+                            listener,
+                            info,
+                            guard,
+                        },
+                    });
+                }
+                ListenAddress::Onion(nickname) => {
+                    return Err(ServerError::RelayValue(format!(
+                        "blossom.listen: \"onion:{nickname}\" — blossom listeners do not \
+                         support onion: yet"
+                    )));
+                }
+                #[cfg(not(unix))]
+                ListenAddress::Unix(path) => {
+                    return Err(ServerError::RelayValue(format!(
+                        "unix listeners are unsupported on this platform: {}",
+                        path.display()
+                    )));
+                }
             }
         }
     }
@@ -918,6 +1022,77 @@ async fn bind_unix(path: &std::path::Path) -> Result<(UnixListener, UnixSocketGu
     Ok((listener, UnixSocketGuard(path.to_path_buf())))
 }
 
+/// A `blossom.max_connections`-style cap: `Some`, `accept` waits
+/// for a free slot and the permit moves into the connection task;
+/// `None` (relay listeners) accepts ungated — the
+/// `ConnectionLimiter` charges at upgrade instead.
+type ConnLimit = Option<Arc<tokio::sync::Semaphore>>;
+
+/// Wait for a free slot when `conn_limit` is set, or for `http_stop`.
+async fn conn_permit(
+    conn_limit: &ConnLimit,
+    http_stop_rx: &mut watch::Receiver<()>,
+) -> Option<tokio::sync::OwnedSemaphorePermit> {
+    let Some(sem) = conn_limit else {
+        return None;
+    };
+    tokio::select! {
+        permit = Arc::clone(sem).acquire_owned() => permit.ok(),
+        _ = http_stop_rx.changed() => None,
+    }
+}
+
+/// Open the blob store + router into `server.state.blossom` — a
+/// failure aborts startup before anything serves.
+#[cfg(feature = "blossom")]
+fn open_blossom(server: &mut Server) -> Result<(), ServerError> {
+    let (admins, moderation) = {
+        let live = server.live_tx.borrow();
+        (Arc::clone(&live.admins), server.state.moderation.clone())
+    };
+    server.state.blossom = blossom::open(&server.live_tx.borrow().config, &admins, moderation)?;
+    Ok(())
+}
+
+/// Spawn the config-reload task; it ends when the sender side drops
+/// and shares neither the connection tracker nor the shutdown
+/// signal.
+fn spawn_reload_task(reload: watch::Receiver<Config>, server: &Server) {
+    tokio::spawn(reload_loop(
+        reload,
+        server.live_tx.clone(),
+        Arc::clone(&server.state.limiter),
+        server.state.moderation.clone(),
+        server.live_tx.borrow().clone(),
+        #[cfg(feature = "blossom")]
+        server.state.blossom.as_ref().map(|b| b.policy_tx.clone()),
+    ));
+}
+
+/// Signal HTTP shutdown after `serve`'s accept loops: end every
+/// listener loop and gracefully close in-flight HTTP connections
+/// (idle keep-alive and mid-read conns end promptly), bounded by
+/// the shutdown deadline.
+async fn drain_http(
+    stop: watch::Sender<bool>,
+    router: axum::Router,
+    http_stop_rx: watch::Receiver<()>,
+    http_stop: watch::Sender<()>,
+    http_tracker: &tokio_util::task::TaskTracker,
+    tracker: &tokio_util::task::TaskTracker,
+) {
+    stop.send_replace(true);
+    // The router holds an AppState (writer/shard senders): drop it so
+    // `server.stop()`'s channel teardown can complete.
+    drop(router);
+    drop(http_stop_rx);
+    http_stop.send_replace(());
+    wait_for(http_tracker, "open HTTP connections").await;
+    // Give live connections a deadline to close (the watch signal
+    // already went out).
+    wait_for(tracker, "open connections").await;
+}
+
 /// Accept HTTP/1 connections on one TCP listener until `http_stop`
 /// fires, serving each through [`serve_stream`]. `tcp_keepalive` is
 /// read per accept so a reload reaches new sockets.
@@ -926,10 +1101,15 @@ async fn accept_tcp(
     info: Arc<ListenerInfo>,
     router: axum::Router,
     live: watch::Receiver<Arc<Live>>,
+    conn_limit: ConnLimit,
     mut http_stop_rx: watch::Receiver<()>,
     http_tracker: tokio_util::task::TaskTracker,
 ) {
     loop {
+        let permit = conn_permit(&conn_limit, &mut http_stop_rx).await;
+        if conn_limit.is_some() && permit.is_none() {
+            break;
+        }
         let accepted = tokio::select! {
             res = listener.accept() => res,
             _ = http_stop_rx.changed() => break,
@@ -950,7 +1130,7 @@ async fn accept_tcp(
             listener: Arc::clone(&info),
             transport: peer::Transport::Tcp(peer),
         };
-        serve_stream(tcp, origin, &router, &http_stop_rx, &http_tracker);
+        serve_stream(tcp, origin, &router, &http_stop_rx, &http_tracker, permit);
     }
 }
 
@@ -964,10 +1144,15 @@ async fn accept_unix(
     info: Arc<ListenerInfo>,
     _guard: UnixSocketGuard,
     router: axum::Router,
+    conn_limit: ConnLimit,
     mut http_stop_rx: watch::Receiver<()>,
     http_tracker: tokio_util::task::TaskTracker,
 ) {
     loop {
+        let permit = conn_permit(&conn_limit, &mut http_stop_rx).await;
+        if conn_limit.is_some() && permit.is_none() {
+            break;
+        }
         let accepted = tokio::select! {
             res = listener.accept() => res,
             _ = http_stop_rx.changed() => break,
@@ -986,7 +1171,7 @@ async fn accept_unix(
             listener: Arc::clone(&info),
             transport: peer::Transport::Unix,
         };
-        serve_stream(io, origin, &router, &http_stop_rx, &http_tracker);
+        serve_stream(io, origin, &router, &http_stop_rx, &http_tracker, permit);
     }
 }
 
@@ -1002,6 +1187,7 @@ fn serve_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     router: &axum::Router,
     http_stop_rx: &watch::Receiver<()>,
     http_tracker: &tokio_util::task::TaskTracker,
+    conn_permit: Option<tokio::sync::OwnedSemaphorePermit>,
 ) {
     let service = TowerToHyperService::new(router.clone().into_service().map_request(
         move |mut req: hyper::Request<Incoming>| {
@@ -1017,6 +1203,7 @@ fn serve_stream<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     let mut conn = Box::pin(conn);
     let mut conn_stop = http_stop_rx.clone();
     http_tracker.spawn(async move {
+        let _permit = conn_permit;
         tokio::select! {
             res = conn.as_mut() => {
                 if let Err(err) = res {
@@ -1070,16 +1257,14 @@ pub async fn serve(
     #[cfg(feature = "onion")]
     let max_circuits = config.relay.onion.max_circuits;
     log_restricted_writes(&config);
-    let server = Server::new(config)?;
-    // The reload task ends when the sender side drops; it shares
-    // neither the connection tracker nor the shutdown signal.
-    tokio::spawn(reload_loop(
-        reload,
-        server.live_tx.clone(),
-        Arc::clone(&server.state.limiter),
-        server.state.moderation.clone(),
-        server.live_tx.borrow().clone(),
-    ));
+    #[cfg_attr(
+        not(feature = "blossom"),
+        expect(unused_mut, reason = "open_blossom mutates the server")
+    )]
+    let mut server = Server::new(config)?;
+    #[cfg(feature = "blossom")]
+    open_blossom(&mut server)?;
+    spawn_reload_task(reload, &server);
     let stop = server.stop_tx.clone();
     let tracker = server.state.conn.tracker.clone();
     // HTTP/1 only, with a header-read deadline `axum::serve` cannot set.
@@ -1091,14 +1276,38 @@ pub async fn serve(
     // One accept loop per listener, sharing the trackers and shutdown.
     #[cfg(feature = "onion")]
     let mut onion_listeners = Vec::new();
+    #[cfg(feature = "blossom")]
+    let blossom_conn_limit = server
+        .state
+        .blossom
+        .as_ref()
+        .map(|b| Arc::clone(&b.connections));
     for listener in listeners {
-        match listener.0 {
+        // Blossom listeners serve the blob router under the shared
+        // `blossom.max_connections` semaphore; `None` when the blob
+        // service is not up.
+        let route = match listener.service {
+            Service::Relay => Some((router.clone(), None)),
+            #[cfg(feature = "blossom")]
+            Service::Blossom => server
+                .state
+                .blossom
+                .as_ref()
+                .map(|b| (b.router.clone(), blossom_conn_limit.clone())),
+            #[cfg(not(feature = "blossom"))]
+            Service::Blossom => None,
+        };
+        let Some((serve_router, conn_limit)) = route else {
+            continue;
+        };
+        match listener.kind {
             ListenerKind::Tcp { listener, info } => {
                 http_tracker.spawn(accept_tcp(
                     listener,
                     info,
-                    router.clone(),
+                    serve_router,
                     server.state.live.clone(),
+                    conn_limit,
                     http_stop_rx.clone(),
                     http_tracker.clone(),
                 ));
@@ -1113,13 +1322,19 @@ pub async fn serve(
                     listener,
                     info,
                     guard,
-                    router.clone(),
+                    serve_router,
+                    conn_limit,
                     http_stop_rx.clone(),
                     http_tracker.clone(),
                 ));
             }
             #[cfg(feature = "onion")]
-            ListenerKind::Onion { info, bound } => onion_listeners.push((info, bound)),
+            ListenerKind::Onion { info, bound } => {
+                // `Blossom::check` refused `onion:` at load.
+                if listener.service == Service::Relay {
+                    onion_listeners.push((info, bound));
+                }
+            }
         }
     }
     // One supervisor for every onion listener: it bootstraps the
@@ -1137,19 +1352,15 @@ pub async fn serve(
         ));
     }
     shutdown.await;
-    stop.send_replace(true);
-    // The router holds an AppState (writer/shard senders): drop it so
-    // `server.stop()`'s channel teardown can complete.
-    drop(router);
-    // Break the accept loops and gracefully close in-flight HTTP
-    // connections (idle keep-alive and mid-read conns end promptly),
-    // bounded by the shutdown deadline.
-    drop(http_stop_rx);
-    http_stop.send_replace(());
-    wait_for(&http_tracker, "open HTTP connections").await;
-    // Give live connections a deadline to close (the watch signal
-    // already went out).
-    wait_for(&tracker, "open connections").await;
+    drain_http(
+        stop,
+        router,
+        http_stop_rx,
+        http_stop,
+        &http_tracker,
+        &tracker,
+    )
+    .await;
     // Joining worker threads blocks; keep it off the runtime.
     tokio::task::spawn_blocking(move || server.stop())
         .await

@@ -78,6 +78,25 @@ NIP-98 authorizes the NIP-86 calls. strfry's write-policy plugins and
 and `nosfry sync` reconciles with any NIP-77 relay, strfry included, in
 either direction ([guides/sync.md](guides/sync.md)).
 
+## Blossom media
+
+The native binary can also serve [Blossom](https://github.com/hzrd149/blossom)
+blobs for the relay's members, on its own listener and hostname so uploaded
+files never run in the relay's origin. Off by default; see
+[guides/blossom.md](guides/blossom.md).
+
+| BUD | Feature                                         | Status                                 |
+| --- | ----------------------------------------------- | -------------------------------------- |
+| 01  | Blob retrieval, ranges, `OPTIONS` discovery     | when `blossom.enabled`                 |
+| 02  | `PUT /upload`                                   | when `blossom.enabled`                 |
+| 06  | `HEAD /upload` preflight                        | when `blossom.enabled`                 |
+| 11  | Kind 24242 authorization (both base64 forms)    | when `blossom.enabled`                 |
+| 12  | List (own blobs only) and delete                | when `blossom.enabled`                 |
+| 13  | `PUT /<sha256>` upload                          | when `blossom.enabled`; no mirroring   |
+| 04  | Mirroring                                       | not implemented                        |
+| 05  | Media optimisation                              | not implemented                        |
+| 07  | Payments                                        | not implemented                        |
+
 ## Performance
 
 Measured against strfry 1.1.3 on one Linux aarch64 VM, with the relay pinned to
@@ -101,8 +120,8 @@ to 3,000 events/s, heavier per idle connection.
 ## Documentation
 
 - [guides/](guides/README.md): install, configuration reference, deployment,
-  administration, sync with other relays, Tor, Workers, a test relay for
-  local development and CI, and the security model and limits.
+  administration, sync with other relays, Blossom media, Tor, Workers, a test
+  relay for local development and CI, and the security model and limits.
 - [`nosfry.example.toml`](nosfry.example.toml): every configuration key with its
   default.
 - [CHANGELOG.md](CHANGELOG.md), [SECURITY.md](SECURITY.md) (how to report a

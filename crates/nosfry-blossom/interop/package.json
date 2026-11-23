@@ -1,0 +1,10 @@
+{
+  "name": "nosfry-blossom-interop",
+  "private": true,
+  "type": "module",
+  "description": "Interop test: real blossom-client-sdk against the nosfry relay's Blossom endpoints",
+  "dependencies": {
+    "@noble/curves": "2.4.0",
+    "blossom-client-sdk": "5.1.0"
+  }
+}

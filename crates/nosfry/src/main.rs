@@ -126,6 +126,64 @@ enum Cmd {
         #[command(subcommand)]
         cmd: OnionCmd,
     },
+    /// Blossom blob-store administration (the `blossom` feature).
+    /// Uses `[blossom] dir`; works alongside a running server.
+    #[cfg(feature = "blossom")]
+    Blob {
+        #[command(subcommand)]
+        cmd: BlobCmd,
+    },
+}
+
+/// `nosfry blob …` subcommands.
+#[cfg(feature = "blossom")]
+#[derive(Subcommand)]
+enum BlobCmd {
+    /// List blobs as JSON lines (sha256, size, type, uploaded,
+    /// owners count) — hash-ascending, or newest-first per owner
+    /// with `--owner`.
+    List {
+        /// Only blobs owned by this 64-hex pubkey.
+        #[arg(long, value_name = "HEX")]
+        owner: Option<String>,
+        /// Start after this 64-hex sha256 (exclusive) — paging for
+        /// the hash-ascending all-blobs listing; ignored with
+        /// `--owner`.
+        #[arg(long, value_name = "HEX")]
+        after: Option<String>,
+        /// Cap the output.
+        #[arg(long, default_value_t = 1000)]
+        limit: usize,
+    },
+    /// One blob's metadata, owners, ban, and file presence as JSON.
+    Stat {
+        /// 64-hex SHA-256.
+        sha256: String,
+    },
+    /// Delete a blob for every owner (exit 1 when absent).
+    Delete {
+        /// 64-hex SHA-256.
+        sha256: String,
+    },
+    /// Ban a blob hash and delete its content (works whether or
+    /// not the blob exists).
+    Ban {
+        /// 64-hex SHA-256.
+        sha256: String,
+        /// Ban reason (stored; shown by `stat`).
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Remove a ban (exit 1 when the hash was not banned).
+    Unban {
+        /// 64-hex SHA-256.
+        sha256: String,
+    },
+    /// Reclaim orphan files and recover trash; JSON report.
+    Gc,
+    /// Re-hash every file and check accounting; JSON report,
+    /// exit 1 on any problem.
+    Verify,
 }
 
 /// `nosfry onion …` subcommands.
@@ -288,8 +346,84 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
             }
             Ok(())
         }
+        #[cfg(feature = "blossom")]
+        Cmd::Blob { cmd } => return blob(&config, cmd),
     }
     .map(|()| ExitCode::SUCCESS)
+}
+
+/// `nosfry blob <cmd>` against `[blossom] dir` in admin mode (no
+/// lock, safe alongside a running server).
+#[cfg(feature = "blossom")]
+fn blob(config: &Config, cmd: BlobCmd) -> Result<ExitCode, Box<dyn std::error::Error>> {
+    use nosfry::blob_admin as admin;
+    let store = admin::open(&config.blossom.dir)?;
+    let mut out = stdout();
+    let exit = match cmd {
+        BlobCmd::List {
+            owner,
+            after,
+            limit,
+        } => {
+            let owner = owner.as_deref().map(admin::pubkey).transpose()?;
+            let after = after.as_deref().map(admin::hash).transpose()?;
+            admin::list(&store, owner.as_ref(), after.as_ref(), limit, &mut out)?;
+            ExitCode::SUCCESS
+        }
+        BlobCmd::Stat { sha256 } => {
+            if admin::stat(&store, &admin::hash(&sha256)?, &mut out)? {
+                ExitCode::SUCCESS
+            } else {
+                return Err("no such blob".into());
+            }
+        }
+        BlobCmd::Delete { sha256 } => {
+            if admin::delete(&store, &admin::hash(&sha256)?)? {
+                ExitCode::SUCCESS
+            } else {
+                return Err("no such blob".into());
+            }
+        }
+        BlobCmd::Ban { sha256, reason } => {
+            admin::ban(
+                &store,
+                &admin::hash(&sha256)?,
+                reason.as_deref().unwrap_or(""),
+            )?;
+            ExitCode::SUCCESS
+        }
+        BlobCmd::Unban { sha256 } => {
+            if admin::unban(&store, &admin::hash(&sha256)?)? {
+                ExitCode::SUCCESS
+            } else {
+                return Err("blob was not banned".into());
+            }
+        }
+        BlobCmd::Gc => {
+            admin::gc(&store, &mut out)?;
+            ExitCode::SUCCESS
+        }
+        BlobCmd::Verify => {
+            let mut progress = 0u64;
+            let clean = admin::verify(
+                &store,
+                |checked| {
+                    progress = checked;
+                    if progress.is_multiple_of(1000) {
+                        tracing::info!(checked = progress, "blob verify progress");
+                    }
+                },
+                &mut out,
+            )?;
+            if clean {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
+            }
+        }
+    };
+    out.flush()?;
+    Ok(exit)
 }
 
 /// Run [`nosfry::sync::run`] against the configured store: `0`

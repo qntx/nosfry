@@ -1,0 +1,49 @@
+[package]
+name                   = "nosfry-blossom"
+description            = "Blossom blob server (BUD-01/02/06/11/12/13) for the nosfry Nostr relay"
+version.workspace      = true
+edition.workspace      = true
+rust-version.workspace = true
+license.workspace      = true
+readme.workspace       = true
+repository.workspace   = true
+authors.workspace      = true
+keywords.workspace     = true
+categories.workspace   = true
+exclude                = ["interop"]
+
+[dependencies]
+nosfry-core.workspace = true
+base64.workspace      = true
+faster-hex.workspace  = true
+serde_json.workspace  = true
+sha2.workspace        = true
+thiserror.workspace   = true
+
+# Blob server layer (feature "server").
+axum         = { workspace = true, optional = true }
+bytes        = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+heed         = { workspace = true, optional = true }
+serde        = { workspace = true, optional = true }
+tokio        = { workspace = true, optional = true }
+tokio-util   = { workspace = true, optional = true, features = ["io"] }
+tracing      = { workspace = true, optional = true }
+
+[dev-dependencies]
+nosfry-core          = { workspace = true, features = ["test-util"] }
+proptest.workspace   = true
+secp256k1.workspace  = true
+serde_json.workspace = true
+tempfile.workspace   = true
+tokio.workspace      = true
+tower.workspace      = true
+
+[features]
+default = ["server"]
+# Filesystem + LMDB blob store and the axum HTTP surface. The
+# protocol layer (auth, range, path, mime) compiles without it.
+server = ["dep:axum", "dep:bytes", "dep:futures-util", "dep:heed", "dep:serde", "dep:tokio", "dep:tokio-util", "dep:tracing"]
+
+[lints]
+workspace = true

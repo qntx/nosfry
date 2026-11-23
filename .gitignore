@@ -35,3 +35,6 @@ docs/
 crates/nosfry-worker/build/
 .wrangler/
 crates/nosfry-worker/.wrangler.conformance.toml
+
+# Interop test dependencies
+crates/nosfry-blossom/interop/node_modules/
