@@ -28,12 +28,14 @@ RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
 COPY --from=planner /src/recipe.json recipe.json
+# `--build-arg FEATURES=onion` builds the Arti-linked variant.
+ARG FEATURES=""
 # Cook deps once; rebuilds reuse this layer until the dep graph changes.
-RUN cargo chef cook --release --recipe-path recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json ${FEATURES:+--features "$FEATURES"}
 
 COPY . .
 RUN mkdir /data \
- && cargo build --release --locked -p nosfry
+ && cargo build --release --locked -p nosfry ${FEATURES:+--features "$FEATURES"}
 
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f AS runtime
 LABEL org.opencontainers.image.title="nosfry" \

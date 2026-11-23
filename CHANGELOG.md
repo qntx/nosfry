@@ -199,9 +199,9 @@ The format is based on [Keep a Changelog]; this project follows
 - **Embedded Tor onion service (native, opt-in).** A `[[relay.listen]]`
   address of `onion:<nickname>` serves the relay as a Tor onion service
   embedded in the process through Arti 0.48, behind the new `onion`
-  cargo feature — off by default, and absent from the published
-  binaries and container image (`cargo install nosfry --locked
-  --features onion`). Each rendezvous circuit is a connection on the
+  cargo feature — off by default and shipped as `-onion` release
+  archives and image tags (build from source instead with `cargo
+  install nosfry --locked --features onion`). Each rendezvous circuit is a connection on the
   shared HTTP/WebSocket path, all circuits of a listener share the
   listener-wide peer identity (so its profile's
   `max_connections_per_peer` and per-peer buckets bind them together),
@@ -216,6 +216,13 @@ The format is based on [Keep a Changelog]; this project follows
   without starting the relay, and `nosfry_onion_*` metrics report
   state, circuits, streams and rejections. Write-policy plugins see
   onion connections as `"sourceType":"Onion"`.
+
+- Release artifacts for the onion variant: every archive has a
+  `nosfry-<version>-onion-<target>.tar.gz` twin and the container image
+  has `<version>-onion`, `<major>.<minor>-onion`, `<major>-onion` and
+  `onion` tags, all built with `--features onion` and attested like the
+  default artifacts; the release build asserts the default binary and
+  SBOM contain no Arti and the onion ones do.
 
 - `nosfry sync <url> [--filter] [--dir down|up|both] [--since]
   [--until]` reconciles the local database with any NIP-77 relay

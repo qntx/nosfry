@@ -1,8 +1,9 @@
 # Tor onion service
 
-nosfry has no Tor support of its own yet. Today a relay is reachable as an
-onion service by putting C tor in front of it with a `HiddenService` in
-`torrc`. This page describes that setup and its limits.
+A relay is reachable as an onion service two ways. This page first
+describes putting C tor in front of it with a `HiddenService` in `torrc`
+and that setup's limits, then the embedded Arti mode that needs no
+separate tor process.
 
 ## Setup
 
@@ -98,8 +99,10 @@ header it prepends, and every connection would fail.
 
 nosfry can also embed an onion service inside the relay process through
 [Arti](https://arti.torproject.org/), the Tor implementation in Rust. It
-is an opt-in cargo feature: the published binaries and the container
-image do not include it. Build or install it yourself:
+is an opt-in cargo feature: releases ship it as `-onion` artifacts —
+`nosfry-<version>-onion-<target>.tar.gz` archives and
+`ghcr.io/qntx/nosfry:<version>-onion` image tags — while the default
+artifacts do not include it. To build from source instead:
 
 ```bash
 cargo install nosfry --locked --features onion
