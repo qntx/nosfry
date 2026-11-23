@@ -107,7 +107,8 @@ Maintainers only. `.github/workflows/release.yml` is the whole pipeline.
    manual run runs the CI gate, builds every archive (Linux binaries against
    glibc 2.31 with cargo-zigbuild, macOS natively), starts each Linux binary
    in Debian 11, Debian 12 and Ubuntu 22.04 containers, builds and tests the
-   container image on both architectures, and publishes nothing. Once
+   container image on both architectures, packages the crates as
+   `cargo publish` would, and publishes nothing. Once
    release.yml is on `main`, a dry run can also be dispatched on a branch:
    `gh workflow run release.yml --ref <branch>`.
 2. Run the crash test at 60 cycles, the fuzz targets above, and the 72-hour
@@ -123,9 +124,10 @@ Maintainers only. `.github/workflows/release.yml` is the whole pipeline.
    `git tag -a vX.Y.Z -m "vX.Y.Z" && git push origin vX.Y.Z`. The tag run
    repeats the gate on the tagged commit, then publishes in this order: a
    draft GitHub release with checksums, SBOMs and attestations, the
-   `ghcr.io/qntx/nosfry` image, the crates (`nosfry-core`, `nosfry-lmdb`,
-   `nosfry`, with the organization's crates.io token), and finally the public
-   release.
+   `ghcr.io/qntx/nosfry` image, the crates (`nosfry-core`,
+   `nosfry-blossom`, `nosfry-lmdb`, `nosfry`: every workspace member
+   without `publish = false`, with the organization's crates.io token), and
+   finally the public release.
 
 ## Security
 

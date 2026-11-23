@@ -284,8 +284,25 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # Packages every publishable crate and builds each one against the
+  # others from a local registry, in dependency order: exactly what the
+  # `crates` job uploads. A crate missing from the workspace's publish
+  # set, or one that only builds from the workspace path, fails here on
+  # a dry run instead of after the image is public.
+  package:
+    needs: [gate, plan]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: cargo publish --workspace --locked --dry-run
+
   github-release:
-    needs: [plan, smoke, image]
+    needs: [plan, smoke, image, package]
     if: needs.plan.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -424,16 +441,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Dependency order; cargo publish waits until each crate is in the
-      # index before the next one resolves it.
-      - name: Publish nosfry-core, nosfry-lmdb, nosfry
+      # Every workspace member without `publish = false`, in dependency
+      # order; cargo waits until each crate is in the index before the
+      # next one resolves it.
+      - name: Publish the crates
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          set -euo pipefail
-          for p in nosfry-core nosfry-lmdb nosfry; do
-            cargo publish --locked -p "$p"
-          done
+        run: cargo publish --workspace --locked
 
   publish:
     needs: [plan, crates]
