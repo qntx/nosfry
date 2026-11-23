@@ -64,8 +64,10 @@ binaries, and one Workers bundle:
   - one Tokio task per connection;
   - one writer thread, M monitor-shard threads, and N reader threads;
   - SIGHUP reload, NIP-86 management, the write-policy plugin bridge,
-    Prometheus metrics, and the administration CLI (`import`, `export`,
-    `scan`, `delete`, `compact`).
+    Prometheus metrics, the administration CLI (`import`, `export`,
+    `scan`, `delete`, `compact`), the `nosfry sync` NIP-77 client, and,
+    behind the off-by-default `onion` cargo feature, an embedded Arti
+    onion-service listener (`nosfry onion address`).
 - `crates/nosfry-sql` (internal). The SQL event store for the Workers
   edition. It runs on any synchronous `Executor`: Durable Object `SqlStorage`
   in production, `rusqlite` in tests. Write and scan semantics are specified
@@ -118,6 +120,16 @@ Trust boundaries:
 8. **Cloudflare runtime ↔ Durable Object.** Hibernation, eviction,
    `CF-Connecting-IP`, and platform limits (CPU time, SQL statement limits,
    attachment size).
+9. **Remote relay ↔ `nosfry sync`** (`crates/nosfry/src/sync/`). The peer
+   is untrusted: its NIP-11 document, relay messages and downloaded events
+   pass the same wire validation, moderation and write policy as a client
+   publish, and every buffer is bounded. The URL is vetted before dialing
+   (no user info, no private addresses without `--allow-private`).
+10. **Tor network ↔ embedded onion listener** (`crates/nosfry/src/onion.rs`,
+    `onion` feature). Every rendezvous circuit is one listener-wide peer
+    (`Peer::Circuit`); `[relay.onion] max_circuits` and
+    `max_streams_per_circuit` bound it, and the onion identity key lives in
+    a `0700` state directory the relay refuses to start without.
 
 ## Assets
 
@@ -187,8 +199,9 @@ Trust boundaries:
   answer for the wrong id, or emit huge lines. Must not stall other
   connections indefinitely, crash the relay, or accept an event it did not
   approve.
-- **Network attacker.** TLS is assumed at the proxy. The relay does no
-  certificate handling.
+- **Network attacker.** TLS is assumed at the proxy; the relay's listeners
+  do no certificate handling. `nosfry sync` dials `wss://` peers with
+  rustls and verifies them against the Mozilla roots (`webpki-roots`).
 - **Crash and power loss.** `kill -9`, OOM kill, or power loss at any instant,
   including mid-commit, mid-sweep, and mid-import. The store must reopen
   consistent, with every acknowledged event present.
@@ -243,13 +256,19 @@ identifiers are authoritative.
     connection's authenticated pubkeys, and the current NIP-86
     `Moderation` snapshot.
   - It filters stored scans, counts, negentropy storage, and live delivery
-    alike: restricted kinds are served only to involved, authenticated
-    readers, and events moderated by NIP-86 — banned or unlisted pubkeys
-    and kinds, banned ids — are hidden until the entry is lifted.
-  - With `service_url` empty, restricted kinds are stored but never served.
+    alike: a read-restricted kind is served only to readers satisfying its
+    `[relay.access]` rule's principals (`authenticated`, `author`,
+    `recipient`, `allowed`; `AccessRules`), and events moderated by NIP-86
+    — banned or unlisted pubkeys and kinds, banned ids — are hidden until
+    the entry is lifted.
+  - With AUTH disabled (`service_url` empty and no onion listener), a read-
+    or write-gated kind is refused at publish (`restricted:`,
+    `AuthRules::write_gate`), and a REQ whose filters can match only
+    restricted kinds is refused.
   - A Workers restore rebuilds the gate from the persisted REQ-time count of
     authenticated pubkeys.
-  - Files: `crates/nosfry-core/src/auth.rs`, `monitor.rs`, `session.rs`;
+  - Files: `crates/nosfry-core/src/auth.rs`, `access.rs`, `monitor.rs`,
+    `session.rs`;
     `crates/nosfry-lmdb/src/scan.rs`, `count.rs`;
     `crates/nosfry-sql/src/scan.rs`; `crates/nosfry-worker/src/relay.rs`.
 - **P5 — NIP-42 authentication.**
@@ -257,8 +276,10 @@ identifiers are authoritative.
     generates each challenge with fresh per-connection randomness (16 bytes
     from `getrandom` natively) and passes it to `Session::new`; the core
     never generates randomness.
-  - It requires a `relay` tag matching `service_url` (`RelayUrl::matches`,
-    normalized like strfry), a `created_at` within ±600 s of the
+  - It requires a `relay` tag matching one of the relay's names —
+    `service_url`, `service_url_aliases` and the embedded onion listeners'
+    `ws://<addr>.onion` URLs (`RelayNames`, `RelayUrl::matches`,
+    normalized like strfry) — a `created_at` within ±600 s of the
     relay's time (NIP-42's ~10 minutes, a dedicated symmetric window
     not the ephemeral-age rule), and a valid signature.
   - AUTH events are never stored or broadcast. A kind 22242 sent as EVENT is
@@ -304,8 +325,8 @@ identifiers are authoritative.
     field), `crates/nosfry-lmdb/src/lib.rs`, `scan.rs`,
     `crates/nosfry/src/writer.rs`, `crates/nosfry-sql/src/store.rs`, `scan.rs`.
 - **P10 — Request to vanish (NIP-62).**
-  - A kind 62 is honored only when a `relay` tag is `ALL_RELAYS` or matches
-    `service_url` (`Event::requests_vanish`).
+  - A kind 62 is honored only when a `relay` tag is `ALL_RELAYS` or names
+    the relay (`service_url` or an alias; `Event::requests_vanish`).
   - It records the vanish point `T` as the maximum over requests (`ix_vanish`),
     blocks the author's events with `created_at <= T`, and drains history in
     bounded, resumable steps (`vanish_pending`, `vanish_step`, `VANISH_CAP`)
@@ -322,7 +343,7 @@ identifiers are authoritative.
     - `created_at` within ±60 s;
     - `method` = `POST`;
     - `payload` = SHA-256 of the exact body;
-    - `u` matching `service_url`;
+    - `u` naming the relay (`service_url` or an alias);
     - a valid signature, checked before the admin lookup so errors do not
       reveal admins;
     - a signer in `admins`.
@@ -368,7 +389,10 @@ identifiers are authoritative.
     - Per-connection EVENT and REQ token buckets (20/s, burst 100).
     - Per-address buckets (100/s, burst 500), shared by every connection of
       one address.
-    - COUNT and negentropy messages spend REQ tokens.
+    - COUNT and negentropy messages spend REQ tokens, and so do frames
+      that fail to parse; past the budget they are dropped without a
+      reply (`Session::on_text`). The unknown-verb echo is capped at
+      32 bytes.
   - **Connections.** `max_connections`, and each listener profile's
     `max_connections_per_peer` (128; IPv6 counted per /64, a unix listener
     as one peer).
@@ -382,8 +406,14 @@ identifiers are authoritative.
     records, not only once the session seals; a refused charge stops
     the scan with `blocked: sync capacity exhausted`.
   - **Inter-thread queues and buffers.**
-    - Writer and shard queues (`WRITER_QUEUE`, `SHARD_QUEUE`, 4,096,
-      backpressure rather than drop).
+    - Writer queue (`WRITER_QUEUE` 65,536 requests and
+      `WRITER_QUEUE_BYTES` 64 MiB of event JSON, backpressure rather than
+      drop; one write transaction drains it) and shard queues
+      (`SHARD_QUEUE`, 4,096).
+    - Reader admission: `READER_JOBS` (4,096) scans per reader and
+      `2 × max_subs_per_connection` per connection, answered
+      `rate-limited: relay busy` or `rate-limited: too many pending
+      queries` beyond them; shards never block on a reader.
     - Pending-subscription buffer `PENDING_CAP` (4,096, then `CLOSED`).
     - Reader chunks (`CHUNK_FRAMES`, `CHUNK_BYTES`) and the scan time slice
       `query_timeslice_budget_microseconds` (10 ms).
@@ -391,6 +421,12 @@ identifiers are authoritative.
   - **Workers.** The connection cap (5,000), the sync memory budget, the
     subscription budget, the scan row budget (`max_scan_rows`), and the
     JavaScript exact-integer bound (`JS_MAX`) on every SQL integer.
+  - **Onion listener** (`onion` feature). `max_circuits` (256) circuits
+    per listener, `max_streams_per_circuit` (128), and an optional
+    introduction-point rate limit (`intro_rate`, `intro_burst`).
+  - **`nosfry sync`.** Inbound frames of at most 8 MiB, NIP-11 bodies of
+    64 KiB, windows of at most 100,000 local records and 100,000 pending
+    have/need ids, 32 uploads awaiting `OK`.
   - **Hash maps.** Hot-path maps use foldhash with randomized seeding, for
     HashDoS resistance.
 - **P14 — Fail-closed configuration.**
@@ -406,8 +442,10 @@ identifiers are authoritative.
   - The client address is the socket peer unless `real_ip_header` is set.
     When set, the header's last comma-separated value is used; a missing or
     unparsable value falls back to the transport peer (`peer::resolve`).
-  - The same address drives the per-IP cap, the per-address buckets, the
-    NIP-86 IP block list, and the policy's `sourceInfo`.
+  - The same peer drives the listener profile's per-peer connection cap,
+    the per-address buckets, the NIP-86 IP block list, and the policy's
+    `sourceInfo`. A unix-socket listener without `real_ip_header` and an
+    onion listener are each one peer.
   - For caps and buckets both editions group IPv6 by /64 and fold
     IPv4-mapped addresses to IPv4 (`AddressKey` in `limits.rs`) — one
     subscriber typically owns a /64. The NIP-86 IP block list keeps
@@ -424,7 +462,10 @@ identifiers are authoritative.
     editions; API responses send none of them.
   - NIP-11 and NIP-86 send the shared CORS headers (`site::CORS_HEADERS`);
     `/metrics` sends none and exists only when enabled.
-  - Metrics labels are fixed enums or `u16` kinds (`metrics.rs`).
+  - Metrics labels are fixed enums, configured listener ids, or event
+    kinds: `nostr_events_total{kind}` counts stored events only and gives
+    the first 256 kinds seen their own series, the rest `kind="other"`
+    (`MAX_KIND_SERIES`, `metrics.rs`).
 - **P17 — Edition parity.** For the same configuration and input, the native
   and Workers editions produce the same OK/CLOSED/NOTICE prefixes, the same
   stored set, and the same scan order and dedup. This is enforced by the shared
@@ -551,19 +592,20 @@ Ranked by risk:
   pubkey MUST be treated as authenticated; per connection the relay caps
   them at `MAX_AUTHED_PUBKEYS` (8) and answers a ninth `restricted:`
   (bounded per-connection state).
-- **Client-controlled metrics series.** `nostr_events_total{kind}` is
-  counted before moderation and policy, so clients control its series
-  count, bounded at 65,536 kinds. `/metrics` is off by default and must
-  stay behind a proxy.
+- **Client-chosen metrics series.** `nostr_events_total{kind}` counts
+  stored events, so the first 256 kinds stored since start get their own
+  series and are chosen by whoever publishes first; later kinds share
+  `kind="other"`. `/metrics` is off by default and must stay behind a
+  proxy.
 - **Per-connection memory.** The baseline is about 11 KiB per idle connection,
   plain or with pooled deflate, against about 1 KiB for strfry without
   compression. The broadcast CPU per delivery is about 2.4× strfry's (round 7,
   P6 and P7).
-- **Writer stalls under overload.** Under sustained open-loop ingest at or
-  above 4,500 events/s on the benchmark VM, single commits of 1,024 events
-  took 1.1–12.4 s, and OK tail latency grew to seconds (round 7 W1). This is
-  under investigation. strfry runs with an effective `MDB_NOMETASYNC`, one
-  fsync fewer per commit.
+- **Writer latency under overload.** One write transaction commits the
+  whole writer queue (round 7 G1, #79 and #87). Under open-loop ingest at
+  4,500 events/s on the benchmark VM, `OK` p99 is 1.66 s against strfry's
+  1.13 s (0.3.0: 26.9 s). strfry runs with an effective `MDB_NOMETASYNC`,
+  one fsync fewer per commit.
 - **NIP-50 rejected.** NIP-50 `search` is rejected (`unsupported:`), and
   filter keys beyond NIP-01 are rejected rather than ignored.
 - **Filter validation off.** `[relay.filter_validation]` defaults to disabled,
@@ -619,8 +661,8 @@ No external audit has been performed.
 
 ```bash
 npx --yes @taplo/cli@0.7.0 fmt --check
-cargo +nightly fmt --all -- --check
-cargo +nightly clippy --workspace --all-targets --all-features -- -D warnings
+cargo +"$(cat .github/nightly-toolchain)" fmt --all -- --check
+cargo +"$(cat .github/nightly-toolchain)" clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 cargo deny check
@@ -636,9 +678,11 @@ crates/nosfry-conformance/run.sh worker      # worker-build 0.8.7, Node, wrangle
 # crash recovery: kill -9 cycles
 NOSFRY_CRASH_CYCLES=60 cargo test -p nosfry --test crash
 
-# fuzzing (nightly + cargo-fuzz); targets: client_message, event_roundtrip,
-# filter_parse, monitor_differential, packed_record
-cargo +nightly fuzz run <target> -- -max_total_time=60
+# fuzzing (pinned nightly + cargo-fuzz); targets: client_message,
+# event_roundtrip, filter_parse, filter_roundtrip, monitor_differential,
+# nip98_authorize, packed_record, policy_response, relay_message, relay_url,
+# session_sequence, state_line
+cargo +"$(cat .github/nightly-toolchain)" fuzz run <target> -- -max_total_time=60
 
 # run locally
 cargo run --release -p nosfry -- relay --config nosfry.example.toml
@@ -690,8 +734,12 @@ Load, soak and durability reproduction: `bench/README.md` (round 7:
   - `rusqlite.rs`: the `Executor` with workerd statement limits.
 - `crates/nosfry/src/`
   - `lib.rs`: server wiring, thread topology, `Live`, the reload loop, the
-    accept loop.
-  - `http.rs`: router, upgrade, `client_ip`, NIP-11 and landing.
+    accept loops and `serve_stream`.
+  - `peer.rs`: `Peer`, `Origin`, listener metadata, `resolve`.
+  - `http.rs`: router, upgrade, NIP-11 and landing.
+  - `onion.rs`: the embedded onion listener (`onion` feature).
+  - `sync/`: `nosfry sync` (URL vetting and dialing, NIP-11, the
+    reconciliation engine, ingest, AUTH).
   - `connection.rs`: the per-connection task and batching.
   - `writer.rs`: group commit, sweeps, broadcast.
   - `shard.rs`: the monitor shard and pending subscriptions.
@@ -726,18 +774,23 @@ LMDB is touched only by the writer and the readers.
 
 #### Connection accept and upgrade (native)
 
-1. The accept loop (`lib.rs`) applies `HEADER_READ_TIMEOUT` and optional
-   `SO_KEEPALIVE`.
-2. `http::root` handles the request:
-   1. `ip_blocked` (NIP-86 IP list on `client_ip`) answers 403.
+1. Each `[[relay.listen]]` entry has its own accept loop (`lib.rs`): TCP
+   (with `TCP_NODELAY` and optional `SO_KEEPALIVE`), a unix socket, or an
+   onion service (`onion.rs`). Every accepted stream enters
+   `serve_stream` with its `Origin`, which applies `HEADER_READ_TIMEOUT`
+   and the graceful stop.
+2. `http::root` resolves the peer (`peer::resolve`) and handles the
+   request:
+   1. `ip_blocked` (NIP-86 IP list on the peer's address) answers 403.
    2. An upgrade request goes to `websocket`.
    3. Otherwise `Accept: application/nostr+json` returns NIP-11 with CORS.
    4. Anything else gets the landing page.
 3. `websocket` takes one config snapshot, then:
    1. `upgrade_options`: payload cap, 2 KiB buffers, deflate (pooled or
       sliding).
-   2. `limiter.try_acquire(ip)` charges the global and per-IP caps before the
-      upgrade; failure answers 429.
+   2. `limiter.try_acquire(profile, peer)` charges the global cap and the
+      listener profile's per-peer cap before the upgrade; failure answers
+      429.
    3. The connection task is spawned with the address's shared buckets.
 
 #### Publish (EVENT)
@@ -752,8 +805,7 @@ LMDB is touched only by the writer and the readers.
    or kind, ephemeral events included; a request to vanish for this relay is
    exempt) and then the write-policy plugin when configured (`policy.rs`).
 3. It hands the request to the writer (`WRITER_QUEUE`).
-4. `writer::run` drains up to `BATCH_CAP` (1,024) requests and calls
-   `write_batch`:
+4. `writer::run` drains every queued request and calls `write_batch`:
    1. one LMDB transaction (`Store::write`) applies dedup, deletion and vanish
       blocks, replace, deletion targets, and expiry rows;
    2. the transaction commits;
@@ -890,8 +942,10 @@ LMDB is touched only by the writer and the readers.
 - `management::authorize` (`management.rs`): the NIP-98 gate.
 - `deletion::targets` (`deletion.rs`): author-bound NIP-09 targets.
 - `Event::requests_vanish` (`event.rs`): the NIP-62 relay match.
-- `http::client_ip`, `ConnectionLimiter::try_acquire` (`http.rs`,
+- `peer::resolve`, `ConnectionLimiter::try_acquire` (`peer.rs`,
   `limiter.rs`).
+- `dial::resolve` (`sync/dial.rs`): the `nosfry sync` URL and address
+  vetting.
 - `Config::load` / `Config::limits` / `Config::reloadable_from`
   (`config.rs`).
 - `policy::Response` parsing (`crates/nosfry-core/src/policy.rs`): id match
