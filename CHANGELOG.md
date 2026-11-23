@@ -10,6 +10,15 @@ The format is based on [Keep a Changelog]; this project follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-23
+
+This release went through the release dry run, the 60-cycle crash tests
+and the fuzz targets, but not the 72-hour soak that `CONTRIBUTING.md`
+asks for: the one run started on a release candidate shared its host
+with other workloads and was stopped. Treat long-run memory and latency
+behaviour as unverified until a soak on a dedicated host is recorded in
+`bench/SOAK.md`.
+
 ### Upgrading
 
 - Blossom (new, off by default) keeps its own store under
@@ -946,7 +955,8 @@ down`; CLOSE is never charged.
   - relayBench and nosfry-bench drivers;
   - the `aggregate.py` summary script.
 
-[Unreleased]: https://github.com/qntx/nosfry/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/qntx/nosfry/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/qntx/nosfry/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/qntx/nosfry/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/qntx/nosfry/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/qntx/nosfry/releases/tag/v0.1.0
