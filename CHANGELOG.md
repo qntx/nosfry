@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog]; this project follows
 
 ### Upgrading
 
+- Blossom (new, off by default) keeps its own store under
+  `[blossom] dir` (blob files plus a metadata LMDB environment at
+  format version 1); the relay's `[db]` is untouched. Back up both
+  parts of `dir` (`guides/blossom.md`).
 - The on-disk format stays at version 4 (unchanged since 0.2.0): to
   upgrade from 0.2.x or 0.3.x, replace the binary and restart. No
   export and import is needed.
@@ -183,6 +187,26 @@ The format is based on [Keep a Changelog]; this project follows
   (`site::LANDING_HEADERS`), in both editions.
 
 ### Added
+
+- **Blossom media server (native, off by default).** With
+  `[blossom] enabled = true` the relay process also serves Blossom
+  blobs (BUD-01 retrieval with single-range requests, BUD-02 and
+  BUD-13 `PUT /upload` and `PUT /<sha256>`, BUD-06 preflight, BUD-11
+  kind 24242 tokens in standard or URL-safe base64, BUD-12 list and
+  delete) on its own `[[blossom.listen]]` sockets and its own
+  `public_url` host; the relay refuses to start if either is shared
+  with the relay. Uploads are limited to the NIP-86 admins and allow
+  list unless `blossom.upload = "everyone"`, NIP-86 bans apply, and
+  per-pubkey quotas (`quota_bytes`, `quota_blobs`), a global
+  `max_total_bytes`, `max_blob_size` and an optional `mime_types`
+  list bound the store. Blobs are streamed to disk while hashed,
+  `fsync`ed and renamed into place before their metadata commits and
+  the client gets `201`. Every blob response is `nosniff` with a
+  `sandbox` Content-Security-Policy, and HTML, SVG and other
+  scriptable types are sent as attachments. `nosfry blob
+  list|stat|delete|ban|unban|gc|verify` administers the store;
+  `/metrics` gains `nosfry_blossom_*` series. Built in by the default
+  `blossom` cargo feature. See `guides/blossom.md`.
 
 - `[relay.access]` per-kind rules, in both editions, replacing the
   old restricted-kinds settings: each `[[relay.access.rules]]` entry

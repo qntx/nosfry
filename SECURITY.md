@@ -89,3 +89,23 @@ unless you ask otherwise, when the fixed release is out.
   there aren't any outstanding issues that make onion service support
   (clients or services) insecure." Operators who need C tor's maturity
   or onion PoW should use the torrc setup in `guides/tor.md` instead.
+- The Blossom blob server (`[blossom]`, off by default) stores files chosen
+  by whoever may upload, including HTML and SVG. It serves them only on its
+  own listeners and refuses a `public_url` on the relay's host, so a blob
+  never runs in the relay's origin (its storage, or the permissions a NIP-07
+  signer has granted that origin). Every blob response is `nosniff` with a
+  `sandbox` Content-Security-Policy, and scriptable types are sent as
+  `attachment`. Serve it on a hostname that shares no cookies with anything
+  sensitive: these headers are the second layer, the separate origin is the
+  first.
+- Blossom tokens (kind 24242) are bearer tokens, reusable until their
+  `expiration`; a captured token can repeat its action (scoped by its `t`,
+  `x` and `server` tags) until then. Serve the media hostname over TLS.
+- With `blossom.upload = "everyone"` the blob server is open storage, bounded
+  only by the per-pubkey quotas (new keys are free), the global
+  `max_total_bytes` cap and the reverse proxy's rate limit. The default,
+  `"allowed"`, accepts only the NIP-86 admins and allow list.
+- Blobs are stored and served exactly as uploaded: nosfry does not scan,
+  transcode or strip metadata (EXIF location included). `nosfry blob ban`
+  deletes a blob and refuses its hash from then on; copies already in CDN or
+  browser caches live up to the one-day `max-age`.

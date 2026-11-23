@@ -212,6 +212,42 @@ removes a profile a running listener uses is refused.
 `supported_nips` list verbatim; use it when a write-policy plugin implements a
 NIP the relay itself does not.
 
+### `[blossom]`
+
+The Blossom blob server (the `blossom` cargo feature): BUD-01/02/06/11/12/13
+blob hosting served on its own `[[blossom.listen]]` addresses, never on the
+relay listeners. `public_url` must be an `http://` or `https://` URL whose
+host differs from `relay.service_url` and every alias, so uploaded HTML/SVG
+can never run in the relay's origin; blobs are advertised as
+`<public_url>/<sha256>.<ext>`.
+
+| Key                              | Default                            | Reload  | Meaning                                                                             |
+| -------------------------------- | ---------------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `blossom.enabled`                | `false`                            | restart | Serve Blossom on `[[blossom.listen]]`.                                              |
+| `blossom.public_url`             | `""`                               | restart | The blob server's public `http(s)://host[:port]` URL — required when enabled.       |
+| `blossom.dir`                    | `"./nosfry-blobs"`                 | restart | Blob store directory (blob files, LMDB metadata, `tmp/`, `trash/`).                 |
+| `blossom.upload`                 | `"allowed"`                        | live    | Who may upload: `"allowed"` (admins plus NIP-86 allowed pubkeys) or `"everyone"`.   |
+| `blossom.max_blob_size`          | `104857600`                        | live    | Maximum blob size in bytes (at least 1, at most `max_total_bytes`).                 |
+| `blossom.max_total_bytes`        | `10737418240`                      | live    | Global cap on stored blob bytes (at least 1).                                       |
+| `blossom.quota_bytes`            | `1073741824`                       | live    | Per-pubkey stored-byte quota (at least 1).                                          |
+| `blossom.quota_blobs`            | `10000`                            | live    | Per-pubkey blob-count quota (at least 1).                                           |
+| `blossom.mime_types`             | `[]`                               | live    | Allowed `type/subtype` or `type/*` media types, lowercase; empty allows every type. |
+| `blossom.max_concurrent_uploads` | `16`                               | restart | Simultaneous upload streams (`1..=1024`; at most 4 per pubkey).                     |
+| `blossom.max_connections`        | `1024`                             | restart | Simultaneous blossom connections; accept waits for a free slot.                     |
+| `blossom.listen`                 | `[{ address = "127.0.0.1:7778" }]` | restart | The sockets the blob server accepts on: one `[[blossom.listen]]` table each.        |
+
+### `[[blossom.listen]]`
+
+Each `[[blossom.listen]]` table holds one key:
+
+- `address` (required): `"<ip>:<port>"`, `"[<ipv6>]:<port>"`, or
+  `"unix:<absolute path>"` — the same forms as `[[relay.listen]]` except
+  `onion:`, which is refused.
+
+Enabled requires at least one listener, addresses must be unique and must
+not collide with a `[[relay.listen]]` address. A reload keeps the running
+listeners and logs `blossom.listen` among the ignored restart-only keys.
+
 ## A minimal public configuration
 
 ```toml

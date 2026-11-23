@@ -1,5 +1,5 @@
 [workspace]
-members  = ["crates/nosfry", "crates/nosfry-conformance", "crates/nosfry-core", "crates/nosfry-lmdb", "crates/nosfry-sql", "crates/nosfry-testkit", "crates/nosfry-worker"]
+members  = ["crates/nosfry", "crates/nosfry-blossom", "crates/nosfry-conformance", "crates/nosfry-core", "crates/nosfry-lmdb", "crates/nosfry-sql", "crates/nosfry-testkit", "crates/nosfry-worker"]
 exclude  = ["bench/nosfry-bench", "fuzz"]
 resolver = "3"
 
@@ -15,9 +15,10 @@ keywords     = ["nostr", "relay", "websocket", "lmdb", "server"]
 categories   = ["network-programming", "web-programming::websocket"]
 
 [workspace.dependencies]
-nosfry-core = { path = "crates/nosfry-core", version = "0.3.0" }
-nosfry-lmdb = { path = "crates/nosfry-lmdb", version = "0.3.0" }
-nosfry-sql  = { path = "crates/nosfry-sql", version = "0.3.0" }
+nosfry-blossom = { path = "crates/nosfry-blossom", version = "0.3.0" }
+nosfry-core    = { path = "crates/nosfry-core", version = "0.3.0" }
+nosfry-lmdb    = { path = "crates/nosfry-lmdb", version = "0.3.0" }
+nosfry-sql     = { path = "crates/nosfry-sql", version = "0.3.0" }
 
 # Serialization / errors
 serde      = { version = "1.0.229", features = ["derive"] }

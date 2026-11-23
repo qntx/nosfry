@@ -287,3 +287,37 @@ terms_of_service = ""
 privacy_policy   = ""
 # Replace the computed supported_nips list verbatim.
 # supported_nips = [1, 11]
+
+# Blossom blob server (the `blossom` cargo feature): BUD-01/02/06/11/
+# 12/13 blob hosting on its own listeners. `public_url` must not share
+# a host with the relay — uploaded HTML/SVG must never run in the
+# relay's origin.
+[blossom]
+enabled = false
+# The blob server's public `http(s)://host[:port]` URL — required
+# when enabled; blobs are advertised as `<public_url>/<sha256>.<ext>`.
+public_url = ""
+# Blob store directory (blob files, LMDB metadata, `tmp/`, `trash/`).
+dir = "./nosfry-blobs"
+# "allowed" (admins plus NIP-86 allowed pubkeys) or "everyone".
+upload = "allowed"
+# Maximum blob size in bytes.
+max_blob_size = 104857600
+# Global cap on stored blob bytes.
+max_total_bytes = 10737418240
+# Per-pubkey stored-byte quota.
+quota_bytes = 1073741824
+# Per-pubkey blob-count quota.
+quota_blobs = 10000
+# Allowed `type/subtype` or `type/*` media types, lowercase; empty
+# allows every type.
+mime_types = []
+# Simultaneous upload streams (1..=1024; at most 4 per pubkey).
+max_concurrent_uploads = 16
+# Simultaneous blossom connections; accept waits for a free slot.
+max_connections = 1024
+
+# The blob server's own addresses — the same forms as [[relay.listen]]
+# except `onion:`, and they must not collide with a relay listener.
+[[blossom.listen]]
+address = "127.0.0.1:7778"

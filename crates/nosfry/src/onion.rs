@@ -332,7 +332,14 @@ pub(crate) async fn serve_circuit<S, St>(
         };
         let Some(io) = next else { break };
         circuit.metrics.stream();
-        serve_stream(io, origin.clone(), &router, &http_stop_rx, &http_tracker);
+        serve_stream(
+            io,
+            origin.clone(),
+            &router,
+            &http_stop_rx,
+            &http_tracker,
+            None,
+        );
     }
     debug!(listener = %circuit.info.id, circuit = n, "onion circuit closed");
     drop(circuit);

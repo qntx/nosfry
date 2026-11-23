@@ -235,6 +235,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd6f12461d14b5768028d39fab3cdfbcefb0bc7f09e95f413a00b6fdedcc9c2d"
 
 [[package]]
+name = "nosfry-blossom"
+version = "0.3.0"
+dependencies = [
+ "base64",
+ "faster-hex",
+ "nosfry-core",
+ "serde_json",
+ "sha2",
+ "thiserror",
+]
+
+[[package]]
 name = "nosfry-core"
 version = "0.3.0"
 dependencies = [
@@ -257,6 +269,7 @@ dependencies = [
  "arbitrary",
  "faster-hex",
  "libfuzzer-sys",
+ "nosfry-blossom",
  "nosfry-core",
  "secp256k1",
  "serde_json",

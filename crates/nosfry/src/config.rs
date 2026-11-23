@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use nosfry_core::access::AccessConfig;
 use nosfry_core::event::{EventLimits, PublicKey};
@@ -24,6 +25,8 @@ pub struct Config {
     pub events: EventLimits,
     /// Relay behaviour section.
     pub relay: Relay,
+    /// Blossom blob-server section (the `blossom` cargo feature).
+    pub blossom: Blossom,
 }
 
 /// `[db]` — LMDB environment.
@@ -230,6 +233,306 @@ impl<'de> Deserialize<'de> for ListenAddress {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = String::deserialize(deserializer)?;
         Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+/// `blossom.upload` — who may upload blobs.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Upload {
+    /// Admins plus NIP-86 allowed pubkeys.
+    #[default]
+    Allowed,
+    /// Any validly authorized pubkey.
+    Everyone,
+}
+
+/// `[blossom]` — the blob server (the `blossom` cargo feature).
+/// `upload`, `max_blob_size`, `max_total_bytes`, `quota_bytes`,
+/// `quota_blobs`, and `mime_types` are live-reloadable; everything
+/// else is restart-only.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Blossom {
+    /// Serve Blossom on `[[blossom.listen]]` (restart-only).
+    pub enabled: bool,
+    /// The blob server's public `http(s)://host[:port]` URL —
+    /// required when enabled; must not share a host with
+    /// `relay.service_url` or any alias so uploaded HTML/SVG can
+    /// never run in the relay's origin (restart-only).
+    pub public_url: String,
+    /// Blob store directory (restart-only).
+    pub dir: PathBuf,
+    /// Who may upload.
+    pub upload: Upload,
+    /// Maximum blob size in bytes (at least 1, at most
+    /// `max_total_bytes`).
+    pub max_blob_size: u64,
+    /// Global cap on stored blob bytes (at least 1).
+    pub max_total_bytes: u64,
+    /// Per-pubkey stored-byte quota (at least 1).
+    pub quota_bytes: u64,
+    /// Per-pubkey blob-count quota (at least 1).
+    pub quota_blobs: u64,
+    /// Allowed `type/subtype` or `type/*` media types, lowercase;
+    /// empty allows every type.
+    pub mime_types: Vec<String>,
+    /// Simultaneous upload streams, 1..=1024 (restart-only).
+    pub max_concurrent_uploads: usize,
+    /// Simultaneous blossom connections — accept waits for a free
+    /// slot (restart-only).
+    pub max_connections: usize,
+    /// `[[blossom.listen]]` — the blob server's addresses
+    /// (restart-only).
+    #[serde(default = "default_blossom_listen")]
+    pub listen: Vec<BlossomListen>,
+}
+
+/// One `[[blossom.listen]]` entry — the same address forms as
+/// `[[relay.listen]]` except `onion:`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BlossomListen {
+    /// `"<ip>:<port>"`, `"[v6]:<port>"`, or `"unix:<absolute path>"`.
+    pub address: ListenAddress,
+}
+
+fn default_blossom_listen() -> Vec<BlossomListen> {
+    vec![BlossomListen {
+        address: ListenAddress::Tcp(SocketAddr::from(([127, 0, 0, 1], 7_778))),
+    }]
+}
+
+impl Default for Blossom {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            public_url: String::new(),
+            dir: PathBuf::from("./nosfry-blobs"),
+            upload: Upload::default(),
+            max_blob_size: 104_857_600,
+            max_total_bytes: 10_737_418_240,
+            quota_bytes: 1_073_741_824,
+            quota_blobs: 10_000,
+            mime_types: Vec::new(),
+            max_concurrent_uploads: 16,
+            max_connections: 1024,
+            listen: default_blossom_listen(),
+        }
+    }
+}
+
+impl Blossom {
+    /// The `public_url` host, lowercased — `None` when it does not
+    /// parse to an `http(s)` URL with a host.
+    #[cfg(feature = "blossom")]
+    fn public_host(&self) -> Option<String> {
+        url::Url::parse(&self.public_url)
+            .ok()?
+            .host_str()
+            .map(str::to_ascii_lowercase)
+    }
+
+    /// The `ws(s)`/`http(s)` host of a relay name URL — `None` when
+    /// it has none (empty string included).
+    #[cfg(feature = "blossom")]
+    fn url_host(name: &str) -> Option<String> {
+        if name.is_empty() {
+            return None;
+        }
+        url::Url::parse(name)
+            .ok()?
+            .host_str()
+            .map(str::to_ascii_lowercase)
+    }
+
+    /// The restart-only service settings for `nosfry_blossom`.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::RelayValue`] when `public_url` is unusable —
+    /// unreachable after a validated load.
+    #[cfg(feature = "blossom")]
+    pub fn settings(&self) -> Result<nosfry_blossom::Settings, ServerError> {
+        Ok(nosfry_blossom::Settings {
+            public_url: self.public_url.trim_end_matches('/').to_owned(),
+            public_host: self.public_host().ok_or_else(|| {
+                ServerError::RelayValue("blossom.public_url has no host".to_owned())
+            })?,
+            max_concurrent_uploads: self.max_concurrent_uploads,
+        })
+    }
+
+    /// The live `nosfry_blossom` policy this config describes.
+    #[cfg(feature = "blossom")]
+    #[must_use]
+    pub fn policy(&self, admins: &Arc<[PublicKey]>) -> nosfry_blossom::Policy {
+        nosfry_blossom::Policy {
+            upload_everyone: self.upload == Upload::Everyone,
+            admins: Arc::clone(admins),
+            max_blob_size: self.max_blob_size,
+            max_total_bytes: self.max_total_bytes,
+            quota_bytes: self.quota_bytes,
+            quota_blobs: self.quota_blobs,
+            mime_types: self.mime_types.clone(),
+        }
+    }
+
+    /// Whether two listener addresses collide — the same TCP port
+    /// where either IP is unspecified or the IPs match, or the same
+    /// unix path. A port-0 (ephemeral) entry can never collide: the
+    /// OS assigns a free port.
+    #[cfg(feature = "blossom")]
+    fn addresses_clash(here: &ListenAddress, other: &ListenAddress) -> bool {
+        match (here, other) {
+            (ListenAddress::Tcp(here), ListenAddress::Tcp(other)) => {
+                here.port() != 0
+                    && here.port() == other.port()
+                    && (here.ip().is_unspecified()
+                        || other.ip().is_unspecified()
+                        || here.ip() == other.ip())
+            }
+            (ListenAddress::Unix(here), ListenAddress::Unix(other)) => here == other,
+            _ => false,
+        }
+    }
+
+    /// Field rules, checked at load and at reload through
+    /// [`Config::limits`]. Numeric/shape rules always run; listener
+    /// and `public_url` cross-checks run when `enabled`.
+    ///
+    /// # Errors
+    ///
+    /// [`ServerError::RelayValue`] describing the first rule broken.
+    pub fn check(&self, relay: &Relay) -> Result<(), ServerError> {
+        for (key, value) in [
+            ("max_blob_size", self.max_blob_size),
+            ("max_total_bytes", self.max_total_bytes),
+            ("quota_bytes", self.quota_bytes),
+            ("quota_blobs", self.quota_blobs),
+        ] {
+            if value == 0 {
+                return Err(ServerError::RelayValue(format!(
+                    "blossom.{key} must be at least 1"
+                )));
+            }
+        }
+        if self.max_blob_size > self.max_total_bytes {
+            return Err(ServerError::RelayValue(
+                "blossom.max_blob_size must not exceed blossom.max_total_bytes".to_owned(),
+            ));
+        }
+        if self.max_concurrent_uploads == 0 || self.max_concurrent_uploads > 1024 {
+            return Err(ServerError::RelayValue(
+                "blossom.max_concurrent_uploads must be in 1..=1024".to_owned(),
+            ));
+        }
+        if self.max_connections == 0 {
+            return Err(ServerError::RelayValue(
+                "blossom.max_connections must be at least 1".to_owned(),
+            ));
+        }
+        let mut seen = HashSet::with_capacity(self.listen.len());
+        for listen in &self.listen {
+            if !seen.insert(&listen.address) {
+                return Err(ServerError::RelayValue(format!(
+                    "blossom.listen: duplicate address \"{}\"",
+                    listen.address
+                )));
+            }
+            if let ListenAddress::Onion(nickname) = &listen.address {
+                return Err(ServerError::RelayValue(format!(
+                    "blossom.listen: \"onion:{nickname}\" — blossom listeners do not \
+                     support onion: yet"
+                )));
+            }
+        }
+        #[cfg(feature = "blossom")]
+        for mime in &self.mime_types {
+            if !nosfry_blossom::mime::allow_entry(mime) {
+                return Err(ServerError::RelayValue(format!(
+                    "blossom.mime_types entry {mime:?} is not a lowercase \
+                     \"type/subtype\" or \"type/*\""
+                )));
+            }
+        }
+        if !self.enabled {
+            return Ok(());
+        }
+        #[cfg(not(feature = "blossom"))]
+        {
+            let _ = relay;
+            Err(ServerError::RelayValue(
+                "blossom.enabled: needs nosfry built with the blossom cargo \
+                 feature (cargo install nosfry --features blossom)"
+                    .to_owned(),
+            ))
+        }
+        #[cfg(feature = "blossom")]
+        {
+            if self.listen.is_empty() {
+                return Err(ServerError::RelayValue(
+                    "blossom.listen needs at least one listener when enabled".to_owned(),
+                ));
+            }
+            self.check_public_url(relay)?;
+            let clash = self
+                .listen
+                .iter()
+                .flat_map(|listen| relay.listen.iter().map(move |r| (listen, r)))
+                .find(|(listen, r)| Self::addresses_clash(&listen.address, &r.address));
+            if let Some((listen, relay_listen)) = clash {
+                return Err(ServerError::RelayValue(format!(
+                    "blossom.listen \"{}\" shares an address with relay.listen \"{}\"",
+                    listen.address, relay_listen.address
+                )));
+            }
+            Ok(())
+        }
+    }
+
+    /// `public_url` shape plus the must-not-share-a-host check
+    /// against `service_url` and `service_url_aliases`.
+    #[cfg(feature = "blossom")]
+    fn check_public_url(&self, relay: &Relay) -> Result<(), ServerError> {
+        let parsed = url::Url::parse(&self.public_url).map_err(|_| {
+            ServerError::RelayValue(format!(
+                "blossom.public_url {:?} is not a valid http(s) URL",
+                self.public_url
+            ))
+        })?;
+        let good_shape = matches!(parsed.scheme(), "http" | "https")
+            && parsed.host().is_some()
+            && parsed.username().is_empty()
+            && parsed.password().is_none()
+            && (parsed.path().is_empty() || parsed.path() == "/")
+            && parsed.query().is_none()
+            && parsed.fragment().is_none();
+        if !good_shape {
+            return Err(ServerError::RelayValue(format!(
+                "blossom.public_url {:?} must be http(s)://host[:port] with no path, \
+                 query, fragment, or userinfo",
+                self.public_url
+            )));
+        }
+        let Some(host) = parsed.host_str().map(str::to_ascii_lowercase) else {
+            return Err(ServerError::RelayValue(
+                "blossom.public_url has no host".to_owned(),
+            ));
+        };
+        let names = std::iter::once(relay.service_url.as_str())
+            .chain(relay.service_url_aliases.iter().map(String::as_str));
+        if names
+            .filter_map(Self::url_host)
+            .any(|relay_host| relay_host == host)
+        {
+            return Err(ServerError::RelayValue(
+                "blossom.public_url must be on a different host than the relay \
+                 (uploaded HTML/SVG must never run in the relay's origin)"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
     }
 }
 
@@ -585,6 +888,7 @@ impl Config {
         }
         self.relay.check_listeners()?;
         self.relay.onion.check()?;
+        self.blossom.check(&self.relay)?;
         nosfry_core::limits::check_payload_size(
             self.relay.max_websocket_payload_size,
             &self.events,
@@ -617,7 +921,7 @@ impl Config {
                 .profiles()
                 .get("default")
                 .map_or_else(RateLimits::default, |profile| profile.rate_limits),
-            auth: std::sync::Arc::new(nosfry_core::auth::AuthRules::new(names, access)),
+            auth: Arc::new(nosfry_core::auth::AuthRules::new(names, access)),
         })
     }
 
@@ -627,14 +931,14 @@ impl Config {
     pub(crate) fn profile_limits(
         &self,
         base: &Limits,
-    ) -> std::collections::HashMap<String, std::sync::Arc<Limits>> {
+    ) -> std::collections::HashMap<String, Arc<Limits>> {
         self.relay
             .profiles()
             .iter()
             .map(|(name, profile)| {
                 (
                     name.clone(),
-                    std::sync::Arc::new(Limits {
+                    Arc::new(Limits {
                         rate: profile.rate_limits,
                         ..base.clone()
                     }),
@@ -650,7 +954,7 @@ impl Config {
     /// # Errors
     ///
     /// [`ServerError::Admins`] on a malformed entry.
-    pub(crate) fn admins(&self) -> Result<std::sync::Arc<[PublicKey]>, ServerError> {
+    pub(crate) fn admins(&self) -> Result<Arc<[PublicKey]>, ServerError> {
         Ok(self
             .relay
             .management
@@ -767,6 +1071,43 @@ impl Config {
         relay.onion.clone_from(&running.onion);
         relay.onion.onion_location = onion_location;
         relay.onion_urls.clone_from(&running.onion_urls);
+        // `[blossom]` restart-only keys; the live keys follow `new`
+        // and reach the blob service through its policy channel.
+        #[cfg(feature = "blossom")]
+        {
+            let blossom = &mut new.blossom;
+            let running_blossom = &self.blossom;
+            ignored.extend(
+                [
+                    (
+                        "blossom.enabled",
+                        blossom.enabled != running_blossom.enabled,
+                    ),
+                    (
+                        "blossom.public_url",
+                        blossom.public_url != running_blossom.public_url,
+                    ),
+                    ("blossom.dir", blossom.dir != running_blossom.dir),
+                    (
+                        "blossom.max_concurrent_uploads",
+                        blossom.max_concurrent_uploads != running_blossom.max_concurrent_uploads,
+                    ),
+                    (
+                        "blossom.max_connections",
+                        blossom.max_connections != running_blossom.max_connections,
+                    ),
+                    ("blossom.listen", blossom.listen != running_blossom.listen),
+                ]
+                .into_iter()
+                .filter_map(|(name, changed)| changed.then_some(name)),
+            );
+            blossom.enabled = running_blossom.enabled;
+            blossom.public_url.clone_from(&running_blossom.public_url);
+            blossom.dir.clone_from(&running_blossom.dir);
+            blossom.max_concurrent_uploads = running_blossom.max_concurrent_uploads;
+            blossom.max_connections = running_blossom.max_connections;
+            blossom.listen.clone_from(&running_blossom.listen);
+        }
         (new, ignored)
     }
 }
@@ -782,6 +1123,16 @@ mod tests {
         let text = include_str!("../../../nosfry.example.toml");
         let parsed: Config = toml::from_str(text).unwrap();
         assert_eq!(parsed, Config::default());
+    }
+
+    /// `[blossom]` parses without the feature but `enabled` refuses
+    /// (the `relay.listen` `onion:` address gate's precedent).
+    #[cfg(not(feature = "blossom"))]
+    #[test]
+    fn blossom_enabled_needs_feature() {
+        let parsed: Config = toml::from_str("[blossom]\nenabled = true\n").unwrap();
+        let err = parsed.blossom.check(&parsed.relay).unwrap_err();
+        assert!(err.to_string().contains("blossom cargo feature"), "{err}");
     }
 
     /// `relay.nofiles` defaults to strfry's `1_000_000`; `0` disables.

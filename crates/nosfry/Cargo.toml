@@ -14,6 +14,7 @@ categories.workspace   = true
 [dependencies]
 nosfry-core.workspace        = true
 nosfry-lmdb.workspace        = true
+nosfry-blossom               = { workspace = true, optional = true }
 axum.workspace               = true
 bytes.workspace              = true
 clap.workspace               = true
@@ -53,6 +54,7 @@ safelog       = { workspace = true, optional = true }
 
 [dev-dependencies]
 base64.workspace     = true
+nosfry-blossom       = { workspace = true }
 nosfry-core          = { workspace = true, features = ["test-util"] }
 flate2.workspace     = true
 proptest.workspace   = true
@@ -62,7 +64,17 @@ sha2.workspace       = true
 tempfile.workspace   = true
 
 [features]
-onion = ["dep:arti-client", "dep:tor-hsservice", "dep:tor-cell", "dep:tor-proto", "dep:tor-keymgr", "dep:tor-rtcompat", "dep:safelog", "arti-client/onion-service-client"]
+default = ["blossom"]
+blossom = ["dep:nosfry-blossom"]
+onion   = ["dep:arti-client", "dep:tor-hsservice", "dep:tor-cell", "dep:tor-proto", "dep:tor-keymgr", "dep:tor-rtcompat", "dep:safelog", "arti-client/onion-service-client"]
+
+[[test]]
+name              = "blossom"
+required-features = ["blossom"]
+
+[[test]]
+name              = "blossom_crash"
+required-features = ["blossom"]
 
 [[test]]
 name              = "onion"

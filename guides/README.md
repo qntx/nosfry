@@ -12,6 +12,7 @@
 | [workers.md](workers.md)               | The Cloudflare Workers edition (preview): build, configure, run locally, deploy.                                                                                           |
 | [test-relay.md](test-relay.md)         | A pinned, seeded, resettable relay for client integration tests and CI.                                                                                                    |
 | [marmot.md](marmot.md)                 | Running a Marmot (MDK / White Noise) relay: the shipped profile, the Workers translation, privacy, members-only variants, verification.                                    |
+| [blossom.md](blossom.md)               | The Blossom media server: enabling it, the separate origin, a reverse proxy, upload policy and tokens, quotas, durability, `nosfry blob`, backup.                          |
 
 The files these guides refer to are in [`contrib/`](../contrib):
 `contrib/systemd/nosfry.service`, `contrib/nginx/nosfry.conf`,
