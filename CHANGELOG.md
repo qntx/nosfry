@@ -224,6 +224,17 @@ The format is based on [Keep a Changelog]; this project follows
   default artifacts; the release build asserts the default binary and
   SBOM contain no Arti and the onion ones do.
 
+- **`nosfry sync` over Tor (native, `onion` feature).** A
+  `ws://<addr>.onion` peer URL is dialed through an embedded Arti
+  client — `ws://` only, because the circuit already encrypts and
+  authenticates the service, and never a clearnet DNS lookup. The
+  client shares `[relay.onion] state_dir` with the onion listeners:
+  one guard set per installation, a warm cache next to a running
+  relay, and read-only state and cache under Arti's own lock files when
+  that relay holds them. Bootstrap is bounded at 180 seconds, each
+  connection by `--timeout`; a build without the feature refuses the
+  URL and names it.
+
 - `nosfry sync <url> [--filter] [--dir down|up|both] [--since]
   [--until]` reconciles the local database with any NIP-77 relay
   (nosfry, strfry) and transfers the difference (native). Memory stays

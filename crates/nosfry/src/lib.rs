@@ -21,6 +21,10 @@
         reason = "dev-deps are exercised by integration tests"
     )
 )]
+// Proving `Send` for `nosfry sync`'s futures walks Arti's
+// `TorClient::connect` type graph, which is `Send` but deeper than the
+// default limit of 128.
+#![cfg_attr(feature = "onion", recursion_limit = "256")]
 
 pub mod admin;
 mod channels;

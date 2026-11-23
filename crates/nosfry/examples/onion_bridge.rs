@@ -6,7 +6,7 @@
 //! For conformance runs through the onion address:
 //!
 //! ```sh
-//! cargo run -p nosfry --features onion-e2e --example onion_bridge -- \
+//! cargo run -p nosfry --features onion --example onion_bridge -- \
 //!     <addr>.onion 17878 &
 //! crates/nosfry-conformance/run.sh remote ws://127.0.0.1:17878
 //! ```

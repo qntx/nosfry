@@ -3,7 +3,7 @@
 //! reachability for up to five minutes:
 //!
 //! ```sh
-//! cargo test -p nosfry --features onion-e2e --test onion -- --ignored --nocapture
+//! cargo test -p nosfry --features onion --test onion -- --ignored --nocapture
 //! ```
 
 #![allow(
@@ -158,7 +158,7 @@ async fn ws_roundtrip(
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "needs the Tor network: cargo test -p nosfry --features onion-e2e --test onion -- --ignored --nocapture"]
+#[ignore = "needs the Tor network: cargo test -p nosfry --features onion --test onion -- --ignored --nocapture"]
 async fn onion_listener_end_to_end() {
     let started = Instant::now();
     let dir = tempfile::tempdir().unwrap();

@@ -52,8 +52,8 @@ TCP-to-onion bridge used to run the conformance suite through the
 onion address (`run.sh remote`):
 
 ```bash
-cargo test -p nosfry --features onion-e2e --test onion -- --ignored --nocapture
-cargo run -p nosfry --features onion-e2e --example onion_bridge -- <onion-host> <local-port>
+cargo test -p nosfry --features onion --test onion -- --ignored --nocapture
+cargo run -p nosfry --features onion --example onion_bridge -- <onion-host> <local-port>
 ```
 
 Crash-recovery testing (kill -9 cycles): the `crash` test defaults to

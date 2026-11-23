@@ -177,6 +177,14 @@ The write-policy plugin sees onion connections as
 `"sourceType":"Onion"` with the listener id (`onion:<nickname>`) as
 `sourceInfo`.
 
+### Syncing over Tor
+
+The same feature also lets `nosfry sync` dial a peer's
+`ws://<addr>.onion` URL through an embedded Arti client that shares
+`[relay.onion] state_dir` with the listeners — next to a running relay
+Arti's lock files make it read the shared state and cache without
+writing. See `guides/sync.md`.
+
 ### Which to choose
 
 |                            | torrc (C tor)            | embedded (Arti)            |

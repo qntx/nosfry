@@ -50,7 +50,7 @@ const BACKOFF_MAX: Duration = Duration::from_secs(300);
 const BACKOFF_MIN: Duration = Duration::from_secs(1);
 
 /// The shared Arti client's concrete type.
-type Client = TorClient<PreferredRuntime>;
+pub(crate) type Client = TorClient<PreferredRuntime>;
 
 /// An onion listener's bound state: the shared Arti client, the
 /// service's configuration and its derived `ws://` URL.
@@ -74,7 +74,7 @@ impl fmt::Debug for Bound {
 
 /// The Arti client configuration: a `state/` and `cache/` pair under
 /// the configured `state_dir`.
-fn tor_config(onion: &Onion) -> Result<arti_client::TorClientConfig, ServerError> {
+pub(crate) fn tor_config(onion: &Onion) -> Result<arti_client::TorClientConfig, ServerError> {
     TorClientConfigBuilder::from_directories(
         onion.state_dir.join("state"),
         onion.state_dir.join("cache"),
@@ -379,8 +379,9 @@ async fn next_boot(
 }
 
 /// Log Arti bootstrap progress: once per 10 % step and once when
-/// ready for traffic.
-async fn log_bootstrap(client: Arc<Client>, mut stop: watch::Receiver<()>) {
+/// ready for traffic. `stop` ends it early; the sync dialer keeps a
+/// channel open for the bootstrap's span.
+pub(crate) async fn log_bootstrap(client: Arc<Client>, mut stop: watch::Receiver<()>) {
     let mut events = std::pin::pin!(client.bootstrap_events());
     let mut next_step = 0.1_f32;
     while let Some(status) = next_boot(&mut events, &mut stop).await {
