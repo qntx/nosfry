@@ -4026,12 +4026,15 @@ fn vanish_config() -> nosfry::config::Config {
 
 /// REQ `{}` until exactly `want` ids are served or the bound expires;
 /// the vanish sweep runs on the writer, so the client may observe the
-/// pre-sweep set for a few polls.
+/// pre-sweep set for a few polls. Each poll's subscription is closed
+/// again, so a later publish on this connection answers `OK` without a
+/// live `EVENT` racing ahead of it.
 async fn settled_ids(ws: &mut yawc::TcpWebSocket, sub: &str, want: &mut Vec<String>) {
     want.sort_unstable();
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let mut got = req_ids(ws, sub, "{}").await;
+        send_text(ws, &close_wire(sub)).await;
         got.sort_unstable();
         if got == *want {
             return;
