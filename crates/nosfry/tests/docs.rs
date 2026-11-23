@@ -384,6 +384,44 @@ fn toml_blocks(path: &Path) -> Vec<String> {
     blocks
 }
 
+/// Whether `block` needs a cargo feature this build lacks —
+/// `[[relay.listen]]` `onion:`/`iroh:` addresses only the feature
+/// build binds, and `[blossom] enabled = true` only the feature
+/// build accepts (the table parses either way).
+fn needs_missing_feature(block: &str) -> bool {
+    let Ok(value) = toml::from_str::<toml::Value>(block) else {
+        return false;
+    };
+    if !cfg!(feature = "blossom")
+        && value
+            .get("blossom")
+            .and_then(|blossom| blossom.get("enabled"))
+            .and_then(toml::Value::as_bool)
+            == Some(true)
+    {
+        return true;
+    }
+    let Some(listens) = value
+        .get("relay")
+        .and_then(|relay| relay.get("listen"))
+        .and_then(toml::Value::as_array)
+    else {
+        return false;
+    };
+    listens.iter().any(|listen| {
+        let scheme = listen
+            .get("address")
+            .and_then(toml::Value::as_str)
+            .and_then(|address| address.split_once(':'))
+            .map(|(scheme, _)| scheme);
+        match scheme {
+            Some("onion") => !cfg!(feature = "onion"),
+            Some("iroh") => !cfg!(feature = "iroh"),
+            _ => false,
+        }
+    })
+}
+
 #[test]
 fn guide_toml_blocks_load() {
     let root = repo_root();
@@ -397,8 +435,13 @@ fn guide_toml_blocks_load() {
         }
     }
     let mut count = 0;
+    let mut skipped = 0;
     for file in &files {
         for (index, block) in toml_blocks(file).iter().enumerate() {
+            if needs_missing_feature(block) {
+                skipped += 1;
+                continue;
+            }
             count += 1;
             let tmp = tempfile::NamedTempFile::new().unwrap();
             std::fs::write(tmp.path(), block).unwrap();
@@ -410,9 +453,12 @@ fn guide_toml_blocks_load() {
             }
         }
     }
+    #[cfg(all(feature = "onion", feature = "iroh", feature = "blossom"))]
+    assert_eq!(skipped, 0, "an all-features build loads every block");
     assert!(
         count >= 3,
-        "expected at least the three guide TOML blocks, found {count}"
+        "expected at least the three guide TOML blocks, found {count} \
+         ({skipped} feature-gated)"
     );
 }
 

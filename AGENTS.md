@@ -56,6 +56,16 @@ cargo test -p nosfry --features onion --test onion -- --ignored --nocapture
 cargo run -p nosfry --features onion --example onion_bridge -- <onion-host> <local-port>
 ```
 
+Embedded iroh: the conformance suite through an `iroh:` listener
+(the `nosfry connect` TCP gateway bridges the suite to it), the
+gateway itself, and the ignored n0-relay-path network test:
+
+```bash
+crates/nosfry-conformance/run.sh native-iroh
+cargo run -p nosfry --features iroh -- connect <dial-address> --listen 127.0.0.1:8080
+cargo test -p nosfry --features iroh --test iroh -- --ignored --nocapture
+```
+
 Crash-recovery testing (kill -9 cycles): the `crash` test defaults to
 6 cycles; raise `NOSFRY_CRASH_CYCLES` for long runs before a release:
 

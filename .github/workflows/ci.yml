@@ -124,6 +124,8 @@ jobs:
         run: crates/nosfry-conformance/run.sh native
       - name: Run the conformance suite through a unix-socket listener
         run: crates/nosfry-conformance/run.sh native-unix
+      - name: Run the conformance suite through the iroh listener
+        run: crates/nosfry-conformance/run.sh native-iroh
 
   conformance-worker:
     runs-on: ubuntu-latest
@@ -155,7 +157,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   default-features:
-    name: default build has no Arti
+    name: default build has no Arti or iroh
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -167,10 +169,10 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: default-features
-      - name: Assert the default build links no Arti crates
+      - name: Assert the default build links no Arti or iroh crates
         run: |
-          if cargo tree -p nosfry -e normal --prefix none | grep -E '^(arti-|tor-)'; then
-            echo "::error::Arti crates in nosfry's default dependency graph; the onion feature must be the only path to them"
+          if cargo tree -p nosfry -e normal --prefix none | grep -E '^(arti-|tor-|iroh|noq)'; then
+            echo "::error::Arti or iroh crates in nosfry's default dependency graph; the onion and iroh features must be the only paths to them"
             exit 1
           fi
       - run: cargo clippy -p nosfry --all-targets -- -D warnings

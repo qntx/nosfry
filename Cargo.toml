@@ -52,6 +52,9 @@ tor-proto     = "=0.48.0"
 tor-rtcompat  = "=0.48.0"
 safelog       = "=0.10.1"
 
+# iroh transport (nosfry feature "iroh" only)
+iroh = { version = "=1.4.1", default-features = false, features = ["tls-ring", "portmapper"] }
+
 # Testing
 proptest  = "1.12.0"
 criterion = "0.8.2"

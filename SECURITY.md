@@ -109,3 +109,19 @@ unless you ask otherwise, when the fixed release is out.
   transcode or strip metadata (EXIF location included). `nosfry blob ban`
   deletes a blob and refuses its hash from then on; copies already in CDN or
   browser caches live up to the one-day `max-age`.
+- The iroh listener (`--features iroh`) keys per-peer caps and buckets
+  on the remote endpoint id, which the QUIC handshake authenticates.
+  Endpoint ids cost nothing to create, so these limits attribute load
+  but do not bound it: the listener-wide bound is
+  `relay.iroh.max_connections`, enforced before the handshake (a
+  refused connection costs no cryptography), with at most
+  `max_streams_per_connection` streams per connection. A client minting
+  ids can fill that budget and deny the iroh listener, not the other
+  listeners or the store. NIP-86 `blockip` does not apply to iroh peers.
+  With the default `relay_mode = "n0"` and `address_lookup = "n0"`,
+  number0's public relays see both endpoints' IP addresses, connection
+  times and traffic volumes (not content: QUIC TLS is end to end), and
+  number0's DNS server learns the endpoint id and its home relay; a
+  direct path shows each side the other's IP address. The listener's
+  secret key, `<relay.iroh.state_dir>/<nickname>.key`, is the endpoint
+  id: anyone who copies it can impersonate the relay's iroh name.

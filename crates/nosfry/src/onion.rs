@@ -13,7 +13,6 @@
 //! `DataStream`s, and `serve_circuit` only sees byte streams.
 
 use std::fmt;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -105,70 +104,6 @@ fn svc_config(onion: &Onion, nickname: &str) -> Result<OnionServiceConfig, Serve
         .map_err(|err| ServerError::Onion(err.to_string()))
 }
 
-/// `state_dir` must be a directory with no group/other permission
-/// bits — it holds the onion identity key. A missing directory is
-/// created with mode 0700; an existing one that is too open is an
-/// error naming the fix, never silently tightened.
-#[cfg(unix)]
-pub(crate) fn prepare_state_dir(path: &Path) -> Result<(), ServerError> {
-    use std::fs::DirBuilder;
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
-
-    match std::fs::metadata(path) {
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            let mut builder = DirBuilder::new();
-            builder.recursive(true).mode(0o700);
-            builder.create(path).map_err(|e| {
-                ServerError::Onion(format!(
-                    "cannot create onion state dir {}: {e}",
-                    path.display()
-                ))
-            })?;
-            Ok(())
-        }
-        Err(err) => Err(ServerError::Onion(format!(
-            "cannot stat onion state dir {}: {err}",
-            path.display()
-        ))),
-        Ok(meta) => {
-            let mode = meta.mode() & 0o777;
-            if !meta.is_dir() || mode & 0o077 != 0 {
-                return Err(ServerError::Onion(format!(
-                    "onion state dir {} is unsafe (mode {mode:03o}): \
-                     it must be a directory with mode 0700; run `chmod 700 {}`",
-                    path.display(),
-                    path.display()
-                )));
-            }
-            Ok(())
-        }
-    }
-}
-
-/// Non-unix builds have no mode bits to enforce; Arti's filesystem
-/// mistrust still applies its platform rules.
-#[cfg(not(unix))]
-pub(crate) fn prepare_state_dir(path: &Path) -> Result<(), ServerError> {
-    match std::fs::metadata(path) {
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => std::fs::create_dir_all(path)
-            .map_err(|err| {
-                ServerError::Onion(format!(
-                    "cannot create onion state dir {}: {err}",
-                    path.display()
-                ))
-            }),
-        Err(err) => Err(ServerError::Onion(format!(
-            "cannot stat onion state dir {}: {err}",
-            path.display()
-        ))),
-        Ok(meta) if meta.is_dir() => Ok(()),
-        Ok(_) => Err(ServerError::Onion(format!(
-            "onion state dir {} is not a directory",
-            path.display()
-        ))),
-    }
-}
-
 /// Generate (or load) the nickname's identity key in the keystore
 /// and return its service configuration and `ws://<addr>.onion`
 /// URL. Offline: an `OnionService` created this way has no runtime
@@ -194,7 +129,8 @@ fn identity(onion: &Onion, nickname: &str) -> Result<(OnionServiceConfig, String
 ///
 /// Any keystore/state-dir failure, or no onion listener in the config.
 pub fn addresses(config: &Config) -> Result<Vec<String>, ServerError> {
-    prepare_state_dir(&config.relay.onion.state_dir)?;
+    crate::state_dir::prepare(&config.relay.onion.state_dir, "onion")
+        .map_err(ServerError::Onion)?;
     let mut urls = Vec::new();
     for listen in &config.relay.listen {
         if let crate::config::ListenAddress::Onion(nickname) = &listen.address {
@@ -219,7 +155,7 @@ pub(crate) fn bind_service(
     nickname: &str,
     client: &mut Option<Arc<Client>>,
 ) -> Result<Bound, ServerError> {
-    prepare_state_dir(&onion.state_dir)?;
+    crate::state_dir::prepare(&onion.state_dir, "onion").map_err(ServerError::Onion)?;
     let tor_cfg = tor_config(onion)?;
     let (svc_config, url) = identity(onion, nickname)?;
     let client = if let Some(client) = client.as_ref() {
@@ -643,7 +579,6 @@ pub(crate) async fn supervise(
     reason = "unit tests panic on failure and check URL shapes"
 )]
 mod tests {
-    use std::io::Write as _;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use futures_util::{SinkExt as _, stream};
@@ -666,7 +601,7 @@ mod tests {
         Arc::new(metrics::OnionListener::new(Arc::from(nickname)))
     }
 
-    fn onion_config(state_dir: &Path) -> Config {
+    fn onion_config(state_dir: &std::path::Path) -> Config {
         let dir = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         config.db.path = dir.keep();
@@ -686,34 +621,6 @@ mod tests {
         config.relay.onion.onion_location = true;
         config.relay.onion_urls = vec!["ws://abcdefghij.onion".to_owned()];
         config
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn state_dir_rules() {
-        use std::os::unix::fs::{MetadataExt, PermissionsExt};
-
-        let root = tempfile::tempdir().unwrap();
-        // Missing → created with mode 0700.
-        let missing = root.path().join("new");
-        prepare_state_dir(&missing).unwrap();
-        assert_eq!(missing.metadata().unwrap().mode() & 0o777, 0o700);
-        // Mode 0700 accepted.
-        prepare_state_dir(&missing).unwrap();
-        // Too open → refused with the chmod hint.
-        let open = root.path().join("open");
-        std::fs::create_dir(&open).unwrap();
-        std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let err = prepare_state_dir(&open).unwrap_err().to_string();
-        assert!(err.contains("mode 755"), "{err}");
-        assert!(err.contains("chmod 700"), "{err}");
-        // Not a directory → refused.
-        let file = root.path().join("file");
-        std::fs::File::create(&file)
-            .unwrap()
-            .write_all(b"x")
-            .unwrap();
-        assert!(prepare_state_dir(&file).is_err());
     }
 
     /// A tempdir ready to be a `state_dir` (tempfile honours the

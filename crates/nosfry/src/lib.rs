@@ -35,6 +35,8 @@ mod channels;
 pub mod config;
 mod connection;
 mod http;
+#[cfg(feature = "iroh")]
+pub mod iroh;
 mod limiter;
 mod management;
 mod metrics;
@@ -44,6 +46,8 @@ mod peer;
 mod policy;
 mod reader;
 mod shard;
+#[cfg(any(feature = "onion", feature = "iroh"))]
+mod state_dir;
 pub mod sync;
 mod writer;
 
@@ -154,6 +158,10 @@ pub enum ServerError {
     #[cfg(feature = "blossom")]
     #[error("blossom: {0}")]
     Blossom(String),
+    /// An embedded-iroh failure.
+    #[cfg(feature = "iroh")]
+    #[error("iroh: {0}")]
+    Iroh(String),
 }
 
 /// The live-reloadable slice of server state. Every reader clones the
@@ -323,6 +331,24 @@ fn spawn_readers(
         );
     }
     Ok(())
+}
+
+/// The expiry-timer thread, paired with the writer: owns a writer
+/// sender so the writer channel closes when the thread exits; the
+/// returned stop sender ends it.
+fn spawn_expiry(
+    writer_tx: &mpsc::Sender<WriterMsg>,
+    threads: &mut Vec<JoinHandle<()>>,
+) -> Result<std::sync::mpsc::Sender<()>, ServerError> {
+    let (expire_stop, expire_stop_rx) = std::sync::mpsc::channel::<()>();
+    let expire_writer = writer_tx.clone();
+    threads.push(
+        std::thread::Builder::new()
+            .name("nosfry-expiry".into())
+            .spawn(move || writer::expire_timer(&expire_writer, &expire_stop_rx))
+            .map_err(ServerError::Spawn)?,
+    );
+    Ok(expire_stop)
 }
 
 /// Reader tunables derived from the startup config (restart-only:
@@ -532,11 +558,13 @@ impl Server {
         let store = Arc::new(Store::open(&config.db.path, &config.store_options())?);
         let monitors = config.relay.threads.monitors.max(1);
         let readers = config.relay.threads.readers.max(1);
-        // Process metrics, with one slot per `onion:` listener under
-        // the `onion` feature.
+        // Process metrics, with one slot per `onion:`/`iroh:` listener
+        // under the matching feature.
         let metrics = metrics::Metrics::new();
         #[cfg(feature = "onion")]
         let metrics = metrics.with_onion_listeners(onion_nicknames(&config));
+        #[cfg(feature = "iroh")]
+        let metrics = metrics.with_iroh_listeners(iroh_nicknames(&config));
         let metrics = Arc::new(metrics);
         // Process-wide pending outbound bytes, shared by every
         // connection's `Outbound`; process-wide sealed-sync-storage
@@ -619,16 +647,7 @@ impl Server {
 
         // Expiry timer: owns a writer sender and the stop receiver so
         // the writer channel closes when the thread exits.
-        let (expire_stop, expire_stop_rx) = std::sync::mpsc::channel::<()>();
-        {
-            let expire_writer = writer_tx.clone();
-            threads.push(
-                std::thread::Builder::new()
-                    .name("nosfry-expiry".into())
-                    .spawn(move || writer::expire_timer(&expire_writer, &expire_stop_rx))
-                    .map_err(ServerError::Spawn)?,
-            );
-        }
+        let expire_stop = spawn_expiry(&writer_tx, &mut threads)?;
         let conn = connection::Handle {
             writer: writer_tx.clone(),
             writer_budget: Arc::new(tokio::sync::Semaphore::new(WRITER_QUEUE_BYTES)),
@@ -709,6 +728,19 @@ fn onion_nicknames(config: &Config) -> impl Iterator<Item = Arc<str>> + '_ {
     })
 }
 
+/// The `iroh:` listeners' nicknames, in `[[relay.listen]]` order —
+/// the labels of the per-listener `nosfry_iroh_*` metric slots.
+#[cfg(feature = "iroh")]
+fn iroh_nicknames(config: &Config) -> impl Iterator<Item = Arc<str>> + '_ {
+    config.relay.listen.iter().filter_map(|listen| {
+        if let ListenAddress::Iroh(nickname) = &listen.address {
+            Some(Arc::from(nickname.as_str()))
+        } else {
+            None
+        }
+    })
+}
+
 /// `config` with `relay.onion_urls` set from the bound onion
 /// listeners — the `ws://<addr>.onion` URLs exist only after `bind`
 /// derives the keys.
@@ -725,6 +757,58 @@ fn with_onion_urls(mut config: Config, listeners: &[Listener]) -> Config {
         config.relay.onion_urls = derived;
     }
     config
+}
+
+/// `config` with `relay.iroh_urls` set from the bound iroh
+/// listeners — the `ws://<z32>.iroh` URLs exist only after `bind`
+/// derives the keys.
+#[cfg(feature = "iroh")]
+fn with_iroh_urls(mut config: Config, listeners: &[Listener]) -> Config {
+    let derived: Vec<String> = listeners
+        .iter()
+        .filter_map(|listener| match &listener.kind {
+            ListenerKind::Iroh { bound, .. } => Some(bound.url.clone()),
+            _ => None,
+        })
+        .collect();
+    if !derived.is_empty() {
+        config.relay.iroh_urls = derived;
+    }
+    config
+}
+
+/// Start one accept task and one supervisor per iroh listener on the
+/// HTTP tracker, and return the endpoint clones the shutdown path
+/// closes after the trackers drain.
+#[cfg(feature = "iroh")]
+fn spawn_iroh(
+    listeners: Vec<(Arc<ListenerInfo>, iroh::Bound)>,
+    max_connections: usize,
+    metrics: &metrics::Metrics,
+    router: &axum::Router,
+    stop: &watch::Receiver<()>,
+    tracker: &tokio_util::task::TaskTracker,
+) -> Vec<::iroh::Endpoint> {
+    let endpoints = listeners
+        .iter()
+        .map(|(_, bound)| bound.endpoint.clone())
+        .collect();
+    for ((info, bound), slot) in listeners
+        .into_iter()
+        .zip(metrics.iroh_listeners().iter().cloned())
+    {
+        tracker.spawn(iroh::accept(
+            bound.endpoint.clone(),
+            max_connections,
+            Arc::clone(&info),
+            Arc::clone(&slot),
+            router.clone(),
+            stop.clone(),
+            tracker.clone(),
+        ));
+        tracker.spawn(iroh::supervise(bound.endpoint, info, slot, stop.clone()));
+    }
+    endpoints
 }
 
 /// Read deadline for a complete HTTP request head: a client holding a
@@ -808,6 +892,16 @@ enum ListenerKind {
         /// The onion service's bound state.
         bound: onion::Bound,
     },
+    /// An embedded iroh listener (the `iroh` feature): `bind` already
+    /// bound the endpoint's UDP sockets; `serve` spawns its accept
+    /// task and supervisor.
+    #[cfg(feature = "iroh")]
+    Iroh {
+        /// This listener's fixed metadata.
+        info: Arc<ListenerInfo>,
+        /// The endpoint's bound state.
+        bound: iroh::Bound,
+    },
 }
 
 /// Unlinks a bound unix socket's path on drop (server shutdown).
@@ -844,6 +938,19 @@ impl Listener {
             ListenerKind::Unix { .. } => None,
             #[cfg(feature = "onion")]
             ListenerKind::Onion { .. } => None,
+            #[cfg(feature = "iroh")]
+            ListenerKind::Iroh { .. } => None,
+        }
+    }
+
+    /// The bound iroh endpoint — `Some` only for iroh listeners.
+    /// Tests dial it.
+    #[cfg(feature = "iroh")]
+    #[must_use]
+    pub const fn iroh_endpoint(&self) -> Option<&::iroh::Endpoint> {
+        match &self.kind {
+            ListenerKind::Iroh { bound, .. } => Some(&bound.endpoint),
+            _ => None,
         }
     }
 }
@@ -861,6 +968,8 @@ impl std::fmt::Display for Listener {
             ListenerKind::Unix { info, .. } => info.id.fmt(f),
             #[cfg(feature = "onion")]
             ListenerKind::Onion { info, bound } => write!(f, "{} ({})", bound.url, info.id),
+            #[cfg(feature = "iroh")]
+            ListenerKind::Iroh { info, bound } => write!(f, "{} ({})", bound.url, info.id),
         }
     }
 }
@@ -933,56 +1042,86 @@ pub async fn bind(config: &Config) -> Result<Vec<Listener>, ServerError> {
                      cargo feature (cargo install nosfry --features onion)"
                 )));
             }
-        }
-    }
-    // `[[blossom.listen]]` after the relay listeners: TCP and unix
-    // through the same helpers (onion was refused at load).
-    #[cfg(feature = "blossom")]
-    if config.blossom.enabled {
-        for listen in &config.blossom.listen {
-            let info = Arc::new(ListenerInfo {
-                id: Arc::from(listen.address.to_string().as_str()),
-                profile: Arc::from("default"),
-                real_ip_header: String::new(),
-                last_warn_secs: std::sync::atomic::AtomicU64::new(0),
-            });
-            match &listen.address {
-                ListenAddress::Tcp(sock) => listeners.push(Listener {
-                    service: Service::Blossom,
-                    kind: ListenerKind::Tcp {
-                        listener: TcpListener::bind(sock).await?,
-                        info,
-                    },
-                }),
-                #[cfg(unix)]
-                ListenAddress::Unix(path) => {
-                    let (listener, guard) = bind_unix(path).await?;
+            ListenAddress::Iroh(nickname) => {
+                #[cfg(feature = "iroh")]
+                {
+                    let bound = iroh::listen::bind(&config.relay.iroh, nickname).await?;
                     listeners.push(Listener {
-                        service: Service::Blossom,
-                        kind: ListenerKind::Unix {
-                            listener,
-                            info,
-                            guard,
-                        },
+                        service: Service::Relay,
+                        kind: ListenerKind::Iroh { info, bound },
                     });
                 }
-                ListenAddress::Onion(nickname) => {
-                    return Err(ServerError::RelayValue(format!(
-                        "blossom.listen: \"onion:{nickname}\" — blossom listeners do not \
-                         support onion: yet"
-                    )));
-                }
-                #[cfg(not(unix))]
-                ListenAddress::Unix(path) => {
-                    return Err(ServerError::RelayValue(format!(
-                        "unix listeners are unsupported on this platform: {}",
-                        path.display()
-                    )));
-                }
+                #[cfg(not(feature = "iroh"))]
+                return Err(ServerError::RelayValue(format!(
+                    "relay.listen: \"iroh:{nickname}\" needs nosfry built with the iroh \
+                     cargo feature (cargo install nosfry --features iroh)"
+                )));
             }
         }
     }
+    #[cfg(feature = "blossom")]
+    if config.blossom.enabled {
+        bind_blossom(config, &mut listeners).await?;
+    }
     Ok(listeners)
+}
+
+/// Bind every `[[blossom.listen]]` address after the relay
+/// listeners: TCP and unix through the same helpers. Onion and
+/// iroh were refused at load and are refused again here because
+/// those transports always serve the relay router, never the
+/// blossom one.
+#[cfg(feature = "blossom")]
+async fn bind_blossom(config: &Config, listeners: &mut Vec<Listener>) -> Result<(), ServerError> {
+    for listen in &config.blossom.listen {
+        let info = Arc::new(ListenerInfo {
+            id: Arc::from(listen.address.to_string().as_str()),
+            profile: Arc::from("default"),
+            real_ip_header: String::new(),
+            last_warn_secs: std::sync::atomic::AtomicU64::new(0),
+        });
+        match &listen.address {
+            ListenAddress::Tcp(sock) => listeners.push(Listener {
+                service: Service::Blossom,
+                kind: ListenerKind::Tcp {
+                    listener: TcpListener::bind(sock).await?,
+                    info,
+                },
+            }),
+            #[cfg(unix)]
+            ListenAddress::Unix(path) => {
+                let (listener, guard) = bind_unix(path).await?;
+                listeners.push(Listener {
+                    service: Service::Blossom,
+                    kind: ListenerKind::Unix {
+                        listener,
+                        info,
+                        guard,
+                    },
+                });
+            }
+            ListenAddress::Onion(nickname) => {
+                return Err(ServerError::RelayValue(format!(
+                    "blossom.listen: \"onion:{nickname}\" — blossom listeners do not \
+                     support onion: yet"
+                )));
+            }
+            ListenAddress::Iroh(nickname) => {
+                return Err(ServerError::RelayValue(format!(
+                    "blossom.listen: \"iroh:{nickname}\" — blossom listeners do not \
+                     support iroh: yet"
+                )));
+            }
+            #[cfg(not(unix))]
+            ListenAddress::Unix(path) => {
+                return Err(ServerError::RelayValue(format!(
+                    "unix listeners are unsupported on this platform: {}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Bind one unix socket path, returning the listener and the guard
@@ -1091,6 +1230,51 @@ async fn drain_http(
     // Give live connections a deadline to close (the watch signal
     // already went out).
     wait_for(tracker, "open connections").await;
+}
+
+/// The router and accept-side connection cap for one listener's
+/// service. Blossom listeners serve the blob router under the shared
+/// `blossom.max_connections` semaphore; `None` (the caller drops the
+/// socket and spawns no accept loop) when the blob service is not up.
+fn route_for(
+    service: Service,
+    server: &Server,
+    router: &axum::Router,
+) -> Option<(axum::Router, ConnLimit)> {
+    // Nothing reads `server` without the blossom feature.
+    #[cfg(not(feature = "blossom"))]
+    let _ = server;
+    match service {
+        Service::Relay => Some((router.clone(), None)),
+        #[cfg(feature = "blossom")]
+        Service::Blossom => server
+            .state
+            .blossom
+            .as_ref()
+            .map(|b| (b.router.clone(), Some(Arc::clone(&b.connections)))),
+        #[cfg(not(feature = "blossom"))]
+        Service::Blossom => None,
+    }
+}
+
+/// Close the iroh endpoints only once nothing serves on them —
+/// closing drops the sockets, the relay connections and every open
+/// QUIC connection.
+#[cfg(feature = "iroh")]
+async fn close_iroh(endpoints: &[::iroh::Endpoint]) {
+    if endpoints.is_empty() {
+        return;
+    }
+    let closes = endpoints.iter().map(::iroh::Endpoint::close);
+    if tokio::time::timeout(
+        Duration::from_secs(10),
+        futures_util::future::join_all(closes),
+    )
+    .await
+    .is_err()
+    {
+        tracing::warn!("shutdown deadline hit closing iroh endpoints");
+    }
 }
 
 /// Accept HTTP/1 connections on one TCP listener until `http_stop`
@@ -1249,13 +1433,17 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
     reload: watch::Receiver<Config>,
 ) -> Result<(), ServerError> {
-    // Derive the onion listeners' `ws://` URLs before `Server::new`
-    // freezes the config: they decide the canonical name when
-    // `service_url` is unset and join the alias set either way.
+    // Derive the onion and iroh listeners' `ws://` URLs before
+    // `Server::new` freezes the config: they decide the canonical name
+    // when `service_url` is unset and join the alias set either way.
     #[cfg(feature = "onion")]
     let config = with_onion_urls(config, &listeners);
+    #[cfg(feature = "iroh")]
+    let config = with_iroh_urls(config, &listeners);
     #[cfg(feature = "onion")]
     let max_circuits = config.relay.onion.max_circuits;
+    #[cfg(feature = "iroh")]
+    let max_iroh_connections = config.relay.iroh.max_connections;
     log_restricted_writes(&config);
     #[cfg_attr(
         not(feature = "blossom"),
@@ -1276,28 +1464,10 @@ pub async fn serve(
     // One accept loop per listener, sharing the trackers and shutdown.
     #[cfg(feature = "onion")]
     let mut onion_listeners = Vec::new();
-    #[cfg(feature = "blossom")]
-    let blossom_conn_limit = server
-        .state
-        .blossom
-        .as_ref()
-        .map(|b| Arc::clone(&b.connections));
+    #[cfg(feature = "iroh")]
+    let mut iroh_listeners = Vec::new();
     for listener in listeners {
-        // Blossom listeners serve the blob router under the shared
-        // `blossom.max_connections` semaphore; `None` when the blob
-        // service is not up.
-        let route = match listener.service {
-            Service::Relay => Some((router.clone(), None)),
-            #[cfg(feature = "blossom")]
-            Service::Blossom => server
-                .state
-                .blossom
-                .as_ref()
-                .map(|b| (b.router.clone(), blossom_conn_limit.clone())),
-            #[cfg(not(feature = "blossom"))]
-            Service::Blossom => None,
-        };
-        let Some((serve_router, conn_limit)) = route else {
+        let Some((serve_router, conn_limit)) = route_for(listener.service, &server, &router) else {
             continue;
         };
         match listener.kind {
@@ -1335,6 +1505,13 @@ pub async fn serve(
                     onion_listeners.push((info, bound));
                 }
             }
+            #[cfg(feature = "iroh")]
+            ListenerKind::Iroh { info, bound } => {
+                // `Blossom::check` refused `iroh:` at load.
+                if listener.service == Service::Relay {
+                    iroh_listeners.push((info, bound));
+                }
+            }
         }
     }
     // One supervisor for every onion listener: it bootstraps the
@@ -1351,6 +1528,17 @@ pub async fn serve(
             http_tracker.clone(),
         ));
     }
+    // One accept task and one supervisor per iroh listener, and an
+    // endpoint clone kept for shutdown close.
+    #[cfg(feature = "iroh")]
+    let iroh_endpoints = spawn_iroh(
+        iroh_listeners,
+        max_iroh_connections,
+        &server.state.metrics,
+        &router,
+        &http_stop_rx,
+        &http_tracker,
+    );
     shutdown.await;
     drain_http(
         stop,
@@ -1361,6 +1549,8 @@ pub async fn serve(
         &tracker,
     )
     .await;
+    #[cfg(feature = "iroh")]
+    close_iroh(&iroh_endpoints).await;
     // Joining worker threads blocks; keep it off the runtime.
     tokio::task::spawn_blocking(move || server.stop())
         .await

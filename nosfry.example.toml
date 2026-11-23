@@ -124,6 +124,12 @@ real_ip_header = ""
 # [[relay.listen]]
 # address = "onion:nosfry"
 # profile = "onion"
+# Embedded iroh endpoint (needs a build with --features iroh; the
+# dial address is derived from the persistent key under
+# [relay.iroh] state_dir — `nosfry iroh address` prints it):
+# [[relay.listen]]
+# address = "iroh:nosfry"
+# profile = "iroh"
 
 # Embedded onion service settings (the `onion` cargo feature).
 # Everything here is restart-only except `onion_location`.
@@ -149,6 +155,33 @@ intro_burst = 0
 # Advertise the first onion address as `Onion-Location` on NIP-11,
 # the landing page and upgrade responses of non-onion listeners.
 onion_location = false
+
+# Embedded iroh endpoint settings (the `iroh` cargo feature).
+# Everything here is restart-only.
+[relay.iroh]
+# Key directory: `<nickname>.key` files, one per `iroh:` listener,
+# 32 bytes each, created mode 0600 on first start — back it up, it
+# is the endpoint id. Must be a directory with mode 0700 owned by
+# the relay user; missing, it is created with mode 0700.
+state_dir = "./nosfry-iroh"
+# Which relay servers the endpoints use: "n0" (n0's production
+# relays), "custom" (your own, `relay_urls`), or "disabled"
+# (direct paths only).
+relay_mode = "n0"
+# `http(s)://` URLs of self-hosted `iroh-relay` servers; required
+# and only allowed with `relay_mode = "custom"`.
+relay_urls = []
+# How the endpoints publish and resolve dialing information:
+# "n0" (n0's DNS server) or "disabled" (dial addresses then need
+# `ip:port` hints).
+address_lookup = "n0"
+# Concurrent QUIC connections per iroh listener, handshakes
+# included; further `Incoming`s are refused before the handshake.
+max_connections = 256
+# The QUIC concurrent bidirectional stream cap offered to peers;
+# one HTTP/1.1 connection per stream, so a client multiplexes all
+# its connections on this many streams of one QUIC connection.
+max_streams_per_connection = 128
 
 [relay.limits]
 # Maximum filters per REQ.

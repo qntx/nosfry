@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Assert a release variant's Arti linkage on two surfaces:
+# Assert a release variant's Arti linkage on two surfaces, and that
+# no release artifact carries iroh:
 #
 #   - the binary: release binaries are stripped, but dependency panic
 #     paths (".../tor-proto-0.48.0/src/...") survive as strings;
@@ -7,7 +8,8 @@
 #
 # A `default` artifact must show no Arti on either surface; an `onion`
 # one must show it on both — the positive arm proves the check can
-# actually see Arti instead of passing vacuously.
+# actually see Arti instead of passing vacuously. Neither may show
+# iroh: the `iroh` feature ships in no release variant.
 #
 #   arti-check.sh <binary> <sbom.cdx.json> <default|onion>
 set -euo pipefail
@@ -20,6 +22,20 @@ variant="${3:?usage: arti-check.sh <binary> <sbom.json> <default|onion>}"
 # grep exits 1 on zero matches, so keep the count and continue.
 paths="$(grep -aEc '(arti-client|tor-[a-z0-9-]+)-[0-9]+\.[0-9]+\.[0-9]+/src/' "$bin" || true)"
 components="$(jq '[.components[].name | select(. == "arti-client" or startswith("tor-"))] | length' "$sbom")"
+
+# The `iroh` feature ships in no release artifact: neither variant
+# may carry iroh/noq on either surface.
+iroh_paths="$(grep -aEc '(iroh|iroh-[a-z0-9-]+|noq|noq-[a-z0-9-]+)-[0-9]+\.[0-9]+\.[0-9]+/src/' "$bin" || true)"
+iroh_components="$(jq '[.components[].name | select(. == "iroh" or startswith("iroh-") or . == "noq" or startswith("noq-"))] | length' "$sbom")"
+if [ "$iroh_paths" != 0 ]; then
+    echo "::error::$variant binary embeds $iroh_paths iroh/noq crate paths" >&2
+    exit 1
+fi
+if [ "$iroh_components" != 0 ]; then
+    jq -r '.components[].name | select(. == "iroh" or startswith("iroh-") or . == "noq" or startswith("noq-"))' "$sbom" >&2
+    echo "::error::$variant SBOM lists the iroh/noq crates above" >&2
+    exit 1
+fi
 
 case "$variant" in
     default)
@@ -49,4 +65,4 @@ case "$variant" in
         ;;
 esac
 
-echo "arti-check ok: $variant ($paths Arti path lines, $components SBOM components)"
+echo "arti-check ok: $variant ($paths Arti path lines, $components SBOM components, no iroh)"

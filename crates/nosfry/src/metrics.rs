@@ -9,7 +9,7 @@
 //! locks, no allocation, all `Relaxed`.
 
 use std::fmt::Write as _;
-#[cfg(feature = "onion")]
+#[cfg(any(feature = "onion", feature = "iroh"))]
 use std::sync::Arc;
 #[cfg(feature = "onion")]
 use std::sync::atomic::AtomicUsize;
@@ -219,6 +219,93 @@ impl OnionListener {
     }
 }
 
+/// The `nosfry_iroh_connections{listener,path}` label values.
+#[cfg(feature = "iroh")]
+pub(crate) const IROH_PATHS: [&str; 2] = ["direct", "relay"];
+
+/// One embedded iroh listener's series. The `listener` label is the
+/// configured nickname, so the series count is bounded by the
+/// `[[relay.listen]]` set.
+#[cfg(feature = "iroh")]
+#[derive(Debug)]
+pub(crate) struct IrohListener {
+    /// The `listener` label value (the configured nickname).
+    listener: Arc<str>,
+    /// `nosfry_iroh_connections{listener,path}` — open QUIC
+    /// connections by selected path, indexed by [`IROH_PATHS`].
+    connections: [AtomicU64; IROH_PATHS.len()],
+    /// `nosfry_iroh_connections_rejected_total`.
+    rejected: AtomicU64,
+    /// `nosfry_iroh_streams_total`.
+    streams: AtomicU64,
+    /// `nosfry_iroh_relay_connected` — 0/1.
+    relay_connected: AtomicU64,
+}
+
+#[cfg(feature = "iroh")]
+impl IrohListener {
+    /// All series at zero.
+    pub(crate) const fn new(listener: Arc<str>) -> Self {
+        Self {
+            listener,
+            connections: [const { AtomicU64::new(0) }; IROH_PATHS.len()],
+            rejected: AtomicU64::new(0),
+            streams: AtomicU64::new(0),
+            relay_connected: AtomicU64::new(0),
+        }
+    }
+
+    /// The [`IROH_PATHS`] index of a `path` label.
+    fn path_index(path: &str) -> usize {
+        IROH_PATHS
+            .iter()
+            .position(|candidate| *candidate == path)
+            .unwrap_or(0)
+    }
+
+    /// One connection started sending on `path` (`"direct"` or
+    /// `"relay"`).
+    pub(crate) fn connection_open(&self, path: &str) {
+        if let Some(gauge) = self.connections.get(Self::path_index(path)) {
+            gauge.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// One connection stopped sending on `path`.
+    pub(crate) fn connection_close(&self, path: &str) {
+        if let Some(gauge) = self.connections.get(Self::path_index(path)) {
+            gauge.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
+
+    /// One incoming connection refused at `max_connections`.
+    pub(crate) fn rejected(&self) {
+        self.rejected.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// One bidirectional stream accepted on a connection.
+    pub(crate) fn stream(&self) {
+        self.streams.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// The home-relay connectivity as 0/1.
+    pub(crate) fn set_relay_connected(&self, connected: bool) {
+        self.relay_connected
+            .store(u64::from(connected), Ordering::Relaxed);
+    }
+}
+
+#[cfg(all(feature = "iroh", test))]
+impl IrohListener {
+    /// Test readout: refused connections, served streams.
+    pub(crate) fn counters(&self) -> (u64, u64) {
+        (
+            self.rejected.load(Ordering::Relaxed),
+            self.streams.load(Ordering::Relaxed),
+        )
+    }
+}
+
 /// One `nosfry_reader_busy_total{msg}` class: work a shard dropped
 /// because the reader admission limits were hit.
 #[derive(Debug, Clone, Copy)]
@@ -283,6 +370,10 @@ pub(crate) struct Metrics {
     /// startup config, in listener order.
     #[cfg(feature = "onion")]
     onion: Vec<Arc<OnionListener>>,
+    /// One [`IrohListener`] slot per `iroh:` listener in the
+    /// startup config, in listener order.
+    #[cfg(feature = "iroh")]
+    iroh: Vec<Arc<IrohListener>>,
 }
 
 impl Metrics {
@@ -308,6 +399,8 @@ impl Metrics {
             reader_busy: [const { AtomicU64::new(0) }; ReaderBusy::ALL.len()],
             #[cfg(feature = "onion")]
             onion: Vec::new(),
+            #[cfg(feature = "iroh")]
+            iroh: Vec::new(),
         }
     }
 
@@ -330,6 +423,27 @@ impl Metrics {
     #[cfg(feature = "onion")]
     pub(crate) fn onion_listeners(&self) -> &[Arc<OnionListener>] {
         &self.onion
+    }
+
+    /// Add the per-listener slots the `nosfry_iroh_*` series hang
+    /// on — one per `iroh:` listener in the startup config.
+    /// Called once in `Server::new`, before the `Metrics` is shared.
+    #[cfg(feature = "iroh")]
+    pub(crate) fn with_iroh_listeners(
+        mut self,
+        listeners: impl IntoIterator<Item = Arc<str>>,
+    ) -> Self {
+        self.iroh = listeners
+            .into_iter()
+            .map(|listener| Arc::new(IrohListener::new(listener)))
+            .collect();
+        self
+    }
+
+    /// The iroh listeners' metric slots, in `[[relay.listen]]` order.
+    #[cfg(feature = "iroh")]
+    pub(crate) fn iroh_listeners(&self) -> &[Arc<IrohListener>] {
+        &self.iroh
     }
 
     /// One inbound text frame with a recognized client verb, counted
@@ -581,6 +695,8 @@ impl Metrics {
         );
         #[cfg(feature = "onion")]
         self.render_onion(&mut out);
+        #[cfg(feature = "iroh")]
+        self.render_iroh(&mut out);
         out
     }
 
@@ -661,6 +777,83 @@ impl Metrics {
             }
         }
     }
+
+    /// The `nosfry_iroh_*` series, one slot per configured iroh
+    /// listener. Connections and the relay gauge are always emitted;
+    /// the totals follow the existing convention and appear once
+    /// non-zero.
+    #[cfg(feature = "iroh")]
+    fn render_iroh(&self, out: &mut String) {
+        if self.iroh.is_empty() {
+            return;
+        }
+        family(
+            out,
+            "nosfry_iroh_connections",
+            "Open QUIC connections per embedded iroh listener by selected path.",
+            "gauge",
+        );
+        for slot in &self.iroh {
+            for (path, gauge) in IROH_PATHS.iter().zip(&slot.connections) {
+                writeln!(
+                    out,
+                    "nosfry_iroh_connections{{listener=\"{}\",path=\"{path}\"}} {}",
+                    slot.listener,
+                    gauge.load(Ordering::Relaxed)
+                )
+                .ok();
+            }
+        }
+        family(
+            out,
+            "nosfry_iroh_connections_rejected_total",
+            "Incoming iroh connections refused at the listener's connection cap.",
+            "counter",
+        );
+        for slot in &self.iroh {
+            let value = slot.rejected.load(Ordering::Relaxed);
+            if value > 0 {
+                writeln!(
+                    out,
+                    "nosfry_iroh_connections_rejected_total{{listener=\"{}\"}} {value}",
+                    slot.listener
+                )
+                .ok();
+            }
+        }
+        family(
+            out,
+            "nosfry_iroh_streams_total",
+            "Bidirectional streams served per embedded iroh listener.",
+            "counter",
+        );
+        for slot in &self.iroh {
+            let value = slot.streams.load(Ordering::Relaxed);
+            if value > 0 {
+                writeln!(
+                    out,
+                    "nosfry_iroh_streams_total{{listener=\"{}\"}} {value}",
+                    slot.listener
+                )
+                .ok();
+            }
+        }
+        family(
+            out,
+            "nosfry_iroh_relay_connected",
+            "Whether an embedded iroh listener's home relay connection is up.",
+            "gauge",
+        );
+        for slot in &self.iroh {
+            writeln!(
+                out,
+                "nosfry_iroh_relay_connected{{listener=\"{}\"}} {}",
+                slot.listener,
+                slot.relay_connected.load(Ordering::Relaxed)
+            )
+            .ok();
+        }
+    }
 }
 
 /// The always-emitted gauges at the tail of [`Metrics::render`].
@@ -724,7 +917,11 @@ fn verb_series(out: &mut String, name: &str, verb: &str, counter: &AtomicU64) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "unit tests may panic on failure")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "unit tests panic on failure"
+)]
 mod tests {
     use super::*;
 
@@ -852,6 +1049,44 @@ mod tests {
              # HELP nosfry_reader_jobs Scan jobs admitted to the readers and not yet finished.\n\
              # TYPE nosfry_reader_jobs gauge\n\
              nosfry_reader_jobs 11\n"
+        );
+    }
+
+    /// The `nosfry_iroh_*` block: two `path` series and the relay
+    /// gauge always render, the totals once non-zero.
+    #[cfg(feature = "iroh")]
+    #[test]
+    fn render_iroh_series() {
+        let metrics = Metrics::new().with_iroh_listeners(["main".into(), "side".into()]);
+        let slots = metrics.iroh_listeners();
+        slots[0].connection_open("direct");
+        slots[0].connection_open("direct");
+        slots[0].connection_close("direct");
+        slots[0].connection_open("relay");
+        slots[0].rejected();
+        slots[0].stream();
+        slots[0].stream();
+        slots[1].set_relay_connected(true);
+        let out = metrics.render(0, 0, 0, 0, 0);
+        let iroh = &out[out.find("# HELP nosfry_iroh_connections").unwrap()..];
+        assert_eq!(
+            iroh,
+            "# HELP nosfry_iroh_connections Open QUIC connections per embedded iroh listener by selected path.\n\
+             # TYPE nosfry_iroh_connections gauge\n\
+             nosfry_iroh_connections{listener=\"main\",path=\"direct\"} 1\n\
+             nosfry_iroh_connections{listener=\"main\",path=\"relay\"} 1\n\
+             nosfry_iroh_connections{listener=\"side\",path=\"direct\"} 0\n\
+             nosfry_iroh_connections{listener=\"side\",path=\"relay\"} 0\n\
+             # HELP nosfry_iroh_connections_rejected_total Incoming iroh connections refused at the listener's connection cap.\n\
+             # TYPE nosfry_iroh_connections_rejected_total counter\n\
+             nosfry_iroh_connections_rejected_total{listener=\"main\"} 1\n\
+             # HELP nosfry_iroh_streams_total Bidirectional streams served per embedded iroh listener.\n\
+             # TYPE nosfry_iroh_streams_total counter\n\
+             nosfry_iroh_streams_total{listener=\"main\"} 2\n\
+             # HELP nosfry_iroh_relay_connected Whether an embedded iroh listener's home relay connection is up.\n\
+             # TYPE nosfry_iroh_relay_connected gauge\n\
+             nosfry_iroh_relay_connected{listener=\"main\"} 0\n\
+             nosfry_iroh_relay_connected{listener=\"side\"} 1\n"
         );
     }
 }

@@ -86,6 +86,12 @@ impl WritePolicy {
             Peer::Circuit { listener, .. } => {
                 request_line_listener(json, received_at, "Onion", listener, authed)
             }
+            // The plugin sees the remote endpoint's z32 id as the
+            // source info.
+            #[cfg(feature = "iroh")]
+            Peer::Endpoint(id) => {
+                request_line_listener(json, received_at, "Iroh", &crate::iroh::z32(id), authed)
+            }
         };
         self.send(line, &event.id().to_string()).await
     }

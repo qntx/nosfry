@@ -120,6 +120,31 @@ enum Cmd {
         #[arg(long, default_value_t = 60)]
         timeout: u64,
     },
+    /// Run a local TCP gateway to an iroh endpoint: every client on
+    /// `--listen` gets a QUIC stream to the peer, which sees each as
+    /// a plain `ws://<z32>.iroh` connection — the recipe for
+    /// WebSocket clients that do not speak iroh.
+    #[cfg(feature = "iroh")]
+    Connect {
+        /// The peer's dial address: `<endpoint-id>` or
+        /// `<endpoint-id>@<hint>[,<hint>…]` where a hint is an
+        /// `ip:port` socket address or an `http(s)://` iroh-relay
+        /// URL.
+        dial: nosfry::iroh::DialAddr,
+        /// TCP address the gateway listens on; must be loopback
+        /// unless `--allow-remote`.
+        #[arg(long)]
+        listen: std::net::SocketAddr,
+        /// Concurrent client cap; further clients close immediately.
+        #[arg(long, default_value_t = 64)]
+        max_connections: usize,
+        /// Allow a non-loopback `--listen` (exposes the gateway).
+        #[arg(long)]
+        allow_remote: bool,
+        /// First-connect and redial deadline in seconds.
+        #[arg(long, default_value_t = 30)]
+        timeout: u64,
+    },
     /// Embedded onion service commands (the `onion` feature).
     #[cfg(feature = "onion")]
     Onion {
@@ -132,6 +157,12 @@ enum Cmd {
     Blob {
         #[command(subcommand)]
         cmd: BlobCmd,
+    },
+    /// Embedded iroh endpoint commands (the `iroh` feature).
+    #[cfg(feature = "iroh")]
+    Iroh {
+        #[command(subcommand)]
+        cmd: IrohCmd,
     },
 }
 
@@ -194,6 +225,17 @@ enum OnionCmd {
     /// URLs, one per line. Generates any missing identity key under
     /// `[relay.onion] state_dir`; never starts the relay or touches
     /// the network.
+    Address,
+}
+
+/// `nosfry iroh …` subcommands.
+#[cfg(feature = "iroh")]
+#[derive(Subcommand)]
+enum IrohCmd {
+    /// Print the configured iroh listeners' dial addresses and
+    /// `ws://<z32>.iroh` relay names, one tab-separated pair per
+    /// line. Generates any missing key under `[relay.iroh]
+    /// state_dir`; never starts the relay or touches the network.
     Address,
 }
 
@@ -296,8 +338,36 @@ fn is_broken_pipe(mut err: &(dyn std::error::Error + 'static)) -> bool {
 }
 
 async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
-    let config = Config::load(&cli.config)?;
+    // `connect` alone may run without a config file: it needs only
+    // `[relay.iroh]`'s relay and lookup defaults.
+    let config = match &cli.command {
+        #[cfg(feature = "iroh")]
+        Cmd::Connect { .. } => connect_config(&cli.config)?,
+        _ => Config::load(&cli.config)?,
+    };
     match cli.command {
+        #[cfg(feature = "iroh")]
+        Cmd::Connect {
+            dial,
+            listen,
+            max_connections,
+            allow_remote,
+            timeout,
+        } => {
+            nosfry::iroh::connect::run(
+                &config.relay.iroh,
+                nosfry::iroh::connect::ConnectOptions {
+                    dial,
+                    listen,
+                    max_connections,
+                    allow_remote,
+                    timeout: Duration::from_secs(timeout),
+                },
+                shutdown_signal(),
+            )
+            .await?;
+            Ok(())
+        }
         Cmd::Relay => relay(config, cli.config).await,
         Cmd::Export {
             since,
@@ -348,6 +418,16 @@ async fn run(cli: Cli) -> Result<ExitCode, Box<dyn std::error::Error>> {
         }
         #[cfg(feature = "blossom")]
         Cmd::Blob { cmd } => return blob(&config, cmd),
+        #[cfg(feature = "iroh")]
+        Cmd::Iroh {
+            cmd: IrohCmd::Address,
+        } => {
+            let mut out = stdout();
+            for (dial, alias) in nosfry::iroh::addresses(&config)? {
+                writeln!(out, "{dial}\t{alias}")?;
+            }
+            Ok(())
+        }
     }
     .map(|()| ExitCode::SUCCESS)
 }
@@ -424,6 +504,20 @@ fn blob(config: &Config, cmd: BlobCmd) -> Result<ExitCode, Box<dyn std::error::E
     };
     out.flush()?;
     Ok(exit)
+}
+
+/// The `connect` gateway's config: `--config` when the path exists
+/// (a parse failure is still fatal), [`Config::default`] when it
+/// does not — the gateway has no store or listeners to configure.
+#[cfg(feature = "iroh")]
+fn connect_config(path: &Path) -> Result<Config, Box<dyn std::error::Error>> {
+    if path.exists() {
+        tracing::info!(path = %path.display(), "using config file");
+        Config::load(path).map_err(Into::into)
+    } else {
+        tracing::info!(path = %path.display(), "no config file; using defaults");
+        Ok(Config::default())
+    }
 }
 
 /// Run [`nosfry::sync::run`] against the configured store: `0`

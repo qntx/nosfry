@@ -85,11 +85,13 @@ and NodeInfo name only `service_url`.
 Each `[[relay.listen]]` table holds:
 
 - `address` (required): `"<ip>:<port>"`, `"[<ipv6>]:<port>"`,
-  `"unix:<absolute path>"` for a Unix-domain socket, or
+  `"unix:<absolute path>"` for a Unix-domain socket,
   `"onion:<nickname>"` for an embedded onion service (needs a build
-  with `--features onion`; the nickname is lowercase ASCII
-  alphanumerics, `_` and `-`, non-empty, not starting with `-`;
-  `real_ip_header` must be empty on an onion listener).
+  with `--features onion`), or `"iroh:<nickname>"` for an embedded
+  iroh endpoint (needs a build with `--features iroh`). The nickname
+  is lowercase ASCII alphanumerics, `_` and `-`, non-empty, not
+  starting with `-`; `real_ip_header` must be empty on `onion:` and
+  `iroh:` listeners.
 - `profile` (default `"default"`): the `[relay.profiles.<name>]` whose
   connection cap and rate limits apply to this listener's connections.
 - `real_ip_header` (default `""`): a header carrying the client address,
@@ -117,6 +119,23 @@ canonical URL, otherwise all are aliases.
 | `relay.onion.intro_rate`              | `0`               | restart | Introduction rate limit announced to the intro points (requests per second); `0` = unset, and then `intro_burst` must be `0` too.                        |
 | `relay.onion.intro_burst`             | `0`               | restart | Introduction burst paired with `intro_rate`.                                                                                                            |
 | `relay.onion.onion_location`          | `false`           | live    | Advertise the first onion address as `Onion-Location` on NIP-11, the landing page and upgrade responses of non-onion listeners.                           |
+
+### `[relay.iroh]`
+
+Settings of the embedded iroh endpoints — used only by `iroh:`
+listeners, which need a build with `--features iroh`. The derived
+`ws://<z32>.iroh` URLs act as the relay's name after any onion URL:
+with an empty `service_url` and no onion listener the first is the
+canonical URL, otherwise all are aliases.
+
+| Key                                   | Default           | Reload  | Meaning                                                                                                                                                 |
+| ------------------------------------- | ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `relay.iroh.state_dir`                | `"./nosfry-iroh"` | restart | Key directory: `<nickname>.key` files, one per `iroh:` listener, 32 bytes each, created mode 0600. A missing directory is created with mode 0700; an existing one must already be mode 0700. |
+| `relay.iroh.relay_mode`               | `"n0"`            | restart | Relay servers the endpoints use: `"n0"`, `"custom"` (`relay_urls`), or `"disabled"` (direct paths only).                                                  |
+| `relay.iroh.relay_urls`               | `[]`              | restart | `http(s)://` URLs of self-hosted `iroh-relay` servers; required and only allowed with `relay_mode = "custom"`.                                            |
+| `relay.iroh.address_lookup`           | `"n0"`            | restart | How endpoints publish and resolve dialing information: `"n0"` (n0's DNS server) or `"disabled"` (dial addresses then need `ip:port` hints).               |
+| `relay.iroh.max_connections`          | `256`             | restart | Concurrent QUIC connections per iroh listener, handshakes included; further `Incoming`s are refused before the handshake.                                 |
+| `relay.iroh.max_streams_per_connection` | `128`           | restart | The QUIC concurrent bidirectional stream cap offered to peers; one HTTP/1.1 connection per stream.                                                        |
 
 ### `[relay.limits]`
 

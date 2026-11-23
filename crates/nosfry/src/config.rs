@@ -83,6 +83,16 @@ pub struct Relay {
     /// otherwise all are aliases.
     #[serde(skip)]
     pub onion_urls: Vec<String>,
+    /// `[relay.iroh]` — embedded iroh listener settings (the `iroh`
+    /// cargo feature).
+    #[serde(default)]
+    pub iroh: Iroh,
+    /// The `ws://<z32>.iroh` URLs of the embedded iroh listeners,
+    /// derived from their keys at startup — never read from the file.
+    /// With no `service_url` and no onion URL the first is the
+    /// canonical name; otherwise all are aliases.
+    #[serde(skip)]
+    pub iroh_urls: Vec<String>,
     /// Soft open-file limit to raise to at startup, capped by the hard
     /// limit (0 = leave unchanged).
     pub nofiles: u64,
@@ -160,7 +170,8 @@ pub struct Listen {
 }
 
 /// A `[[relay.listen]]` `address`: a TCP socket address, a
-/// unix-domain-socket path, or an embedded onion service.
+/// unix-domain-socket path, an embedded onion service, or an embedded
+/// iroh endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ListenAddress {
     /// `"<ip>:<port>"` or `"[v6]:<port>"`.
@@ -172,11 +183,16 @@ pub enum ListenAddress {
     /// cargo feature); the nickname names the service's key directory
     /// under `[relay.onion] state_dir`.
     Onion(String),
+    /// `"iroh:<nickname>"` — an embedded iroh endpoint (the `iroh`
+    /// cargo feature); the nickname names the key file under
+    /// `[relay.iroh] state_dir`.
+    Iroh(String),
 }
 
-/// Arti's slug rule for an onion service nickname: non-empty, not
-/// starting with `-`, only lowercase ASCII alphanumerics, `_`, `-`.
-fn is_onion_nickname(nickname: &str) -> bool {
+/// The slug rule for an embedded transport's nickname (Arti's rule,
+/// reused for iroh): non-empty, not starting with `-`, only lowercase
+/// ASCII alphanumerics, `_`, `-`.
+fn is_nickname(nickname: &str) -> bool {
     !nickname.is_empty()
         && !nickname.starts_with('-')
         && nickname
@@ -198,7 +214,7 @@ impl ListenAddress {
             };
         }
         if let Some(nickname) = value.strip_prefix("onion:") {
-            return if is_onion_nickname(nickname) {
+            return if is_nickname(nickname) {
                 Ok(Self::Onion(nickname.to_owned()))
             } else {
                 Err(format!(
@@ -207,24 +223,36 @@ impl ListenAddress {
                 ))
             };
         }
+        if let Some(nickname) = value.strip_prefix("iroh:") {
+            return if is_nickname(nickname) {
+                Ok(Self::Iroh(nickname.to_owned()))
+            } else {
+                Err(format!(
+                    "invalid listener address {value:?}: iroh nickname must be non-empty, \
+                     not start with '-', and contain only [a-z0-9_-]"
+                ))
+            };
+        }
         value.parse().map(Self::Tcp).map_err(|_| {
             format!(
                 "invalid listener address {value:?}: expected \
                  \"<ip>:<port>\", \"[v6]:<port>\", \"unix:<absolute path>\", \
-                 or \"onion:<nickname>\""
+                 \"onion:<nickname>\", or \"iroh:<nickname>\""
             )
         })
     }
 }
 
-/// The configured string: `unix:`- and `onion:`-prefixed values
-/// round-trip exactly, socket addresses in their canonical form.
+/// The configured string: `unix:`-, `onion:`- and `iroh:`-prefixed
+/// values round-trip exactly, socket addresses in their canonical
+/// form.
 impl std::fmt::Display for ListenAddress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Tcp(sock) => sock.fmt(f),
             Self::Unix(path) => write!(f, "unix:{}", path.display()),
             Self::Onion(nickname) => write!(f, "onion:{nickname}"),
+            Self::Iroh(nickname) => write!(f, "iroh:{nickname}"),
         }
     }
 }
@@ -289,7 +317,7 @@ pub struct Blossom {
 }
 
 /// One `[[blossom.listen]]` entry — the same address forms as
-/// `[[relay.listen]]` except `onion:`.
+/// `[[relay.listen]]` except `onion:` and `iroh:`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BlossomListen {
@@ -444,6 +472,12 @@ impl Blossom {
                 return Err(ServerError::RelayValue(format!(
                     "blossom.listen: \"onion:{nickname}\" — blossom listeners do not \
                      support onion: yet"
+                )));
+            }
+            if let ListenAddress::Iroh(nickname) = &listen.address {
+                return Err(ServerError::RelayValue(format!(
+                    "blossom.listen: \"iroh:{nickname}\" — blossom listeners do not \
+                     support iroh: yet"
                 )));
             }
         }
@@ -608,6 +642,104 @@ impl Onion {
     }
 }
 
+/// `[relay.iroh]` — process-wide settings of the embedded iroh
+/// listeners (the `iroh` cargo feature). Every key is restart-only.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Iroh {
+    /// Key directory: `<nickname>.key` files, one per `iroh:`
+    /// listener, 32 raw bytes each (created mode 0600 on first
+    /// start). Must be a directory with mode 0700 owned by the relay
+    /// user; missing, it is created with mode 0700.
+    pub state_dir: PathBuf,
+    /// Which relay servers the endpoints use: `n0` relays, the
+    /// operator's own (`relay_urls`), or none (direct paths only).
+    pub relay_mode: IrohRelayMode,
+    /// `http(s)://` URLs of self-hosted `iroh-relay` servers; required
+    /// and only allowed with `relay_mode = "custom"`. With a custom
+    /// relay map the dialer adds them to the dial address as hints.
+    pub relay_urls: Vec<String>,
+    /// How endpoints publish and resolve dialing information: n0's
+    /// DNS server, or nothing (`"disabled"`: the dial address then
+    /// needs `ip:port` hints).
+    pub address_lookup: IrohAddressLookup,
+    /// Concurrent QUIC connections per iroh listener, handshakes
+    /// included; further `Incoming`s are refused pre-handshake.
+    pub max_connections: usize,
+    /// The QUIC concurrent bidirectional stream cap offered to peers:
+    /// one HTTP/1.1 connection per stream, so a client multiplexes
+    /// all its connections on this many streams of one QUIC
+    /// connection.
+    pub max_streams_per_connection: u32,
+}
+
+impl Iroh {
+    /// Field rules, checked at load and at reload through
+    /// [`Config::limits`].
+    fn check(&self) -> Result<(), ServerError> {
+        if self.state_dir.as_os_str().is_empty() {
+            return Err(ServerError::RelayValue(
+                "relay.iroh.state_dir must not be empty".to_owned(),
+            ));
+        }
+        if self.max_connections == 0 {
+            return Err(ServerError::RelayValue(
+                "relay.iroh.max_connections must be at least 1".to_owned(),
+            ));
+        }
+        if self.max_streams_per_connection == 0 {
+            return Err(ServerError::RelayValue(
+                "relay.iroh.max_streams_per_connection must be at least 1".to_owned(),
+            ));
+        }
+        let custom = self.relay_mode == IrohRelayMode::Custom;
+        if custom == self.relay_urls.is_empty() {
+            return Err(ServerError::RelayValue(
+                "relay.iroh.relay_urls must be non-empty exactly when \
+                 relay_mode = \"custom\""
+                    .to_owned(),
+            ));
+        }
+        for url in &self.relay_urls {
+            let valid = url::Url::parse(url).is_ok_and(|parsed| {
+                matches!(parsed.scheme(), "http" | "https") && parsed.host().is_some()
+            });
+            if !valid {
+                return Err(ServerError::RelayValue(format!(
+                    "relay.iroh.relay_urls entry {url:?} must be an http(s):// URL with a host"
+                )));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `relay.iroh.relay_mode` — which iroh relay servers the endpoints
+/// use.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IrohRelayMode {
+    /// n0's production relay servers.
+    #[default]
+    N0,
+    /// The operator's own `iroh-relay` servers (`relay_urls`).
+    Custom,
+    /// No relay servers: direct paths only.
+    Disabled,
+}
+
+/// `relay.iroh.address_lookup` — how the endpoints publish and
+/// resolve dialing information.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IrohAddressLookup {
+    /// Publish to and resolve from n0's DNS server.
+    #[default]
+    N0,
+    /// No address lookup: dialing needs hints in the dial address.
+    Disabled,
+}
+
 /// `[relay.profiles.<name>]` — the caps and rate limits one listener
 /// profile applies to its peers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -717,6 +849,19 @@ impl Default for Onion {
     }
 }
 
+impl Default for Iroh {
+    fn default() -> Self {
+        Self {
+            state_dir: PathBuf::from("./nosfry-iroh"),
+            relay_mode: IrohRelayMode::default(),
+            relay_urls: Vec::new(),
+            address_lookup: IrohAddressLookup::default(),
+            max_connections: 256,
+            max_streams_per_connection: 128,
+        }
+    }
+}
+
 impl Default for Db {
     fn default() -> Self {
         Self {
@@ -737,14 +882,17 @@ impl Relay {
         profiles
     }
 
-    /// The relay's canonical name: `service_url`, or the first
-    /// derived onion URL when `service_url` is empty, or `""` when
-    /// the relay has no name at all (AUTH disabled).
+    /// The relay's canonical name: `service_url`, else the first
+    /// derived onion URL, else the first derived iroh URL, or `""`
+    /// when the relay has no name at all (AUTH disabled).
     pub fn service_url(&self) -> &str {
         if !self.service_url.is_empty() {
             return &self.service_url;
         }
-        self.onion_urls.first().map_or("", String::as_str)
+        if let Some(url) = self.onion_urls.first() {
+            return url;
+        }
+        self.iroh_urls.first().map_or("", String::as_str)
     }
 
     /// `[[relay.listen]]` invariants, checked at load and at reload
@@ -786,6 +934,21 @@ impl Relay {
                      cargo feature (cargo install nosfry --features onion)"
                 )));
             }
+            if let ListenAddress::Iroh(nickname) = &listen.address
+                && !listen.real_ip_header.is_empty()
+            {
+                return Err(ServerError::RelayValue(format!(
+                    "relay.listen: iroh listener \"iroh:{nickname}\" cannot set \
+                     real_ip_header (iroh connections carry no client IP address)"
+                )));
+            }
+            #[cfg(not(feature = "iroh"))]
+            if let ListenAddress::Iroh(nickname) = &listen.address {
+                return Err(ServerError::RelayValue(format!(
+                    "relay.listen: \"iroh:{nickname}\" needs nosfry built with the iroh \
+                     cargo feature (cargo install nosfry --features iroh)"
+                )));
+            }
         }
         Ok(())
     }
@@ -800,6 +963,8 @@ impl Default for Relay {
             service_url_aliases: Vec::new(),
             onion: Onion::default(),
             onion_urls: Vec::new(),
+            iroh: Iroh::default(),
+            iroh_urls: Vec::new(),
             nofiles: 1_000_000,
             max_websocket_payload_size: 131_072,
             auto_ping_seconds: 55,
@@ -889,18 +1054,21 @@ impl Config {
         self.relay.check_listeners()?;
         self.relay.onion.check()?;
         self.blossom.check(&self.relay)?;
+        self.relay.iroh.check()?;
         nosfry_core::limits::check_payload_size(
             self.relay.max_websocket_payload_size,
             &self.events,
         )
         .map_err(|e| ServerError::RelayValue(e.to_string()))?;
-        // The configured aliases, then the derived onion URLs — parse
-        // dedups, so the canonical onion name is not repeated.
+        // The configured aliases, then the derived onion and iroh
+        // URLs — parse dedups, so a canonical derived name is not
+        // repeated.
         let aliases: Vec<String> = self
             .relay
             .service_url_aliases
             .iter()
             .chain(&self.relay.onion_urls)
+            .chain(&self.relay.iroh_urls)
             .cloned()
             .collect();
         let names = nosfry_core::url::RelayNames::parse(self.relay.service_url(), &aliases)?;
@@ -1001,9 +1169,10 @@ impl Config {
     /// `relay.limits.max_sync_events`, and
     /// `relay.max_sync_memory_bytes` (reader threads hold them),
     /// `relay.max_pending_outbound_bytes_total`,
-    /// `relay.max_subscription_bytes_total` (ditto), and every
-    /// `[relay.onion]` key but `onion_location`. `relay.onion_urls`
-    /// is derived at startup and always carries over.
+    /// `relay.max_subscription_bytes_total` (ditto), every
+    /// `[relay.onion]` key but `onion_location`, and all of
+    /// `[relay.iroh]`. `relay.onion_urls` and `relay.iroh_urls` are
+    /// derived at startup and always carry over.
     #[must_use]
     pub fn reloadable_from(&self, mut new: Self) -> (Self, Vec<&'static str>) {
         let mut ignored = Vec::new();
@@ -1108,6 +1277,13 @@ impl Config {
             blossom.max_connections = running_blossom.max_connections;
             blossom.listen.clone_from(&running_blossom.listen);
         }
+        // `[relay.iroh]` is wholly restart-only; `iroh_urls` is
+        // derived at startup and always carries over.
+        if relay.iroh != running.iroh {
+            ignored.push("relay.iroh");
+            relay.iroh.clone_from(&running.iroh);
+        }
+        relay.iroh_urls.clone_from(&running.iroh_urls);
         (new, ignored)
     }
 }
@@ -1622,5 +1798,203 @@ mod tests {
         let (merged2, ignored2) = running.reloadable_from(changed);
         assert!(!ignored2.contains(&"relay.onion"), "{ignored2:?}");
         assert!(merged2.relay.onion.onion_location);
+    }
+
+    /// `iroh:<nickname>` address forms: the shared slug rule, and
+    /// the display/parse round-trip.
+    #[test]
+    fn iroh_address_forms() {
+        for good in ["a", "nosfry", "relay_1", "a-b_c-9"] {
+            let listen = ListenAddress::parse(&format!("iroh:{good}")).unwrap();
+            assert_eq!(listen.to_string(), format!("iroh:{good}"));
+        }
+        for bad in ["", "-x", "UPPER", "a.b", "a/b", "a+b", "a:b", "x y"] {
+            assert!(
+                ListenAddress::parse(&format!("iroh:{bad}")).is_err(),
+                "iroh:{bad} must not parse"
+            );
+        }
+        // The generic error text lists every form.
+        let err = ListenAddress::parse("nope").unwrap_err();
+        assert!(err.contains("iroh:<nickname>"), "{err}");
+    }
+
+    /// An iroh listener cannot set `real_ip_header`: QUIC connections
+    /// carry no client IP address the limiter could trust, so the
+    /// header would be silently ignored.
+    #[test]
+    fn iroh_listener_refuses_real_ip_header() {
+        let mut config = Config::default();
+        config.relay.listen = vec![Listen {
+            address: ListenAddress::Iroh("x".to_owned()),
+            profile: "default".to_owned(),
+            real_ip_header: "X-Forwarded-For".to_owned(),
+        }];
+        let err = config.limits().unwrap_err().to_string();
+        assert!(err.contains("real_ip_header"), "{err}");
+    }
+
+    /// Builds without the `iroh` feature refuse an iroh listener
+    /// with a message naming the feature, at load and at reload
+    /// (both go through `limits()`).
+    #[cfg(not(feature = "iroh"))]
+    #[test]
+    fn iroh_listener_needs_the_feature() {
+        let mut config = Config::default();
+        config.relay.listen = vec![Listen {
+            address: ListenAddress::Iroh("x".to_owned()),
+            profile: "default".to_owned(),
+            real_ip_header: String::new(),
+        }];
+        let err = config.limits().unwrap_err().to_string();
+        assert!(err.contains("iroh") && err.contains("feature"), "{err}");
+    }
+
+    /// Every `[relay.iroh]` rule is enforced through `limits()`,
+    /// which the load and reload paths share.
+    #[test]
+    fn iroh_settings_validate() {
+        let mut config = Config::default();
+        config.relay.iroh.state_dir = PathBuf::new();
+        assert!(config.limits().is_err());
+
+        config.relay.iroh = Iroh {
+            max_connections: 0,
+            ..Iroh::default()
+        };
+        assert!(config.limits().is_err());
+
+        config.relay.iroh = Iroh {
+            max_streams_per_connection: 0,
+            ..Iroh::default()
+        };
+        assert!(config.limits().is_err());
+
+        // `relay_urls` only with `relay_mode = "custom"`.
+        config.relay.iroh = Iroh {
+            relay_mode: IrohRelayMode::Custom,
+            relay_urls: Vec::new(),
+            ..Iroh::default()
+        };
+        assert!(config.limits().is_err());
+        config.relay.iroh = Iroh {
+            relay_mode: IrohRelayMode::N0,
+            relay_urls: vec!["https://relay.example.com".into()],
+            ..Iroh::default()
+        };
+        assert!(config.limits().is_err());
+        config.relay.iroh = Iroh {
+            relay_mode: IrohRelayMode::Disabled,
+            relay_urls: vec!["https://relay.example.com".into()],
+            ..Iroh::default()
+        };
+        assert!(config.limits().is_err());
+
+        // Entries must be http(s) URLs with a host.
+        for bad in [
+            "not-a-url",
+            "ftp://relay.example.com",
+            "ws://relay.example.com",
+        ] {
+            config.relay.iroh = Iroh {
+                relay_mode: IrohRelayMode::Custom,
+                relay_urls: vec![bad.into()],
+                ..Iroh::default()
+            };
+            assert!(config.limits().is_err(), "{bad}");
+        }
+        config.relay.iroh = Iroh {
+            relay_mode: IrohRelayMode::Custom,
+            relay_urls: vec![
+                "https://relay.example.com".into(),
+                "http://127.0.0.1:3340".into(),
+            ],
+            ..Iroh::default()
+        };
+        config.limits().expect("custom relay map validates");
+    }
+
+    /// `relay_mode`/`address_lookup` parse as the lowercase strings.
+    #[test]
+    fn iroh_mode_strings_parse() {
+        let config: Config = toml::from_str(
+            "[relay.iroh]\nrelay_mode = \"custom\"\nrelay_urls = [\"https://r.example.com\"]\n\
+             address_lookup = \"disabled\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.relay.iroh.relay_mode, IrohRelayMode::Custom);
+        assert_eq!(
+            config.relay.iroh.address_lookup,
+            IrohAddressLookup::Disabled
+        );
+        assert!(toml::from_str::<Config>("[relay.iroh]\nrelay_mode = \"bogus\"\n").is_err());
+        assert!(toml::from_str::<Config>("[relay.iroh]\naddress_lookup = \"bogus\"\n").is_err());
+    }
+
+    /// With no `service_url` and no onion URL the first iroh URL is
+    /// canonical; with a `service_url` it joins the aliases.
+    #[test]
+    fn iroh_urls_name_the_relay() {
+        let mut config = Config::default();
+        config.relay.iroh_urls = vec![
+            format!("ws://{}.iroh", "a".repeat(52)),
+            format!("ws://{}.iroh", "b".repeat(52)),
+        ];
+        assert_eq!(
+            config.relay.service_url(),
+            format!("ws://{}.iroh", "a".repeat(52))
+        );
+        let limits = config.limits().unwrap();
+        assert!(
+            limits
+                .auth
+                .names()
+                .matches(&format!("ws://{}.iroh", "a".repeat(52)))
+        );
+        assert!(
+            limits
+                .auth
+                .names()
+                .matches(&format!("ws://{}.iroh", "b".repeat(52)))
+        );
+
+        config.relay.service_url = "wss://relay.example.com".into();
+        let limits_named = config.limits().unwrap();
+        assert!(limits_named.auth.names().matches("wss://relay.example.com"));
+        assert!(
+            limits_named
+                .auth
+                .names()
+                .matches(&format!("ws://{}.iroh", "a".repeat(52)))
+        );
+    }
+
+    /// An onion URL outranks an iroh URL for the canonical name.
+    #[test]
+    fn onion_url_outranks_iroh_for_service_url() {
+        let mut config = Config::default();
+        config.relay.onion_urls = vec!["ws://aaa.onion".into()];
+        config.relay.iroh_urls = vec![format!("ws://{}.iroh", "a".repeat(52))];
+        assert_eq!(config.relay.service_url(), "ws://aaa.onion");
+    }
+
+    /// The whole `[relay.iroh]` table is restart-only and `iroh_urls`
+    /// always carries over.
+    #[test]
+    fn reload_keeps_iroh_settings() {
+        let mut running = Config::default();
+        running.relay.iroh.max_connections = 64;
+        running.relay.iroh_urls = vec![format!("ws://{}.iroh", "a".repeat(52))];
+        let mut new = Config::default();
+        new.relay.iroh.max_connections = 128;
+        new.relay.iroh.relay_mode = IrohRelayMode::Disabled;
+        let (merged, ignored) = running.reloadable_from(new);
+        assert!(ignored.contains(&"relay.iroh"), "{ignored:?}");
+        assert_eq!(merged.relay.iroh.max_connections, 64);
+        assert_eq!(merged.relay.iroh.relay_mode, IrohRelayMode::N0);
+        assert_eq!(
+            merged.relay.iroh_urls,
+            vec![format!("ws://{}.iroh", "a".repeat(52))]
+        );
     }
 }
