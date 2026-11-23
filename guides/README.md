@@ -9,6 +9,7 @@
 | [sync.md](sync.md)                     | `nosfry sync`: mirroring, backfilling and two-way sync with another relay over NIP-77, exit codes, limits, authentication, URL rules.                                     |
 | [security.md](security.md)             | Trust boundaries, every enforced bound, the known gaps, a recommended public profile.                                                                                      |
 | [tor.md](tor.md)                       | Serving the relay as an onion service with C tor, and the limits of that setup.                                                                                            |
+| [iroh.md](iroh.md)                     | Reaching a relay without a public IP over iroh: the listener, `nosfry connect` for clients, sync between NATed relays, privacy, self-hosted iroh relays. |
 | [workers.md](workers.md)               | The Cloudflare Workers edition (preview): build, configure, run locally, deploy.                                                                                           |
 | [test-relay.md](test-relay.md)         | A pinned, seeded, resettable relay for client integration tests and CI.                                                                                                    |
 | [marmot.md](marmot.md)                 | Running a Marmot (MDK / White Noise) relay: the shipped profile, the Workers translation, privacy, members-only variants, verification.                                    |

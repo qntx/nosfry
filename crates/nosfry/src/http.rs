@@ -397,13 +397,54 @@ pub(crate) fn nip11(
     moderation: &Moderation,
 ) -> String {
     let relay = &config.relay;
-    nosfry_core::info::document(
+    let document = nosfry_core::info::document(
         &relay.info,
         moderation,
         features(relay, &limits.auth),
         limits,
         relay.max_websocket_payload_size,
-    )
+    );
+    iroh_extension(document, relay)
+}
+
+/// When iroh listeners are bound, the NIP-11 document gains
+/// `"iroh": {"alpn": "nosfry/http/1", "endpoints": ["<z32>", …]}` —
+/// served on a clearnet name, that is the proof the endpoint ids
+/// belong to this relay. The core document is re-serialized through
+/// `serde_json::Value` (no preserve-order feature, key order
+/// unchanged).
+#[cfg(feature = "iroh")]
+fn iroh_extension(document: String, relay: &crate::config::Relay) -> String {
+    if relay.iroh_urls.is_empty() {
+        return document;
+    }
+    let endpoints: Vec<&str> = relay
+        .iroh_urls
+        .iter()
+        .filter_map(|url| {
+            url.strip_prefix("ws://")
+                .and_then(|rest| rest.strip_suffix(".iroh"))
+        })
+        .collect();
+    let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&document) else {
+        return document;
+    };
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "iroh".to_owned(),
+            serde_json::json!({
+                "alpn": String::from_utf8_lossy(crate::iroh::ALPN),
+                "endpoints": endpoints,
+            }),
+        );
+    }
+    serde_json::to_string(&value).unwrap_or(document)
+}
+
+/// No iroh listeners can exist without the feature.
+#[cfg(not(feature = "iroh"))]
+const fn iroh_extension(document: String, _relay: &crate::config::Relay) -> String {
+    document
 }
 
 /// The HTML landing page, rendered alongside [`nip11`] (same
@@ -423,9 +464,40 @@ pub(crate) fn landing(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "unit tests may panic on failure")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "unit tests panic on failure"
+)]
 mod tests {
     use super::*;
+
+    /// The `iroh` NIP-11 extension: endpoints are the listeners'
+    /// z32 ids in `[[relay.listen]]` order, the alpn the wire
+    /// protocol.
+    #[cfg(feature = "iroh")]
+    #[test]
+    fn nip11_lists_iroh_endpoints() {
+        let mut config = Config::default();
+        let (a, b) = ("a".repeat(52), "b".repeat(52));
+        config.relay.iroh_urls = vec![format!("ws://{a}.iroh"), format!("ws://{b}.iroh")];
+        let limits = config.limits().unwrap();
+        let document = nip11(&config, &limits, &Moderation::default());
+        let value: serde_json::Value = serde_json::from_str(&document).unwrap();
+        assert_eq!(
+            value["iroh"],
+            serde_json::json!({
+                "alpn": "nosfry/http/1",
+                "endpoints": [a, b],
+            }),
+            "{document}"
+        );
+        // And the field is absent without iroh listeners.
+        let without = Config::default();
+        let bare_limits = without.limits().unwrap();
+        let bare = nip11(&without, &bare_limits, &Moderation::default());
+        assert!(!bare.contains("\"iroh\""), "{bare}");
+    }
 
     /// Compression off: no `DeflateOptions`, but the payload limit and
     /// the socket buffer capacities still apply.

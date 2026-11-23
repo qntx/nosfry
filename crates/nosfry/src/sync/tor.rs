@@ -40,8 +40,7 @@ const TOR_BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(180);
 /// [`SyncError::Connect`] on a state-dir refusal, client-build or
 /// bootstrap failure; Arti's own text stays safelog-redacted.
 pub(crate) async fn client(onion: &Onion) -> Result<Arc<Client>, SyncError> {
-    onion::prepare_state_dir(&onion.state_dir)
-        .map_err(|err| SyncError::Connect(err.to_string()))?;
+    crate::state_dir::prepare(&onion.state_dir, "onion").map_err(SyncError::Connect)?;
     let tor_cfg = onion::tor_config(onion).map_err(|err| SyncError::Connect(err.to_string()))?;
     let client = TorClient::builder()
         .config(tor_cfg)

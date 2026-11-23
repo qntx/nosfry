@@ -39,6 +39,12 @@ pub(crate) enum Peer {
         /// The circuit's process-local number.
         circuit: u64,
     },
+    /// One remote iroh endpoint. The QUIC TLS handshake authenticates
+    /// the endpoint id, so caps and buckets bind per remote endpoint —
+    /// endpoint ids cost nothing to mint, which is why the
+    /// listener-wide `max_connections` semaphore is the real bound.
+    #[cfg(feature = "iroh")]
+    Endpoint([u8; 32]),
 }
 
 impl std::fmt::Display for Peer {
@@ -48,6 +54,8 @@ impl std::fmt::Display for Peer {
             Self::Listener(id) => f.write_str(id),
             #[cfg(feature = "onion")]
             Self::Circuit { listener, .. } => f.write_str(listener),
+            #[cfg(feature = "iroh")]
+            Self::Endpoint(id) => write!(f, "iroh:{}", crate::iroh::z32(id)),
         }
     }
 }
@@ -61,6 +69,8 @@ impl Peer {
             Self::Listener(id) => PeerKey::Listener(Arc::clone(id)),
             #[cfg(feature = "onion")]
             Self::Circuit { listener, .. } => PeerKey::Listener(Arc::clone(listener)),
+            #[cfg(feature = "iroh")]
+            Self::Endpoint(id) => PeerKey::Endpoint(*id),
         }
     }
 }
@@ -74,6 +84,9 @@ pub(crate) enum PeerKey {
     Addr(AddressKey),
     /// A listener's address string.
     Listener(Arc<str>),
+    /// A remote iroh endpoint id.
+    #[cfg(feature = "iroh")]
+    Endpoint([u8; 32]),
 }
 
 /// One listener's fixed metadata, shared by every connection it
@@ -105,6 +118,10 @@ pub(crate) enum Transport {
     /// no client address, only a process-local circuit number.
     #[cfg(feature = "onion")]
     Circuit(u64),
+    /// One connection of an embedded iroh listener; carries the
+    /// remote endpoint id the QUIC handshake authenticated.
+    #[cfg(feature = "iroh")]
+    Iroh([u8; 32]),
 }
 
 /// The request extension the accept path inserts into every
@@ -158,6 +175,8 @@ pub(crate) fn resolve(origin: &Origin, headers: &HeaderMap) -> (Peer, bool) {
             listener: Arc::clone(&info.id),
             circuit: *circuit,
         },
+        #[cfg(feature = "iroh")]
+        Transport::Iroh(id) => Peer::Endpoint(*id),
     };
     (peer, trust_header)
 }
@@ -330,6 +349,27 @@ mod tests {
         assert_ne!(
             Peer::Listener(Arc::from("unix:/a.sock")).key(),
             Peer::Listener(Arc::from("unix:/b.sock")).key(),
+        );
+    }
+
+    /// `PeerKey` for iroh peers: two endpoint ids get different
+    /// keys, the same id the same key.
+    #[cfg(feature = "iroh")]
+    #[test]
+    fn endpoint_key_is_per_remote_id() {
+        let a = Peer::Endpoint([0xaa; 32]);
+        let b = Peer::Endpoint([0xbb; 32]);
+        assert_ne!(a.key(), b.key(), "different endpoints differ");
+        assert_eq!(a.key(), Peer::Endpoint([0xaa; 32]).key());
+        assert_eq!(
+            a.key(),
+            PeerKey::Endpoint([0xaa; 32]),
+            "the key is the endpoint id"
+        );
+        assert_ne!(
+            a.key(),
+            Peer::Listener(Arc::from("iroh:main")).key(),
+            "an endpoint peer never shares the listener key"
         );
     }
 }

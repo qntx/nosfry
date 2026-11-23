@@ -14,6 +14,8 @@ mod conn;
 mod dial;
 mod engine;
 mod ingest;
+#[cfg(feature = "iroh")]
+mod iroh;
 mod nip11;
 #[cfg(feature = "onion")]
 mod tor;
@@ -280,7 +282,7 @@ fn validate(opts: &SyncOptions, limits: &nosfry_core::limits::Limits) -> Result<
 /// Fetch NIP-11 limits on their own connection. Every failure warns
 /// and falls back to the protocol defaults.
 async fn peer_limits(
-    dialer: &dial::Dialer,
+    dialer: &dial::Dialer<'_>,
     target: &dial::Target,
     timeout: Duration,
 ) -> nosfry_core::client::PeerLimits {
@@ -297,7 +299,7 @@ async fn peer_limits(
 
 /// One best-effort NIP-11 fetch; a failure logs why and yields `None`.
 async fn try_fetch(
-    dialer: &dial::Dialer,
+    dialer: &dial::Dialer<'_>,
     target: &dial::Target,
     timeout: Duration,
 ) -> Option<nosfry_core::client::PeerLimits> {
@@ -354,43 +356,57 @@ pub async fn run(
         );
     }
     let target = dial::resolve(&opts.url, opts.allow_private).await?;
-    let dialer = dial::Dialer::new(&config.relay.onion);
-    let peer = peer_limits(&dialer, &target, opts.timeout).await;
-    let frame_limit = nosfry_core::client::neg_frame_limit(peer.max_message_length)?;
-    let io = dialer.dial(&target, opts.timeout).await?;
-    let options = yawc::Options::default()
-        .with_max_payload_read(MAX_PAYLOAD_READ)
-        .with_balanced_compression();
-    let ws = tokio::time::timeout(
-        opts.timeout,
-        WebSocket::handshake(target.url.clone(), io, options),
-    )
-    .await
-    .map_err(|_| SyncError::Stalled(opts.timeout.as_secs()))?
-    .map_err(|err| SyncError::Connect(err.to_string()))?;
-    let mut conn = conn::RelayConn::new(ws, opts.url.clone(), key);
-    let policy = crate::start_policy(&config.relay.write_policy);
-    let stats = engine::Engine::run(
-        &mut conn,
-        store,
-        &opts,
-        &plan,
-        engine::Peer {
-            limits: &peer,
-            frame_limit,
-        },
-        &limits,
-        policy,
-    )
-    .await?;
-    Ok(SyncReport {
-        outcome: if stats.failed > 0 || stats.failed_windows > 0 {
-            Outcome::Partial
-        } else {
-            Outcome::Complete
-        },
-        stats,
-    })
+    let dialer = dial::Dialer::new(&config.relay);
+    // The fallible part only borrows the dialer, so no `?` inside it
+    // can skip the close: the iroh endpoint (when a dial created
+    // one) is shut down on success and error alike. `target.name` —
+    // the peer URL as given, or the iroh listener's
+    // `ws://<z32>.iroh` alias — is the AUTH `relay` tag; the write
+    // policy still sees `opts.url` as given.
+    let report = async {
+        let peer = peer_limits(&dialer, &target, opts.timeout).await;
+        let frame_limit = nosfry_core::client::neg_frame_limit(peer.max_message_length)?;
+        let io = dialer.dial(&target, opts.timeout).await?;
+        let options = yawc::Options::default()
+            .with_max_payload_read(MAX_PAYLOAD_READ)
+            .with_balanced_compression();
+        let ws = tokio::time::timeout(
+            opts.timeout,
+            WebSocket::handshake(target.url.clone(), io, options),
+        )
+        .await
+        .map_err(|_| SyncError::Stalled(opts.timeout.as_secs()))?
+        .map_err(|err| SyncError::Connect(err.to_string()))?;
+        let mut conn = conn::RelayConn::new(ws, target.name.clone(), key);
+        let policy = crate::start_policy(&config.relay.write_policy);
+        let stats = engine::Engine::run(
+            &mut conn,
+            store,
+            &opts,
+            &plan,
+            engine::Peer {
+                limits: &peer,
+                frame_limit,
+            },
+            &limits,
+            policy,
+        )
+        .await?;
+        Ok::<_, SyncError>(SyncReport {
+            outcome: if stats.failed > 0 || stats.failed_windows > 0 {
+                Outcome::Partial
+            } else {
+                Outcome::Complete
+            },
+            stats,
+        })
+    }
+    .await;
+    // Close the iroh endpoint the dial may have bound — on success
+    // and on error, before `report` returns.
+    #[cfg(feature = "iroh")]
+    dialer.close().await;
+    report
 }
 
 #[cfg(test)]

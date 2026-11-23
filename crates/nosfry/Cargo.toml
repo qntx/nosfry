@@ -52,6 +52,9 @@ tor-proto     = { workspace = true, optional = true }
 tor-rtcompat  = { workspace = true, optional = true }
 safelog       = { workspace = true, optional = true }
 
+# iroh transport (feature "iroh").
+iroh = { workspace = true, optional = true }
+
 [dev-dependencies]
 base64.workspace     = true
 nosfry-blossom       = { workspace = true }
@@ -67,6 +70,7 @@ tempfile.workspace   = true
 default = ["blossom"]
 blossom = ["dep:nosfry-blossom"]
 onion   = ["dep:arti-client", "dep:tor-hsservice", "dep:tor-cell", "dep:tor-proto", "dep:tor-keymgr", "dep:tor-rtcompat", "dep:safelog", "arti-client/onion-service-client"]
+iroh    = ["dep:iroh"]
 
 [[test]]
 name              = "blossom"
@@ -75,6 +79,10 @@ required-features = ["blossom"]
 [[test]]
 name              = "blossom_crash"
 required-features = ["blossom"]
+
+[[test]]
+name              = "iroh"
+required-features = ["iroh"]
 
 [[test]]
 name              = "onion"

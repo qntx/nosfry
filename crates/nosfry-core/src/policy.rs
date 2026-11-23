@@ -260,6 +260,18 @@ mod tests {
         assert_eq!(request.event.get(), EVENT_JSON);
     }
 
+    /// An iroh listener reports `sourceType` `Iroh` with the remote
+    /// endpoint's z32 id as the source info.
+    #[test]
+    fn request_line_iroh_shape() {
+        let id = "b".repeat(52);
+        let line = request_line_listener(EVENT_JSON, 1_700_000_000, "Iroh", &id, None);
+        let request: Req<'_> = serde_json::from_str(&line).unwrap();
+        assert_eq!(request.source_type, "Iroh");
+        assert_eq!(request.source_info, id);
+        assert_eq!(request.event.get(), EVENT_JSON);
+    }
+
     /// A unix-socket listener reports `sourceType` `Unix` with the
     /// socket path, escaped as a JSON string.
     #[test]

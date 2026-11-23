@@ -188,6 +188,13 @@ consensus (a warm one takes seconds); each connection then waits at most
 
 - Only `ws://` and `wss://`. `wss://` verifies the certificate against the
   Mozilla root store bundled in the binary.
+- `iroh:<dial address>` in builds with `--features iroh`: the peer is an
+  iroh endpoint, dialed with the `[relay.iroh]` relay and address-lookup
+  settings; NIP-11 and the WebSocket share one QUIC connection and AUTH
+  signs the peer's `ws://<endpoint-id>.iroh` name. `--allow-private` does
+  not apply. See [iroh.md](iroh.md#sync-between-two-relays-behind-nat).
+- A `ws://<endpoint-id>.iroh` name is refused like `.onion`: dial it as
+  `iroh:<endpoint-id>`.
 - No user name or password in the URL; use NIP-42 for authentication.
 - `.onion` addresses never resolve over clearnet DNS — that would leak
   the address. With the `onion` cargo feature a `ws://` URL whose label

@@ -259,6 +259,29 @@ The format is based on [Keep a Changelog]; this project follows
   connection by `--timeout`; a build without the feature refuses the
   URL and names it.
 
+- **iroh transport (native, opt-in).** A `[[relay.listen]]` address of
+  `iroh:<nickname>` makes the relay reachable over iroh QUIC by anyone
+  holding its endpoint id, with NAT hole punching and relay fallback, so
+  a relay at home or behind CGNAT needs no public IP. It sits behind the
+  new `iroh` cargo feature (iroh 1.4.1) — off by default and absent from
+  the published binaries and container image (`cargo install nosfry
+  --locked --features iroh`). Each QUIC stream on ALPN `nosfry/http/1`
+  is an ordinary HTTP/1.1 connection, so NIP-11, WebSockets and NIP-86
+  are unchanged. Per-peer caps and buckets key on the authenticated
+  remote endpoint id; `[relay.iroh]` bounds QUIC connections per
+  listener before the handshake (`max_connections`) and streams per
+  connection, picks n0's public relays, your own (`relay_mode =
+  "custom"`, `relay_urls`) or none, and turns n0's DNS address lookup
+  on or off. Each listener's relay name `ws://<endpoint-id>.iroh` joins
+  the relay names (canonical when nothing else names the relay), NIP-11
+  lists the endpoint ids under `"iroh"`, `nosfry iroh address` prints
+  the dial address offline, and `nosfry_iroh_*` metrics count direct
+  and relayed connections. `nosfry sync iroh:<endpoint-id>` reconciles
+  with a relay over iroh, and `nosfry connect <endpoint-id> --listen
+  127.0.0.1:<port>` is a localhost gateway through which any existing
+  Nostr client reaches an iroh-only relay. Write-policy plugins see
+  `"sourceType":"Iroh"`. See `guides/iroh.md`.
+
 - `nosfry sync <url> [--filter] [--dir down|up|both] [--since]
   [--until]` reconciles the local database with any NIP-77 relay
   (nosfry, strfry) and transfers the difference (native). Memory stays

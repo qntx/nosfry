@@ -1,17 +1,24 @@
 //! Resolve and vet a peer URL, then dial it into a byte stream.
 //!
-//! This is the seam a later iroh dialer plugs into: everything after
-//! [`Dialer::dial`] is generic over `S: AsyncRead + AsyncWrite`. Only
-//! `ws://`/`wss://` are supported; user info is refused (it would
-//! leak into logs). A `.onion` host never resolves over clearnet
-//! DNS — that would leak the address — and needs the `onion` cargo
-//! feature: then only `ws://` (the circuit already encrypts and
-//! authenticates the service) with a v3 address as the label before
-//! `.onion` is admitted, and `Route::Onion` is dialed through the
-//! embedded Arti client. Every resolved address must be globally
-//! routable unless `--allow-private` admits loopback, RFC 1918,
-//! CGNAT, link-local and unique-local addresses; unspecified,
-//! multicast and broadcast addresses are always refused.
+//! Three routes plug into the same seam: everything after
+//! [`Dialer::dial`] is generic over `S: AsyncRead + AsyncWrite`.
+//! `ws://`/`wss://` dial vetted TCP addresses; a `.onion` host never
+//! resolves over clearnet DNS — that would leak the address — and
+//! needs the `onion` cargo feature: then only `ws://` (the circuit
+//! already encrypts and authenticates the service) with a v3
+//! address as the label before `.onion` is admitted, and
+//! `Route::Onion` is dialed through the embedded Arti client.
+//! `iroh:<dial address>` (the `iroh` cargo feature) needs no
+//! resolution at all: the endpoint id names the peer, and
+//! `Route::Iroh` dials a QUIC connection on the run's shared
+//! ephemeral endpoint. User info is refused (it would leak into
+//! logs) and a `.iroh` host is refused outright — it is an iroh
+//! endpoint name, not a DNS host. Every resolved TCP address must
+//! be globally routable unless `--allow-private` admits loopback,
+//! RFC 1918, CGNAT, link-local and unique-local addresses;
+//! unspecified, multicast and broadcast addresses are always
+//! refused. The flag does not apply to `iroh:` — nothing about
+//! that route is IP-vetted.
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -29,6 +36,8 @@ use tokio_rustls::rustls::{ClientConfig, RootCertStore};
 use url::Url;
 
 use super::SyncError;
+#[cfg(feature = "iroh")]
+use super::iroh;
 #[cfg(feature = "onion")]
 use super::tor;
 
@@ -36,8 +45,12 @@ use super::tor;
 /// connection must take (no second resolution happens).
 #[derive(Debug)]
 pub(crate) struct Target {
-    /// The URL as parsed — the WebSocket handshake and NIP-11 read it.
+    /// The URL the WebSocket handshake and NIP-11 read — the parsed
+    /// peer URL, or the iroh listener's `ws://<z32>.iroh` alias.
     pub(crate) url: Url,
+    /// The relay name the AUTH `relay` tag carries: the peer URL as
+    /// given, or the iroh listener's alias.
+    pub(crate) name: String,
     /// Host for SNI and the `Host` header (no port).
     pub(crate) host: String,
     /// Whether to wrap the stream in TLS (`wss://`).
@@ -55,6 +68,10 @@ pub(crate) enum Route {
     /// clearnet lookup (the `onion` cargo feature).
     #[cfg(feature = "onion")]
     Onion,
+    /// An iroh endpoint, dialed on the run's shared ephemeral
+    /// endpoint (the `iroh` cargo feature).
+    #[cfg(feature = "iroh")]
+    Iroh(crate::iroh::DialAddr),
 }
 
 /// How an address classifies for dialing.
@@ -151,7 +168,7 @@ const fn classify(ip: IpAddr) -> Scope {
 /// A clearnet lookup must never happen for one — it would leak the
 /// address — so this runs before any resolution.
 #[cfg(not(feature = "onion"))]
-fn resolve_onion(_: &Url, _: String) -> Result<Target, SyncError> {
+fn resolve_onion(_: &Url, _: String, _: String) -> Result<Target, SyncError> {
     Err(SyncError::Url(
         "onion URLs need nosfry built with the `onion` cargo feature".to_owned(),
     ))
@@ -162,7 +179,7 @@ fn resolve_onion(_: &Url, _: String) -> Result<Target, SyncError> {
 /// be a v3 address — 56 base32 characters, any subdomain labels
 /// before it kept for Tor's vhosting. Never a DNS lookup.
 #[cfg(feature = "onion")]
-fn resolve_onion(parsed: &Url, host: String) -> Result<Target, SyncError> {
+fn resolve_onion(parsed: &Url, host: String, name: String) -> Result<Target, SyncError> {
     if parsed.scheme() != "ws" {
         return Err(SyncError::Url(
             "refusing wss:// for an onion service: the circuit already encrypts \
@@ -191,21 +208,59 @@ fn resolve_onion(parsed: &Url, host: String) -> Result<Target, SyncError> {
     }
     Ok(Target {
         url: parsed.clone(),
+        name,
         host,
         tls: false,
         route: Route::Onion,
     })
 }
 
-/// Parse `url`, resolve it, and vet every address. Errors name the
-/// rule that fired.
+/// `iroh:` URLs without the `iroh` feature: refuse, naming it.
+#[cfg(not(feature = "iroh"))]
+fn resolve_iroh(_: &str) -> Result<Target, SyncError> {
+    Err(SyncError::Url(
+        "iroh peer URLs need nosfry built with the iroh cargo feature \
+         (cargo install nosfry --features iroh)"
+            .to_owned(),
+    ))
+}
+
+/// The `iroh:` route: parse the dial address — no resolution, no
+/// I/O. The endpoint id names the peer, so the target's URL is the
+/// listener's `ws://<z32>.iroh` alias: the name the relay knows
+/// itself by, which is what the HTTP layer and the AUTH `relay`
+/// tag need.
+#[cfg(feature = "iroh")]
+fn resolve_iroh(dial_text: &str) -> Result<Target, SyncError> {
+    let dial = dial_text
+        .parse::<crate::iroh::DialAddr>()
+        .map_err(SyncError::Url)?;
+    let name = crate::iroh::alias(dial.id.as_bytes());
+    let url = Url::parse(&name)
+        .map_err(|err| SyncError::Url(format!("the iroh alias is not a URL: {err}")))?;
+    let host = crate::iroh::z32(dial.id.as_bytes());
+    Ok(Target {
+        url,
+        name,
+        host: format!("{host}.iroh"),
+        tls: false,
+        route: Route::Iroh(dial),
+    })
+}
+
+/// Parse `url`, resolve it, and vet every address — or, on `iroh:`,
+/// parse the dial address. Errors name the rule that fired.
 ///
 /// # Errors
 ///
 /// [`SyncError::Url`] on a non-`ws`/`wss` scheme, user info, an
-/// `.onion` host the build cannot dial, a resolution failure, an
+/// `.onion` host or `iroh:` URL the build cannot dial, a `.iroh`
+/// host, a malformed `iroh:` dial address, a resolution failure, an
 /// empty answer, or an address class the flags do not admit.
 pub(crate) async fn resolve(url: &str, allow_private: bool) -> Result<Target, SyncError> {
+    if let Some(dial_text) = url.strip_prefix(IROH_SCHEME) {
+        return resolve_iroh(dial_text);
+    }
     // Never echo the raw URL into an error: it may carry credentials
     // or junk. `url::ParseError` messages are fixed strings.
     let parsed =
@@ -227,9 +282,19 @@ pub(crate) async fn resolve(url: &str, allow_private: bool) -> Result<Target, Sy
     let Some(host) = parsed.host_str().map(str::to_owned) else {
         return Err(SyncError::Url("the peer URL has no host".to_owned()));
     };
-    let onion = host.trim_end_matches('.');
-    if onion.eq_ignore_ascii_case("onion") || onion.to_ascii_lowercase().ends_with(".onion") {
-        return resolve_onion(&parsed, host);
+    let bare = host.trim_end_matches('.').to_ascii_lowercase();
+    // The last dot-label: `onion`/`*.onion` and `iroh`/`*.iroh`
+    // alike.
+    let tld = bare.rsplit('.').next().unwrap_or_default();
+    if tld == "onion" {
+        return resolve_onion(&parsed, host, url.to_owned());
+    }
+    if tld == "iroh" {
+        return Err(SyncError::Url(
+            "a .iroh name is an iroh endpoint, not a DNS host: \
+             dial it as iroh:<endpoint-id>"
+                .to_owned(),
+        ));
     }
     let port = parsed
         .port_or_known_default()
@@ -269,14 +334,18 @@ pub(crate) async fn resolve(url: &str, allow_private: bool) -> Result<Target, Sy
     }
     Ok(Target {
         url: parsed,
+        name: url.to_owned(),
         host,
         tls,
         route: Route::Tcp(addrs),
     })
 }
 
-/// A dialed byte stream, TLS, plain, or over Tor. Everything
-/// downstream is generic over `AsyncRead + AsyncWrite`.
+/// The `iroh:` peer-URL prefix (`iroh:<dial address>`).
+const IROH_SCHEME: &str = "iroh:";
+
+/// A dialed byte stream, TLS, plain, over Tor, or over iroh.
+/// Everything downstream is generic over `AsyncRead + AsyncWrite`.
 #[derive(Debug)]
 pub(crate) enum Stream {
     /// `ws://`.
@@ -286,6 +355,10 @@ pub(crate) enum Stream {
     /// `ws://<v3>.onion` — Arti's stream, boxed like `Tls`.
     #[cfg(feature = "onion")]
     Onion(Box<arti_client::DataStream>),
+    /// `iroh:<dial>` — one bidirectional stream on the run's
+    /// connection.
+    #[cfg(feature = "iroh")]
+    Iroh(crate::iroh::BiStream),
 }
 
 impl AsyncRead for Stream {
@@ -299,6 +372,8 @@ impl AsyncRead for Stream {
             Self::Tls(s) => Pin::new(&mut **s).poll_read(cx, buf),
             #[cfg(feature = "onion")]
             Self::Onion(s) => Pin::new(&mut **s).poll_read(cx, buf),
+            #[cfg(feature = "iroh")]
+            Self::Iroh(s) => Pin::new(s).poll_read(cx, buf),
         }
     }
 }
@@ -314,6 +389,8 @@ impl AsyncWrite for Stream {
             Self::Tls(s) => Pin::new(&mut **s).poll_write(cx, buf),
             #[cfg(feature = "onion")]
             Self::Onion(s) => Pin::new(&mut **s).poll_write(cx, buf),
+            #[cfg(feature = "iroh")]
+            Self::Iroh(s) => Pin::new(s).poll_write(cx, buf),
         }
     }
 
@@ -323,6 +400,8 @@ impl AsyncWrite for Stream {
             Self::Tls(s) => Pin::new(&mut **s).poll_flush(cx),
             #[cfg(feature = "onion")]
             Self::Onion(s) => Pin::new(&mut **s).poll_flush(cx),
+            #[cfg(feature = "iroh")]
+            Self::Iroh(s) => Pin::new(s).poll_flush(cx),
         }
     }
 
@@ -332,6 +411,8 @@ impl AsyncWrite for Stream {
             Self::Tls(s) => Pin::new(&mut **s).poll_shutdown(cx),
             #[cfg(feature = "onion")]
             Self::Onion(s) => Pin::new(&mut **s).poll_shutdown(cx),
+            #[cfg(feature = "iroh")]
+            Self::Iroh(s) => Pin::new(s).poll_shutdown(cx),
         }
     }
 
@@ -345,6 +426,8 @@ impl AsyncWrite for Stream {
             Self::Tls(s) => Pin::new(&mut **s).poll_write_vectored(cx, bufs),
             #[cfg(feature = "onion")]
             Self::Onion(s) => Pin::new(&mut **s).poll_write_vectored(cx, bufs),
+            #[cfg(feature = "iroh")]
+            Self::Iroh(s) => Pin::new(s).poll_write_vectored(cx, bufs),
         }
     }
 
@@ -354,6 +437,8 @@ impl AsyncWrite for Stream {
             Self::Tls(s) => s.is_write_vectored(),
             #[cfg(feature = "onion")]
             Self::Onion(s) => s.is_write_vectored(),
+            #[cfg(feature = "iroh")]
+            Self::Iroh(_) => false,
         }
     }
 }
@@ -370,49 +455,55 @@ fn tls_config() -> Arc<ClientConfig> {
 
 /// One `sync` run's dialer: clearnet targets direct, `.onion`
 /// targets over a single Arti client bootstrapped on first use and
-/// shared by both connections of the run (NIP-11, then the
-/// WebSocket).
-pub(crate) struct Dialer {
-    /// `[relay.onion]` — the shared Arti state root.
-    #[cfg(feature = "onion")]
-    onion: crate::config::Onion,
+/// `iroh:` targets over a single ephemeral endpoint connected on
+/// first use — the transports the run lazily creates are shared by
+/// both connections of the run (NIP-11, then the WebSocket) and
+/// closed by `Dialer::close` (iroh builds only).
+pub(crate) struct Dialer<'a> {
+    /// `[relay]` — the lazy transports read their sections on first
+    /// dial (`relay.onion`, `relay.iroh`).
+    relay: &'a crate::config::Relay,
     /// The lazily bootstrapped Tor client; a failed bootstrap leaves
     /// the cell empty so the next dial retries it.
     #[cfg(feature = "onion")]
     tor: tokio::sync::OnceCell<Arc<crate::onion::Client>>,
+    /// The lazily bound endpoint and its connection to the peer; a
+    /// failed connect leaves the cell empty so the next dial
+    /// retries it.
+    #[cfg(feature = "iroh")]
+    link: tokio::sync::OnceCell<(::iroh::Endpoint, ::iroh::endpoint::Connection)>,
 }
 
-// `TorClient` has no `Debug`; show whether the lazy client exists.
-impl std::fmt::Debug for Dialer {
+// `TorClient` and `iroh::Endpoint` have no `Debug`; show each lazy
+// transport's config and whether it exists.
+impl std::fmt::Debug for Dialer<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("Dialer");
         #[cfg(feature = "onion")]
-        return f
-            .debug_struct("Dialer")
-            .field("onion", &self.onion)
-            .field("tor_bootstrapped", &self.tor.initialized())
-            .finish();
-        #[cfg(not(feature = "onion"))]
-        f.debug_struct("Dialer").finish()
+        d.field("onion", &self.relay.onion)
+            .field("tor_bootstrapped", &self.tor.initialized());
+        #[cfg(feature = "iroh")]
+        d.field("iroh", &self.relay.iroh)
+            .field("iroh_connected", &self.link.initialized());
+        d.finish()
     }
 }
 
-impl Dialer {
-    /// A dialer whose `.onion` targets ride the Arti state under
-    /// `onion.state_dir` — the same `state/`/`cache/` pair the relay's
-    /// onion listeners use (see `tor`'s module docs).
-    #[cfg(feature = "onion")]
-    pub(crate) fn new(onion: &crate::config::Onion) -> Self {
+impl<'a> Dialer<'a> {
+    /// A dialer for one `sync` run: `.onion` targets ride the Arti
+    /// state under `relay.onion.state_dir` — the same `state/`/`cache/`
+    /// pair the relay's onion listeners use (see `tor`'s module
+    /// docs) — and `iroh:` targets an ephemeral endpoint configured
+    /// by `[relay.iroh]` (see `sync::iroh`'s module docs). Both are
+    /// created on first use.
+    pub(crate) const fn new(relay: &'a crate::config::Relay) -> Self {
         Self {
-            onion: onion.clone(),
-            tor: tokio::sync::OnceCell::new(),
+            relay,
+            #[cfg(feature = "onion")]
+            tor: tokio::sync::OnceCell::const_new(),
+            #[cfg(feature = "iroh")]
+            link: tokio::sync::OnceCell::const_new(),
         }
-    }
-
-    /// TCP-only dialer: `.onion` targets never reach it (`resolve`
-    /// refused them without the `onion` feature).
-    #[cfg(not(feature = "onion"))]
-    pub(crate) const fn new(_: &crate::config::Onion) -> Self {
-        Self {}
     }
 
     /// Dial the vetted target into a byte stream.
@@ -420,20 +511,16 @@ impl Dialer {
     /// # Errors
     ///
     /// [`SyncError::Connect`] when every candidate fails within
-    /// `timeout`, the TLS handshake fails, or the Tor client
-    /// bootstrap/stream open fails.
-    #[cfg_attr(
-        not(feature = "onion"),
-        allow(
-            clippy::unused_self,
-            reason = "the Tor client is a feature-gated field"
-        )
-    )]
+    /// `timeout`, the TLS handshake fails, or the lazy transport —
+    /// Tor client bootstrap, iroh endpoint connect — fails.
     pub(crate) async fn dial(
         &self,
         target: &Target,
         timeout: Duration,
     ) -> Result<Stream, SyncError> {
+        // `relay` is only read by the feature-gated routes.
+        #[cfg(not(any(feature = "onion", feature = "iroh")))]
+        let _ = self.relay;
         match &target.route {
             Route::Tcp(addrs) => dial_tcp(target, addrs, timeout)
                 .await
@@ -442,12 +529,30 @@ impl Dialer {
             Route::Onion => {
                 let client = self
                     .tor
-                    .get_or_try_init(|| tor::client(&self.onion))
+                    .get_or_try_init(|| tor::client(&self.relay.onion))
                     .await?;
                 let port = target.url.port_or_known_default().unwrap_or(80);
                 let stream = tor::connect(client, target.host.clone(), port, timeout).await?;
                 Ok(Stream::Onion(Box::new(stream)))
             }
+            #[cfg(feature = "iroh")]
+            Route::Iroh(dial) => {
+                let (_, connection) = self
+                    .link
+                    .get_or_try_init(|| iroh::connect(&self.relay.iroh, dial, timeout))
+                    .await?;
+                Ok(Stream::Iroh(iroh::open(connection, timeout).await?))
+            }
+        }
+    }
+
+    /// Close the run's iroh endpoint, if a dial created one —
+    /// bounded, so a stalled close cannot hang the command. A
+    /// no-op when no iroh dial happened.
+    #[cfg(feature = "iroh")]
+    pub(crate) async fn close(self) {
+        if let Some((endpoint, _)) = self.link.into_inner() {
+            iroh::close(endpoint).await;
         }
     }
 }
@@ -621,10 +726,62 @@ mod tests {
         for (url, want) in [
             ("http://relay.example.com", "scheme"),
             ("ws://user:pw@relay.example.com", "user info"),
+            // A `.iroh` host is refused in every build.
+            ("ws://abcxyz.iroh", "iroh:<endpoint-id>"),
+            ("ws://ABCXYZ.IROH.", "iroh:<endpoint-id>"),
+            ("wss://relay.iroh:8080", "iroh:<endpoint-id>"),
+            ("ws://iroh", "iroh:<endpoint-id>"),
         ] {
             let err = resolve(url, true).await.err().unwrap().to_string();
             assert!(err.contains(want), "{url} → {err}");
         }
+        // `iroh:` itself: feature builds reject a malformed dial
+        // address before touching the network, feature-less builds
+        // name the flag.
+        let err = resolve("iroh:not-a-dial-address", true)
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        #[cfg(feature = "iroh")]
+        assert!(err.contains("endpoint id"), "{err}");
+        #[cfg(not(feature = "iroh"))]
+        assert!(err.contains("iroh cargo feature"), "{err}");
+    }
+
+    /// `iroh:<z32>` resolves without any I/O to the `Route::Iroh`
+    /// target named by the listener's `ws://<z32>.iroh` alias.
+    #[cfg(feature = "iroh")]
+    #[tokio::test]
+    async fn resolve_iroh_targets() {
+        let id = ::iroh::SecretKey::generate().public();
+        let z = crate::iroh::z32(id.as_bytes());
+        for url in [
+            format!("iroh:{z}"),
+            format!("iroh:{z}@127.0.0.1:7777"),
+            format!("iroh:{z}@https://relay.example.com"),
+        ] {
+            let target = resolve(&url, false).await.unwrap();
+            assert_iroh_target(&target, &url, id);
+        }
+        // --allow-private changes nothing on this route.
+        let target = resolve(&format!("iroh:{z}"), true).await.unwrap();
+        assert!(matches!(target.route, Route::Iroh(_)));
+    }
+
+    /// One `iroh:` dial must land on `Route::Iroh` for the parsed
+    /// endpoint id, addressed by its `ws://<z32>.iroh` alias.
+    #[cfg(feature = "iroh")]
+    fn assert_iroh_target(target: &Target, url: &str, id: ::iroh::PublicKey) {
+        let Route::Iroh(dial) = &target.route else {
+            panic!("expected an iroh target for {url}");
+        };
+        let z = crate::iroh::z32(id.as_bytes());
+        assert_eq!(dial.id, id, "{url}");
+        assert_eq!(target.name, format!("ws://{z}.iroh"), "{url}");
+        assert_eq!(target.url.as_str(), format!("ws://{z}.iroh/"), "{url}");
+        assert_eq!(target.host, format!("{z}.iroh"), "{url}");
+        assert!(!target.tls, "{url}");
     }
 
     #[cfg(not(feature = "onion"))]
@@ -673,24 +830,26 @@ mod tests {
         }
     }
 
-    /// `prepare_state_dir` refuses a state dir group/others can read
-    /// — the `Dialer` surfaces it as `SyncError` before the client is
-    /// built or any network work happens.
+    /// `state_dir::prepare` refuses a state dir group/others can
+    /// read — the `Dialer` surfaces it as `SyncError` before the
+    /// client is built or any network work happens.
     #[cfg(all(feature = "onion", unix))]
     #[tokio::test]
     async fn dialer_refuses_an_open_state_dir() {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = tempfile::tempdir().unwrap();
-        let onion = crate::config::Onion {
-            state_dir: dir.path().join("state"),
-            ..Default::default()
-        };
-        std::fs::create_dir(&onion.state_dir).unwrap();
-        std::fs::set_permissions(&onion.state_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut relay = crate::config::Relay::default();
+        relay.onion.state_dir = dir.path().join("state");
+        std::fs::create_dir(&relay.onion.state_dir).unwrap();
+        std::fs::set_permissions(
+            &relay.onion.state_dir,
+            std::fs::Permissions::from_mode(0o755),
+        )
+        .unwrap();
         let target = resolve(&format!("ws://{}.onion", "a".repeat(56)), false)
             .await
             .unwrap();
-        let err = Dialer::new(&onion)
+        let err = Dialer::new(&relay)
             .dial(&target, Duration::from_secs(5))
             .await
             .err()
