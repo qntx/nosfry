@@ -46,7 +46,7 @@ use std::sync::Arc;
 
 use heed::CompactionOption;
 use heed::types::Bytes;
-use heed::{Database, Env, EnvFlags, EnvOpenOptions, RoTxn, RwTxn, WithoutTls};
+use heed::{CommitOrAbort, Database, Env, EnvFlags, EnvOpenOptions, RoTxn, RwTxn, WithoutTls};
 use nosfry_core::deletion::{self, DeletionTarget};
 use nosfry_core::event::{Event, EventId, PublicKey, UnverifiedEvent, supersedes};
 use nosfry_core::moderation::{ModOp, Moderation};
@@ -63,7 +63,34 @@ pub use scan::{Progress, Scan};
 /// On-disk format version, stored under the `format` meta key.
 pub const FORMAT_VERSION: u32 = 4;
 
-type BytesDb = Database<Bytes, Bytes>;
+type BytesDb = Database<'static, Bytes, Bytes>;
+
+/// Named databases opened at [`Store::open`], in creation order.
+/// `meta` must stay first: the format check reads it before the rest
+/// are used.
+const DB_NAMES: [&str; 20] = [
+    "meta",
+    "events",
+    "payloads",
+    "ix_id",
+    "ix_time",
+    "ix_pubkey",
+    "ix_kind",
+    "ix_pubkey_kind",
+    "ix_tag",
+    "ix_replace",
+    "ix_expiration",
+    "ix_deletion",
+    "ix_replace_deletion",
+    "ix_vanish",
+    "vanish_pending",
+    "mod_pubkeys",
+    "mod_events",
+    "mod_kinds",
+    "mod_ips",
+    "mod_info",
+];
+
 type Reader<'a> = RoTxn<'a, WithoutTls>;
 
 /// LMDB environment options.
@@ -269,6 +296,33 @@ fn index_entries(
     }
 }
 
+/// The format gate inside [`Store::open`]'s create-and-commit
+/// closure: writes `format`/`next_seq` on first open and returns
+/// `Some(FormatMismatch)` when the stored format differs, so the
+/// caller aborts the transaction.
+fn check_format(
+    meta: Database<'_, Bytes, Bytes>,
+    wtxn: &mut RwTxn<'_>,
+) -> Result<Option<StoreError>, StoreError> {
+    if let Some(bytes) = meta.get(wtxn, b"format")? {
+        let found = u32::from_be_bytes(
+            bytes
+                .try_into()
+                .map_err(|_| StoreError::Corrupt("bad format value"))?,
+        );
+        if found != FORMAT_VERSION {
+            return Ok(Some(StoreError::FormatMismatch {
+                found,
+                expected: FORMAT_VERSION,
+            }));
+        }
+    } else {
+        meta.put(wtxn, b"format", &FORMAT_VERSION.to_be_bytes())?;
+        meta.put(wtxn, b"next_seq", &1u64.to_be_bytes())?;
+    }
+    Ok(None)
+}
+
 /// The LMDB store.
 #[derive(Debug)]
 pub struct Store {
@@ -332,50 +386,43 @@ impl Store {
         let env = unsafe { options.open(path)? };
         env.clear_stale_readers()?;
 
-        let mut wtxn = env.write_txn()?;
-        let mut open_or_create = |name: &'static str| -> Result<BytesDb, StoreError> {
-            match env.open_database::<Bytes, Bytes>(&wtxn, Some(name))? {
-                Some(db) => Ok(db),
-                None => Ok(env.create_database::<Bytes, Bytes>(&mut wtxn, Some(name))?),
-            }
-        };
-        let meta = open_or_create("meta")?;
-        let events = open_or_create("events")?;
-        let payloads = open_or_create("payloads")?;
-        let ix_id = open_or_create("ix_id")?;
-        let ix_time = open_or_create("ix_time")?;
-        let ix_pubkey = open_or_create("ix_pubkey")?;
-        let ix_kind = open_or_create("ix_kind")?;
-        let ix_pubkey_kind = open_or_create("ix_pubkey_kind")?;
-        let ix_tag = open_or_create("ix_tag")?;
-        let ix_replace = open_or_create("ix_replace")?;
-        let ix_expiration = open_or_create("ix_expiration")?;
-        let ix_deletion = open_or_create("ix_deletion")?;
-        let ix_replace_deletion = open_or_create("ix_replace_deletion")?;
-        let ix_vanish = open_or_create("ix_vanish")?;
-        let vanish_pending = open_or_create("vanish_pending")?;
-        let mod_pubkeys = open_or_create("mod_pubkeys")?;
-        let mod_events = open_or_create("mod_events")?;
-        let mod_kinds = open_or_create("mod_kinds")?;
-        let mod_ips = open_or_create("mod_ips")?;
-        let mod_info = open_or_create("mod_info")?;
-        if let Some(bytes) = meta.get(&wtxn, b"format")? {
-            let found = u32::from_be_bytes(
-                bytes
+        let wtxn = env.write_txn()?;
+        let [
+            meta,
+            events,
+            payloads,
+            ix_id,
+            ix_time,
+            ix_pubkey,
+            ix_kind,
+            ix_pubkey_kind,
+            ix_tag,
+            ix_replace,
+            ix_expiration,
+            ix_deletion,
+            ix_replace_deletion,
+            ix_vanish,
+            vanish_pending,
+            mod_pubkeys,
+            mod_events,
+            mod_kinds,
+            mod_ips,
+            mod_info,
+        ] = Result::from(env.create_databases_and_commit(
+            wtxn,
+            |dbo, wtxn| -> Result<_, StoreError> {
+                let dbs: [Database<'_, Bytes, Bytes>; 20] = DB_NAMES
+                    .iter()
+                    .map(|name| dbo.create_database::<Bytes, Bytes>(wtxn, Some(name)))
+                    .collect::<Result<Vec<_>, _>>()?
                     .try_into()
-                    .map_err(|_| StoreError::Corrupt("bad format value"))?,
-            );
-            if found != FORMAT_VERSION {
-                return Err(StoreError::FormatMismatch {
-                    found,
-                    expected: FORMAT_VERSION,
-                });
-            }
-        } else {
-            meta.put(&mut wtxn, b"format", &FORMAT_VERSION.to_be_bytes())?;
-            meta.put(&mut wtxn, b"next_seq", &1u64.to_be_bytes())?;
-        }
-        wtxn.commit()?;
+                    .map_err(|_| StoreError::Corrupt("named db count"))?;
+                if let Some(err) = check_format(dbs[0], wtxn)? {
+                    return Ok(CommitOrAbort::Abort(err));
+                }
+                Ok(CommitOrAbort::Commit(dbs))
+            },
+        )?)?;
         Ok(Self {
             env,
             meta,
