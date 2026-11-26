@@ -186,10 +186,10 @@ custom relay).
 ## Self-hosting an iroh relay
 
 `iroh-relay` is n0's stateless relay server. Run the version that matches
-nosfry's iroh (1.4.1):
+nosfry's iroh (1.5.0):
 
 ```bash
-cargo install iroh-relay --locked --version 1.4.1 --features server
+cargo install iroh-relay --locked --version 1.5.0 --features server
 ```
 
 Give it a public host with a DNS name, TCP 80/443 and UDP 7842 (QUIC address
