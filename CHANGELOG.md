@@ -10,6 +10,18 @@ The format is based on [Keep a Changelog]; this project follows
 
 ## [Unreleased]
 
+### Changed
+
+- `iroh` 1.4.1 → 1.5.0 (`--features iroh`, off by default), with
+  iroh-relay 1.5.0, noq 1.5.0, netwatch and portmapper 0.20.2. The
+  relay client drops a packet it cannot encode instead of
+  disconnecting, an empty datagram payload no longer disconnects the
+  recipient, relay connections no longer leak during the handshake,
+  and client frames are length-checked in full (1.4.2 and 1.5.0
+  upstream notes). No nosfry API or configuration change; a
+  self-hosted `iroh-relay` should move to 1.5.0 as well
+  (`guides/iroh.md`).
+
 ## [0.4.0] - 2026-11-23
 
 This release went through the release dry run, the 60-cycle crash tests
